@@ -11,26 +11,27 @@ on:
 jobs:
   build-and-test:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
       - name: Setup pnpm
-        uses: pnpm/action-setup@v3
+        uses: pnpm/action-setup@v4
         with:
-          version: 8
+          version: 9.0.0
           run_install: false
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
           cache: 'pnpm'
 
       - name: Get pnpm store directory
         id: pnpm-cache
         run: |
-          echo "::set-output name=dir::$(pnpm store path)"
+          echo "dir=$(pnpm store path)" >> "$GITHUB_OUTPUT"
 
       - name: Setup pnpm cache
         uses: actions/cache@v4
@@ -43,11 +44,11 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Run Biome Check
-        run: pnpm biome check
+      - name: Lint (biome via lint-staged, matches Push checks)
+        run: pnpm lint
 
       - name: Build
-        run: pnpm build # Assuming a 'build' script exists in turbo.json or package.json
+        run: pnpm build
 
       - name: Test
-        run: pnpm test # Assuming a 'test' script exists in turbo.json or package.json
+        run: pnpm test
