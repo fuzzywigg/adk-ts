@@ -10,6 +10,8 @@ concurrency: ${{ github.workflow }}-${{ github.ref }}
 jobs:
   release:
     name: Release
+    # Public forks must not publish @iqai/*; only upstream BrainDAO/adk-ts ships releases.
+    if: github.repository == 'BrainDAO/adk-ts'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout Repo
