@@ -8,7 +8,8 @@ function invocation(text?: string): Invocation {
 	return {
 		userContent: { parts: [{ text: "hi" }] },
 		creationTimestamp: 1,
-		finalResponse: text ? { role: "model", parts: [{ text }] } : undefined,
+		finalResponse:
+			text !== undefined ? { role: "model", parts: [{ text }] } : undefined,
 	};
 }
 
@@ -72,5 +73,27 @@ describe("RougeEvaluator", () => {
 		expect(result.perInvocationResults).toHaveLength(2);
 		expect(result.overallScore).toBeGreaterThan(0);
 		expect(result.overallScore).toBeLessThan(1);
+	});
+
+	it("scores missing finalResponse as zero (empty text path)", async () => {
+		const result = await evaluator.evaluateInvocations(
+			[invocation()],
+			[invocation("expected text")],
+		);
+
+		expect(result.perInvocationResults[0].score).toBe(0);
+		expect(result.overallScore).toBe(0);
+		expect(result.overallEvalStatus).toBe(EvalStatus.FAILED);
+	});
+
+	it("matches despite punctuation and case differences via tokenization", async () => {
+		const result = await evaluator.evaluateInvocations(
+			[invocation("Hello, World!")],
+			[invocation("hello world")],
+		);
+
+		expect(result.overallScore).toBe(1);
+		expect(result.overallEvalStatus).toBe(EvalStatus.PASSED);
+		expect(result.perInvocationResults[0].score).toBe(1);
 	});
 });
