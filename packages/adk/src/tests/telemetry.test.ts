@@ -7,6 +7,7 @@ import {
 	initializeTelemetry,
 	shutdownTelemetry,
 	TelemetryService,
+	telemetryService,
 	traceLlmCall,
 	traceToolCall,
 	tracer,
@@ -332,5 +333,6 @@ describe("telemetry module exports", () => {
 		expect(typeof traceLlmCall).toBe("function");
 		expect(typeof shutdownTelemetry).toBe("function");
 		expect(tracer).toBeTruthy();
+		expect(tracer).toBe(telemetryService.getTracer());
 	});
 });
