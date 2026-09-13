@@ -1,0 +1,133 @@
+import { Type } from "@google/genai";
+import { describe, expect, it, vi } from "vitest";
+import { LlmRequest } from "../../../models/llm-request";
+import { BaseTool } from "../../../tools/base/base-tool";
+import type { ToolContext } from "../../../tools/tool-context";
+
+class StubTool extends BaseTool {
+	constructor(
+		config: ConstructorParameters<typeof BaseTool>[0],
+		private readonly impl?: (args: Record<string, any>) => Promise<any>,
+	) {
+		super(config);
+	}
+
+	getDeclaration() {
+		return {
+			name: this.name,
+			description: this.description,
+			parameters: {
+				type: Type.OBJECT,
+				properties: {
+					query: { type: Type.STRING },
+				},
+				required: ["query"],
+			},
+		};
+	}
+
+	async runAsync(args: Record<string, any>, _context: ToolContext) {
+		if (this.impl) {
+			return this.impl(args);
+		}
+		return { ok: true, args };
+	}
+}
+
+function makeContext(): ToolContext {
+	return { actions: {} } as ToolContext;
+}
+
+describe("BaseTool", () => {
+	it("validates name and description on construction", () => {
+		expect(
+			() =>
+				new StubTool({
+					name: "bad-name!",
+					description: "valid description",
+				}),
+		).toThrow(/Invalid tool name/);
+
+		expect(
+			() =>
+				new StubTool({
+					name: "ok_tool",
+					description: "no",
+				}),
+		).toThrow(/too short/);
+	});
+
+	it("validates required arguments", () => {
+		const tool = new StubTool({
+			name: "search_tool",
+			description: "Searches things",
+		});
+		const error = vi.spyOn(console, "error").mockImplementation(() => {});
+
+		expect(tool.validateArguments({ query: "x" })).toBe(true);
+		expect(tool.validateArguments({})).toBe(false);
+		expect(error).toHaveBeenCalled();
+	});
+
+	it("adds function declarations to llm requests and dedupes by name", async () => {
+		const tool = new StubTool({
+			name: "search_tool",
+			description: "Searches things",
+		});
+		const request = new LlmRequest();
+
+		await tool.processLlmRequest(makeContext(), request);
+		await tool.processLlmRequest(makeContext(), request);
+
+		expect(request.toolsDict.search_tool).toBe(tool);
+		expect(request.config?.tools).toHaveLength(1);
+		expect(
+			(request.config?.tools?.[0] as any).functionDeclarations,
+		).toHaveLength(1);
+	});
+
+	it("returns validation failures from safeExecute", async () => {
+		const tool = new StubTool({
+			name: "search_tool",
+			description: "Searches things",
+		});
+		vi.spyOn(console, "error").mockImplementation(() => {});
+
+		const result = await tool.safeExecute({}, makeContext());
+		expect(result).toEqual({
+			error: "Invalid arguments",
+			message: "The provided arguments do not match the tool's requirements.",
+		});
+	});
+
+	it("retries failed executions when configured", async () => {
+		vi.useFakeTimers();
+		let attempts = 0;
+		const tool = new StubTool(
+			{
+				name: "flaky_tool",
+				description: "Fails then succeeds",
+				shouldRetryOnFailure: true,
+				maxRetryAttempts: 2,
+			},
+			async () => {
+				attempts += 1;
+				if (attempts < 2) {
+					throw new Error("transient");
+				}
+				return { ok: true };
+			},
+		);
+		tool.baseRetryDelay = 1;
+		tool.maxRetryDelay = 1;
+		vi.spyOn(console, "error").mockImplementation(() => {});
+
+		const pending = tool.safeExecute({ query: "x" }, makeContext());
+		await vi.runAllTimersAsync();
+		const result = await pending;
+
+		expect(result).toEqual({ result: { ok: true } });
+		expect(attempts).toBe(2);
+		vi.useRealTimers();
+	});
+});
