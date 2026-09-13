@@ -123,6 +123,90 @@ describe("AnthropicLlm", () => {
 				}),
 			);
 		});
+
+		it("maps functionDeclarations into Anthropic tools with tool_choice auto", async () => {
+			const requestWithTools = {
+				...mockLlmRequest,
+				config: {
+					...mockLlmRequest.config,
+					tools: [
+						{
+							functionDeclarations: [
+								{
+									name: "lookup",
+									description: "Look something up",
+									parameters: {
+										properties: {
+											q: { type: "STRING" },
+										},
+									},
+								},
+							],
+						},
+					],
+				},
+			};
+
+			const generator = anthropicLlm["generateContentAsyncImpl"](
+				requestWithTools as unknown as LlmRequest,
+			);
+			await generator.next();
+
+			expect(mockMessagesCreate).toHaveBeenCalledWith(
+				expect.objectContaining({
+					tools: [
+						{
+							name: "lookup",
+							description: "Look something up",
+							input_schema: {
+								type: "object",
+								properties: {
+									q: { type: "string" },
+								},
+							},
+						},
+					],
+					tool_choice: { type: "auto" },
+				}),
+			);
+		});
+
+		it("throws when streaming is requested", async () => {
+			const generator = anthropicLlm["generateContentAsyncImpl"](
+				mockLlmRequest,
+				true,
+			);
+			await expect(generator.next()).rejects.toThrow(
+				/Streaming is not yet supported/,
+			);
+		});
+
+		it("throws when ANTHROPIC_API_KEY is missing", async () => {
+			delete process.env.ANTHROPIC_API_KEY;
+			const llm = new AnthropicLlm();
+			const generator = llm["generateContentAsyncImpl"](mockLlmRequest);
+			await expect(generator.next()).rejects.toThrow(/ANTHROPIC_API_KEY/);
+			process.env.ANTHROPIC_API_KEY = mockApiKey;
+		});
+
+		it("uses MAX_TOKENS default when maxOutputTokens is omitted", async () => {
+			const request = {
+				...mockLlmRequest,
+				config: {
+					temperature: 0.2,
+				},
+			};
+			const generator = anthropicLlm["generateContentAsyncImpl"](
+				request as LlmRequest,
+			);
+			await generator.next();
+			expect(mockMessagesCreate).toHaveBeenCalledWith(
+				expect.objectContaining({
+					max_tokens: 1024,
+					temperature: 0.2,
+				}),
+			);
+		});
 	});
 
 	describe("connect", () => {
@@ -213,6 +297,34 @@ describe("AnthropicLlm", () => {
 					tool_use_id: "123",
 					content: "success",
 					is_error: false,
+				});
+			});
+
+			it("uses empty tool_result content when response.result is absent", () => {
+				const part = {
+					function_response: {
+						id: "abc",
+						response: { ok: true },
+					},
+				};
+				const block = anthropicLlm["partToAnthropicBlock"](part);
+				expect(block).toEqual({
+					type: "tool_result",
+					tool_use_id: "abc",
+					content: "",
+					is_error: false,
+				});
+			});
+
+			it("defaults missing function_call id and args", () => {
+				const block = anthropicLlm["partToAnthropicBlock"]({
+					function_call: { name: "noop" },
+				});
+				expect(block).toEqual({
+					type: "tool_use",
+					id: "",
+					name: "noop",
+					input: {},
 				});
 			});
 

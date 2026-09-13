@@ -26,7 +26,7 @@ interface Agent {
 }
 
 // Console management for quiet mode
-class ConsoleManager {
+export class ConsoleManager {
 	private originals: any = null;
 	private originalStdoutWrite: any = null;
 	private originalStderrWrite: any = null;
@@ -294,7 +294,7 @@ class ConsoleManager {
 	}
 }
 
-class AgentChatClient {
+export class AgentChatClient {
 	private apiUrl: string;
 	private selectedAgent: Agent | null = null;
 	private consoleManager: ConsoleManager;

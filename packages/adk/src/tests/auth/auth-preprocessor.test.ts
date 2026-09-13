@@ -1,9 +1,11 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { InvocationContext } from "../../agents/invocation-context";
 import { requestProcessor } from "../../auth/auth-preprocessor";
 import { Event } from "../../events/event";
 import { REQUEST_EUC_FUNCTION_CALL_NAME } from "../../flows/llm-flows/functions";
 import { LlmRequest } from "../../models/llm-request";
+
+const handleFunctionCallsAsyncMock = vi.hoisted(() => vi.fn());
 
 vi.mock("../../logger", () => ({
 	Logger: vi.fn(() => ({
@@ -13,6 +15,19 @@ vi.mock("../../logger", () => ({
 		info: vi.fn(),
 	})),
 }));
+
+vi.mock("../../flows/llm-flows/functions", async (importOriginal) => {
+	const actual =
+		await importOriginal<typeof import("../../flows/llm-flows/functions")>();
+	return {
+		...actual,
+		handleFunctionCallsAsync: handleFunctionCallsAsyncMock,
+	};
+});
+
+beforeEach(() => {
+	handleFunctionCallsAsyncMock.mockReset();
+});
 
 async function collect(
 	gen: AsyncGenerator<unknown, void, unknown>,
@@ -233,6 +248,222 @@ describe("auth requestProcessor", () => {
 
 		expect(events).toEqual([]);
 		expect(warn).toHaveBeenCalled();
+		warn.mockRestore();
+	});
+
+	it("yields resumed function response when EUC chain matches a prior tool call", async () => {
+		const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+		const resumed = new Event({
+			author: "auth-agent",
+			content: {
+				role: "user",
+				parts: [
+					{
+						functionResponse: {
+							id: "tool-1",
+							name: "secure_api",
+							response: { ok: true },
+						},
+					},
+				],
+			},
+		});
+		handleFunctionCallsAsyncMock.mockResolvedValue(resumed);
+
+		const originalCall = new Event({
+			author: "auth-agent",
+			content: {
+				role: "model",
+				parts: [
+					{
+						functionCall: {
+							id: "tool-1",
+							name: "secure_api",
+							args: { q: "x" },
+						},
+					},
+				],
+			},
+		});
+		const eucCall = new Event({
+			author: "auth-agent",
+			content: {
+				role: "model",
+				parts: [
+					{
+						functionCall: {
+							id: "euc-1",
+							name: REQUEST_EUC_FUNCTION_CALL_NAME,
+							args: JSON.stringify({
+								function_call_id: "tool-1",
+								auth_config: { authScheme: { type: "apiKey" } },
+							}) as any,
+						},
+					},
+				],
+			},
+		});
+		const eucResponse = new Event({
+			author: "user",
+			content: {
+				role: "user",
+				parts: [
+					{
+						functionResponse: {
+							id: "euc-1",
+							name: REQUEST_EUC_FUNCTION_CALL_NAME,
+							response: JSON.stringify({
+								authScheme: { type: "oauth2" },
+								rawAuthCredential: { accessToken: "t" },
+								context: { credentialKey: "temp:cred-1" },
+							}),
+						},
+					},
+				],
+			},
+		});
+
+		const tool = { name: "secure_api" };
+		const canonicalTools = vi.fn(async () => [tool]);
+		const events = await collect(
+			requestProcessor.runAsync(
+				baseCtx({
+					agent: { name: "auth-agent", canonicalTools },
+					events: [originalCall, eucCall, eucResponse],
+				}),
+				new LlmRequest(),
+			),
+		);
+
+		expect(events).toEqual([resumed]);
+		expect(canonicalTools).toHaveBeenCalled();
+		expect(handleFunctionCallsAsyncMock).toHaveBeenCalledWith(
+			expect.anything(),
+			originalCall,
+			{ secure_api: tool },
+			new Set(["tool-1"]),
+		);
+		warn.mockRestore();
+	});
+
+	it("returns without yielding when handleFunctionCallsAsync returns null", async () => {
+		const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+		handleFunctionCallsAsyncMock.mockResolvedValue(null);
+
+		const originalCall = new Event({
+			author: "auth-agent",
+			content: {
+				role: "model",
+				parts: [
+					{
+						functionCall: {
+							id: "tool-2",
+							name: "secure_api",
+							args: {},
+						},
+					},
+				],
+			},
+		});
+		const eucCall = new Event({
+			author: "auth-agent",
+			content: {
+				role: "model",
+				parts: [
+					{
+						functionCall: {
+							id: "euc-2",
+							name: REQUEST_EUC_FUNCTION_CALL_NAME,
+							args: JSON.stringify({ function_call_id: "tool-2" }) as any,
+						},
+					},
+				],
+			},
+		});
+		const eucResponse = new Event({
+			author: "user",
+			content: {
+				role: "user",
+				parts: [
+					{
+						functionResponse: {
+							id: "euc-2",
+							name: REQUEST_EUC_FUNCTION_CALL_NAME,
+							response: JSON.stringify({
+								authScheme: { type: "openIdConnect" },
+								rawAuthCredential: {},
+							}),
+						},
+					},
+				],
+			},
+		});
+
+		const events = await collect(
+			requestProcessor.runAsync(
+				baseCtx({
+					events: [originalCall, eucCall, eucResponse],
+				}),
+				new LlmRequest(),
+			),
+		);
+
+		expect(events).toEqual([]);
+		expect(handleFunctionCallsAsyncMock).toHaveBeenCalled();
+		warn.mockRestore();
+	});
+
+	it("skips prior events without function calls while scanning for resume targets", async () => {
+		const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+		handleFunctionCallsAsyncMock.mockResolvedValue(null);
+
+		const filler = new Event({
+			author: "auth-agent",
+			content: { role: "model", parts: [{ text: "thinking" }] },
+		});
+		const eucCall = new Event({
+			author: "auth-agent",
+			content: {
+				role: "model",
+				parts: [
+					{
+						functionCall: {
+							id: "euc-3",
+							name: REQUEST_EUC_FUNCTION_CALL_NAME,
+							args: JSON.stringify({ function_call_id: "missing" }) as any,
+						},
+					},
+				],
+			},
+		});
+		const eucResponse = new Event({
+			author: "user",
+			content: {
+				role: "user",
+				parts: [
+					{
+						functionResponse: {
+							id: "euc-3",
+							name: REQUEST_EUC_FUNCTION_CALL_NAME,
+							response: JSON.stringify({
+								authScheme: { type: "apiKey" },
+								rawAuthCredential: { apiKey: "k" },
+							}),
+						},
+					},
+				],
+			},
+		});
+
+		const events = await collect(
+			requestProcessor.runAsync(
+				baseCtx({ events: [filler, eucCall, eucResponse] }),
+				new LlmRequest(),
+			),
+		);
+
+		expect(events).toEqual([]);
+		expect(handleFunctionCallsAsyncMock).not.toHaveBeenCalled();
 		warn.mockRestore();
 	});
 });
