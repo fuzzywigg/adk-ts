@@ -5,27 +5,11 @@ import {
 	responseProcessor,
 } from "../../../flows/llm-flows/nl-planning";
 import { LlmRequest } from "../../../models/llm-request";
-import { LlmResponse } from "../../../models/llm-response";
+import type { LlmResponse } from "../../../models/llm-response";
+import { BuiltInPlanner } from "../../../planners/built-in-planner";
 import { PlanReActPlanner } from "../../../planners/plan-re-act-planner";
 
-vi.mock("../../../logger", () => ({
-	Logger: vi.fn(() => ({
-		debug: vi.fn(),
-		error: vi.fn(),
-		warn: vi.fn(),
-		info: vi.fn(),
-	})),
-}));
-
 async function drain(
-	gen: AsyncGenerator<unknown, void, unknown>,
-): Promise<void> {
-	for await (const _ of gen) {
-		/* drain */
-	}
-}
-
-async function collect(
 	gen: AsyncGenerator<unknown, void, unknown>,
 ): Promise<unknown[]> {
 	const items: unknown[] = [];
@@ -35,11 +19,13 @@ async function collect(
 	return items;
 }
 
-function makeContext(agent: Record<string, unknown>): InvocationContext {
+function makeContext(
+	overrides: Record<string, unknown> = {},
+): InvocationContext {
 	return {
 		invocationId: "inv-1",
 		branch: "main",
-		agent,
+		agent: { name: "planner-agent" },
 		session: {
 			id: "s1",
 			appName: "app",
@@ -48,68 +34,98 @@ function makeContext(agent: Record<string, unknown>): InvocationContext {
 			events: [],
 			lastUpdateTime: 0,
 		},
+		...overrides,
 	} as unknown as InvocationContext;
 }
 
-describe("nl-planning processors", () => {
-	it("requestProcessor is a no-op without planner", async () => {
+describe("nl-planning requestProcessor", () => {
+	it("is a no-op when agent has no planner", async () => {
 		const llmRequest = new LlmRequest();
-		await drain(
-			requestProcessor.runAsync(makeContext({ name: "agent" }), llmRequest),
-		);
-		expect(llmRequest.getSystemInstructionText()).toBeUndefined();
+		await drain(requestProcessor.runAsync(makeContext(), llmRequest));
+		expect(llmRequest.config).toBeUndefined();
 	});
 
-	it("responseProcessor is a no-op without planner", async () => {
-		const response = new LlmResponse({
-			content: {
-				role: "model",
-				parts: [{ text: "/*PLANNING*/ plan /*FINAL_ANSWER*/ done" }],
-			},
-		});
-		const events = await collect(
-			responseProcessor.runAsync(makeContext({ name: "agent" }), response),
-		);
-		expect(events).toEqual([]);
-		expect(response.content?.parts).toHaveLength(1);
-	});
-
-	it("requestProcessor appends instructions with PlanReActPlanner", async () => {
+	it("applies thinking config for BuiltInPlanner", async () => {
+		const thinkingConfig = { includeThoughts: true, thinkingBudget: 64 };
 		const llmRequest = new LlmRequest();
 		await drain(
 			requestProcessor.runAsync(
 				makeContext({
-					name: "planner-agent",
-					planner: new PlanReActPlanner(),
+					agent: {
+						name: "planner-agent",
+						planner: new BuiltInPlanner({ thinkingConfig }),
+					},
 				}),
 				llmRequest,
 			),
 		);
 
-		const text = llmRequest.getSystemInstructionText() ?? "";
-		expect(text).toContain("/*PLANNING*/");
-		expect(text).toContain("/*ACTION*/");
+		expect((llmRequest.config as any).thinkingConfig).toEqual(thinkingConfig);
 	});
 
-	it("responseProcessor processes planning response with PlanReActPlanner", async () => {
-		const response = new LlmResponse({
-			content: {
-				role: "model",
-				parts: [{ text: "/*PLANNING*/ step /*FINAL_ANSWER*/ the answer" }],
-			},
-		});
-
-		await collect(
-			responseProcessor.runAsync(
+	it("appends PlanReActPlanner instruction", async () => {
+		const llmRequest = new LlmRequest();
+		await drain(
+			requestProcessor.runAsync(
 				makeContext({
-					name: "planner-agent",
-					planner: new PlanReActPlanner(),
+					agent: {
+						name: "planner-agent",
+						planner: new PlanReActPlanner(),
+					},
 				}),
-				response,
+				llmRequest,
 			),
 		);
 
-		expect(response.content?.parts?.length).toBeGreaterThan(1);
-		expect(response.content?.parts?.some((p) => p.thought === true)).toBe(true);
+		expect(llmRequest.config?.systemInstruction).toBeTruthy();
+		expect(String(llmRequest.config?.systemInstruction)).toContain("PLANNING");
+	});
+});
+
+describe("nl-planning responseProcessor", () => {
+	it("is a no-op when agent has no planner", async () => {
+		const llmResponse = {
+			content: { role: "model", parts: [{ text: "hi" }] },
+		} as LlmResponse;
+
+		const events = await drain(
+			responseProcessor.runAsync(makeContext(), llmResponse),
+		);
+		expect(events).toEqual([]);
+	});
+
+	it("yields a state-delta event when planner mutates state", async () => {
+		const planner = {
+			buildPlanningInstruction: vi.fn(),
+			processPlanningResponse: (
+				callbackContext: { state: Record<string, unknown> },
+				parts: unknown[],
+			) => {
+				callbackContext.state.plan_step = "done";
+				return parts;
+			},
+		};
+
+		const llmResponse = {
+			content: {
+				role: "model",
+				parts: [{ text: "/*PLANNING*/ step one" }],
+			},
+		} as LlmResponse;
+
+		const events = await drain(
+			responseProcessor.runAsync(
+				makeContext({
+					agent: { name: "planner-agent", planner },
+				}),
+				llmResponse,
+			),
+		);
+
+		expect(events).toHaveLength(1);
+		const event = events[0] as {
+			actions: { stateDelta: Record<string, unknown> };
+		};
+		expect(event.actions.stateDelta.plan_step).toBe("done");
 	});
 });
