@@ -78,4 +78,27 @@ describe("CodeExecutorContext", () => {
 		context.updateCodeExecutionResult("inv-3", "b", "2", "err");
 		expect(state["_code_execution_results"]["inv-3"]).toHaveLength(2);
 	});
+
+	it("clearInputFiles is a no-op when no input files were stored", () => {
+		const state = State.create({}, {});
+		const context = new CodeExecutorContext(state);
+
+		context.clearInputFiles();
+		expect(context.getInputFiles()).toEqual([]);
+		expect(context.getProcessedFileNames()).toEqual([]);
+	});
+
+	it("getStateDelta deep-clones context so mutations do not leak", () => {
+		const state = State.create({}, {});
+		const context = new CodeExecutorContext(state);
+		context.setExecutionId("exec-clone");
+		context.addProcessedFileNames(["a.py"]);
+
+		const delta = context.getStateDelta();
+		delta._code_execution_context.execution_session_id = "mutated";
+		delta._code_execution_context.processed_input_files.push("leaked.py");
+
+		expect(context.getExecutionId()).toBe("exec-clone");
+		expect(context.getProcessedFileNames()).toEqual(["a.py"]);
+	});
 });

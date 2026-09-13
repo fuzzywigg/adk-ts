@@ -31,8 +31,33 @@ describe("EventActions", () => {
 		expect(actions.stateDelta).toEqual({ foo: 1 });
 		expect(actions.artifactDelta).toEqual({ "a.txt": 2 });
 		expect(actions.rewindBeforeInvocationId).toBe("inv-1");
+		expect(actions.compaction?.startTimestamp).toBe(1);
+		expect(actions.compaction?.endTimestamp).toBe(2);
 		expect(actions.compaction?.compactedContent.parts?.[0]).toEqual({
 			text: "summary",
 		});
+	});
+
+	it("round-trips requestedAuthConfigs and leaves unset optionals undefined", () => {
+		const withAuth = new EventActions({
+			requestedAuthConfigs: {
+				tool_a: { type: "oauth2", scopes: ["read"] },
+			},
+		});
+		expect(withAuth.requestedAuthConfigs).toEqual({
+			tool_a: { type: "oauth2", scopes: ["read"] },
+		});
+		expect(withAuth.skipSummarization).toBeUndefined();
+		expect(withAuth.transferToAgent).toBeUndefined();
+		expect(withAuth.escalate).toBeUndefined();
+		expect(withAuth.compaction).toBeUndefined();
+		expect(withAuth.rewindBeforeInvocationId).toBeUndefined();
+		expect(withAuth.stateDelta).toEqual({});
+		expect(withAuth.artifactDelta).toEqual({});
+
+		const empty = new EventActions({});
+		expect(empty.requestedAuthConfigs).toBeUndefined();
+		expect(empty.stateDelta).toEqual({});
+		expect(empty.artifactDelta).toEqual({});
 	});
 });

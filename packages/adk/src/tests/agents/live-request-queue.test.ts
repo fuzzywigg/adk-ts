@@ -47,5 +47,51 @@ describe("LiveRequestQueue", () => {
 		expect(() => queue.sendContent({ role: "user", parts: [] })).toThrow(
 			"Queue is closed",
 		);
+		expect(() =>
+			queue.sendRealtime({ data: "YQ==", mimeType: "text/plain" }),
+		).toThrow("Queue is closed");
+		expect(() =>
+			queue.send(new LiveRequest({ content: { role: "user", parts: [] } })),
+		).toThrow("Queue is closed");
+	});
+
+	it("resolves a pending waiter immediately when close is called", async () => {
+		const queue = new LiveRequestQueue();
+		const pending = queue.get();
+
+		queue.close();
+
+		const request = await pending;
+		expect(request.close).toBe(true);
+		expect(() => queue.sendContent({ role: "user", parts: [] })).toThrow(
+			"Queue is closed",
+		);
+	});
+
+	it("marks closed when a LiveRequest with close true is sent", async () => {
+		const queue = new LiveRequestQueue();
+		queue.send(new LiveRequest({ close: true }));
+
+		const request = await queue.get();
+		expect(request.close).toBe(true);
+		expect(() => queue.sendContent({ role: "user", parts: [] })).toThrow(
+			"Queue is closed",
+		);
+	});
+
+	it("resolves multiple outstanding get waiters FIFO", async () => {
+		const queue = new LiveRequestQueue();
+		const first = queue.get();
+		const second = queue.get();
+
+		queue.sendContent({ role: "user", parts: [{ text: "a" }] });
+		queue.sendContent({ role: "user", parts: [{ text: "b" }] });
+
+		await expect(first).resolves.toMatchObject({
+			content: { parts: [{ text: "a" }] },
+		});
+		await expect(second).resolves.toMatchObject({
+			content: { parts: [{ text: "b" }] },
+		});
 	});
 });

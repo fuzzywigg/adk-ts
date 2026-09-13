@@ -1,12 +1,12 @@
 import { describe, expect, it } from "vitest";
+import type { BaseAgent } from "../../agents/base-agent";
 import {
 	InvocationContext,
 	LlmCallsLimitExceededError,
 	newInvocationContextId,
 } from "../../agents/invocation-context";
-import { PluginManager } from "../../plugins/plugin-manager";
 import { RunConfig } from "../../agents/run-config";
-import type { BaseAgent } from "../../agents/base-agent";
+import { PluginManager } from "../../plugins/plugin-manager";
 import type { BaseSessionService } from "../../sessions/base-session-service";
 import type { Session } from "../../sessions/session";
 
@@ -112,5 +112,71 @@ describe("InvocationContext", () => {
 		const child = parent.createChildContext(makeAgent("child"));
 		expect(child.artifactService).toBe(artifactService);
 		expect(child.memoryService).toBe(memoryService);
+	});
+
+	it("preserves custom invocation fields and live streaming state", () => {
+		const liveRequestQueue = { close: () => undefined } as any;
+		const activeStreamingTools = {
+			stream_a: { name: "stream_a" },
+		} as any;
+		const transcriptionCache = [{ role: "user", data: "hi" }] as any;
+		const userContent = { role: "user", parts: [{ text: "start" }] } as any;
+		const runConfig = new RunConfig({ maxLlmCalls: 3 });
+
+		const context = new InvocationContext({
+			sessionService: {} as BaseSessionService,
+			pluginManager: new PluginManager(),
+			agent: makeAgent("root"),
+			session: makeSession(),
+			invocationId: "inv-custom",
+			userContent,
+			endInvocation: true,
+			liveRequestQueue,
+			activeStreamingTools,
+			transcriptionCache,
+			runConfig,
+		});
+
+		expect(context.invocationId).toBe("inv-custom");
+		expect(context.userContent).toBe(userContent);
+		expect(context.endInvocation).toBe(true);
+		expect(context.liveRequestQueue).toBe(liveRequestQueue);
+		expect(context.activeStreamingTools).toBe(activeStreamingTools);
+		expect(context.transcriptionCache).toBe(transcriptionCache);
+		expect(context.runConfig).toBe(runConfig);
+
+		const child = context.createChildContext(makeAgent("worker"));
+		expect(child.invocationId).toBe("inv-custom");
+		expect(child.userContent).toBe(userContent);
+		expect(child.endInvocation).toBe(true);
+		expect(child.liveRequestQueue).toBe(liveRequestQueue);
+		expect(child.activeStreamingTools).toBe(activeStreamingTools);
+		expect(child.transcriptionCache).toBe(transcriptionCache);
+		expect(child.runConfig).toBe(runConfig);
+		expect(child.branch).toBe("worker");
+	});
+
+	it("exposes LlmCallsLimitExceededError name and message", () => {
+		const context = makeContext(new RunConfig({ maxLlmCalls: 1 }));
+		context.incrementLlmCallCount();
+
+		try {
+			context.incrementLlmCallCount();
+			expect.unreachable("should have thrown");
+		} catch (error) {
+			expect(error).toBeInstanceOf(LlmCallsLimitExceededError);
+			expect((error as Error).name).toBe("LlmCallsLimitExceededError");
+			expect((error as Error).message).toContain(
+				"Max number of llm calls limit of `1` exceeded",
+			);
+		}
+	});
+
+	it("treats negative maxLlmCalls as unlimited", () => {
+		const context = makeContext(new RunConfig({ maxLlmCalls: -5 }));
+		expect(() => {
+			context.incrementLlmCallCount();
+			context.incrementLlmCallCount();
+		}).not.toThrow();
 	});
 });

@@ -31,4 +31,26 @@ describe("BasePlugin", () => {
 		expect(await plugin.afterToolCallback?.(params)).toBeUndefined();
 		expect(await plugin.onToolErrorCallback?.(params)).toBeUndefined();
 	});
+
+	it("allows subclasses to override individual callbacks", async () => {
+		class CountingPlugin extends BasePlugin {
+			hits = 0;
+			constructor() {
+				super("counting");
+			}
+			async beforeRunCallback() {
+				this.hits += 1;
+				return undefined;
+			}
+			async afterRunCallback() {
+				this.hits += 1;
+			}
+		}
+
+		const plugin = new CountingPlugin();
+		await plugin.beforeRunCallback({} as never);
+		await plugin.afterRunCallback({} as never);
+		expect(plugin.hits).toBe(2);
+		expect(plugin.name).toBe("counting");
+	});
 });

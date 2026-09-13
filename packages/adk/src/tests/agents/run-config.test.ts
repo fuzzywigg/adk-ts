@@ -29,6 +29,34 @@ describe("RunConfig", () => {
 		expect(config.saveInputBlobsAsArtifacts).toBe(true);
 	});
 
+	it("wires live audio and proactivity options", () => {
+		const speechConfig = { languageCode: "en-US" } as any;
+		const inputAudioTranscription = { languageCode: "en-US" } as any;
+		const outputAudioTranscription = { languageCode: "en-GB" } as any;
+		const realtimeInputConfig = { automaticActivityDetection: {} } as any;
+		const proactivity = { proactiveAudio: true } as any;
+
+		const config = new RunConfig({
+			speechConfig,
+			responseModalities: ["AUDIO", "TEXT"],
+			inputAudioTranscription,
+			outputAudioTranscription,
+			realtimeInputConfig,
+			enableAffectiveDialog: true,
+			proactivity,
+			streamingMode: StreamingMode.BIDI,
+		});
+
+		expect(config.speechConfig).toBe(speechConfig);
+		expect(config.responseModalities).toEqual(["AUDIO", "TEXT"]);
+		expect(config.inputAudioTranscription).toBe(inputAudioTranscription);
+		expect(config.outputAudioTranscription).toBe(outputAudioTranscription);
+		expect(config.realtimeInputConfig).toBe(realtimeInputConfig);
+		expect(config.enableAffectiveDialog).toBe(true);
+		expect(config.proactivity).toBe(proactivity);
+		expect(config.streamingMode).toBe(StreamingMode.BIDI);
+	});
+
 	it("accepts BIDI streaming mode", () => {
 		const config = new RunConfig({ streamingMode: StreamingMode.BIDI });
 		expect(config.streamingMode).toBe(StreamingMode.BIDI);

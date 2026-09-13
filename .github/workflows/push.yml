@@ -34,5 +34,6 @@ jobs:
         run: pnpm lint
       - name: Build ADK package
         run: pnpm --filter @iqai/adk build
-      - name: ADK tests
+      - name: ADK + CLI tests
+        # Matches root `pnpm test` filters; avoids accidental full-monorepo expansion.
         run: pnpm test

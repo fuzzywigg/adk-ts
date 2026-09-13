@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { AuthConfig } from "../../auth/auth-config";
 import {
 	ApiKeyCredential,
 	AuthCredential,
@@ -7,7 +8,6 @@ import {
 	BearerTokenCredential,
 	OAuth2Credential,
 } from "../../auth/auth-credential";
-import { AuthConfig } from "../../auth/auth-config";
 import { ApiKeyScheme } from "../../auth/auth-schemes";
 
 describe("auth credentials", () => {
@@ -37,11 +37,18 @@ describe("auth credentials", () => {
 		const queryConfig = new AuthConfig({
 			authScheme: new ApiKeyScheme({ in: "query", name: "api_key" }),
 		});
+		const cookieConfig = new AuthConfig({
+			authScheme: new ApiKeyScheme({ in: "cookie", name: "session" }),
+		});
 
 		expect(credential.getHeaders(headerConfig)).toEqual({
 			"X-API-Key": "secret",
 		});
 		expect(credential.getHeaders(queryConfig)).toEqual({});
+		expect(credential.getHeaders(cookieConfig)).toEqual({});
+		expect(credential.getToken()).toBe("secret");
+		expect(credential.canRefresh()).toBe(false);
+		expect(credential.type).toBe(AuthCredentialType.API_KEY);
 	});
 
 	it("tracks oauth expiry and refresh capability", async () => {
@@ -109,5 +116,32 @@ describe("auth credentials", () => {
 		await expect(credential.refresh()).rejects.toThrow(
 			/Token refresh not supported/,
 		);
+	});
+
+	it("marks oauth tokens expired within the 30s skew window", () => {
+		const credential = new OAuth2Credential({
+			accessToken: "access",
+			refreshToken: "refresh",
+			expiresIn: 20,
+			refreshFunction: async () => ({ accessToken: "next" }),
+		});
+		expect(credential.isExpired()).toBe(true);
+	});
+
+	it("throws when refresh function returns a falsy payload", async () => {
+		const credential = new OAuth2Credential({
+			accessToken: "access",
+			refreshToken: "refresh",
+			refreshFunction: async () => undefined as any,
+		});
+		await expect(credential.refresh()).rejects.toThrow(
+			/Failed to refresh token/,
+		);
+	});
+
+	it("reports canRefresh false for bearer credentials", () => {
+		const credential = new BearerTokenCredential("tok");
+		expect(credential.canRefresh()).toBe(false);
+		expect(credential.type).toBe(AuthCredentialType.BEARER);
 	});
 });

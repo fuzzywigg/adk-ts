@@ -94,4 +94,47 @@ describe("PlanReActPlanner", () => {
 
 		expect(parts ?? []).toEqual([]);
 	});
+
+	it("splits on the last /*FINAL_ANSWER*/ marker when multiple appear", () => {
+		const parts = planner.processPlanningResponse({} as any, [
+			{
+				text: "/*PLANNING*/ draft /*FINAL_ANSWER*/ mid /*FINAL_ANSWER*/ real answer",
+			},
+		]);
+
+		expect(parts).toHaveLength(2);
+		expect(parts?.[0].text).toContain("/*FINAL_ANSWER*/");
+		expect(parts?.[0].text).toContain("mid");
+		expect(parts?.[0].thought).toBe(true);
+		expect(parts?.[1].text).toBe(" real answer");
+		expect(parts?.[1].thought).toBeUndefined();
+	});
+
+	it("preserves unmarked text without setting thought", () => {
+		const parts = planner.processPlanningResponse({} as any, [
+			{ text: "plain narration without planning tags" },
+		]);
+
+		expect(parts).toHaveLength(1);
+		expect(parts?.[0].text).toBe("plain narration without planning tags");
+		expect(parts?.[0].thought).toBeUndefined();
+	});
+
+	it("keeps leading function calls and ignores later non-call parts", () => {
+		const parts = planner.processPlanningResponse({} as any, [
+			{ functionCall: { name: "search", args: { q: "x" } } },
+			{ text: "should be ignored after first call group" },
+			{ functionCall: { name: "extra", args: {} } },
+		]);
+
+		expect(parts?.map((p) => p.functionCall?.name)).toEqual(["search"]);
+		expect(parts?.some((p) => p.text)).toBe(false);
+	});
+
+	it("includes tool-usage and clarification guidance in the instruction", () => {
+		const instruction = planner.buildPlanningInstruction({} as any, {} as any);
+		expect(instruction).toContain("Available Tools");
+		expect(instruction).toContain("ask for clarification");
+		expect(instruction).toContain("prefer using the information available");
+	});
 });

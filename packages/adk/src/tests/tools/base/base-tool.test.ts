@@ -176,4 +176,57 @@ describe("BaseTool", () => {
 			result: { ok: true },
 		});
 	});
+
+	it("processLlmRequest no-ops when getDeclaration returns null", async () => {
+		class NoDeclTool extends BaseTool {
+			getDeclaration() {
+				return null;
+			}
+		}
+
+		const tool = new NoDeclTool({
+			name: "skip_tool",
+			description: "Skips declaration injection",
+		});
+		const request = new LlmRequest();
+		await tool.processLlmRequest(makeContext(), request);
+		expect(request.toolsDict).toEqual({});
+		expect(request.config?.tools).toBeUndefined();
+	});
+
+	it("default runAsync throws not implemented", async () => {
+		class Abstractish extends BaseTool {
+			getDeclaration() {
+				return null;
+			}
+		}
+
+		const tool = new Abstractish({
+			name: "abstract_tool",
+			description: "Missing runAsync",
+		});
+		await expect(tool.runAsync({}, makeContext())).rejects.toThrow(
+			/Abstractish runAsync is not implemented/,
+		);
+	});
+
+	it("validateArguments returns true when declaration has no parameters", () => {
+		class ParamlessTool extends BaseTool {
+			getDeclaration() {
+				return {
+					name: this.name,
+					description: this.description,
+				};
+			}
+			async runAsync() {
+				return {};
+			}
+		}
+
+		const tool = new ParamlessTool({
+			name: "paramless",
+			description: "No parameters schema",
+		});
+		expect(tool.validateArguments({})).toBe(true);
+	});
 });
