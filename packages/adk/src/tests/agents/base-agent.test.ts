@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { BaseAgent, type SingleAgentCallback } from "../../agents/base-agent";
 import type { InvocationContext } from "../../agents/invocation-context";
 import { Event } from "../../events/event";
@@ -326,6 +326,115 @@ describe("BaseAgent", () => {
 			expect(events).toHaveLength(2);
 			expect(events[1].content).toEqual({
 				parts: [{ text: "async-after" }],
+			});
+		});
+
+		it("skips afterAgentCallback when endInvocation is set during runAsyncImpl", async () => {
+			const afterCb = vi.fn(() => ({ parts: [{ text: "should-not-run" }] }));
+			agent.afterAgentCallback = afterCb;
+			agent.runAsyncImplMock.mockImplementation(async function* (
+				ctx: InvocationContext,
+			) {
+				yield new Event({ author: this.name });
+				ctx.endInvocation = true;
+			});
+
+			const events = [];
+			for await (const event of agent["runAsyncInternal"](mockContext)) {
+				events.push(event);
+			}
+
+			expect(agent.runAsyncImplMock).toHaveBeenCalledOnce();
+			expect(afterCb).not.toHaveBeenCalled();
+			expect(events).toHaveLength(1);
+		});
+
+		it("runLiveInternal short-circuits when before callback returns content", async () => {
+			const beforeCb = vi.fn(() => ({ parts: [{ text: "live-skip" }] }));
+			agent.beforeAgentCallback = beforeCb;
+
+			const events = [];
+			for await (const event of agent["runLiveInternal"](mockContext)) {
+				events.push(event);
+			}
+
+			expect(beforeCb).toHaveBeenCalledOnce();
+			expect(agent.runLiveImplMock).not.toHaveBeenCalled();
+			expect(events).toHaveLength(1);
+			expect(events[0].content).toEqual({ parts: [{ text: "live-skip" }] });
+			expect(mockContext.createChildContext).toHaveBeenCalled();
+		});
+
+		it("runLiveInternal runs after callback when before does not end invocation", async () => {
+			agent.afterAgentCallback = () => ({
+				parts: [{ text: "live-after" }],
+			});
+
+			const events = [];
+			for await (const event of agent["runLiveInternal"](mockContext)) {
+				events.push(event);
+			}
+
+			expect(agent.runLiveImplMock).toHaveBeenCalledOnce();
+			expect(events).toHaveLength(2);
+			expect(events[1].content).toEqual({ parts: [{ text: "live-after" }] });
+		});
+	});
+
+	describe("canonical agent callbacks", () => {
+		it("normalizes undefined, single, and array before/after callbacks", () => {
+			const empty = new TestAgent({ name: "cb_empty" });
+			expect(empty.canonicalBeforeAgentCallbacks).toEqual([]);
+			expect(empty.canonicalAfterAgentCallbacks).toEqual([]);
+
+			const before = vi.fn();
+			const after = vi.fn();
+			const single = new TestAgent({
+				name: "cb_single",
+				beforeAgentCallback: before,
+				afterAgentCallback: after,
+			});
+			expect(single.canonicalBeforeAgentCallbacks).toEqual([before]);
+			expect(single.canonicalAfterAgentCallbacks).toEqual([after]);
+
+			const multi = new TestAgent({
+				name: "cb_multi",
+				beforeAgentCallback: [before, before],
+				afterAgentCallback: [after, after],
+			});
+			expect(multi.canonicalBeforeAgentCallbacks).toHaveLength(2);
+			expect(multi.canonicalAfterAgentCallbacks).toHaveLength(2);
+		});
+	});
+
+	describe("hierarchy edge cases", () => {
+		it("findAgent returns undefined for deep misses and findSubAgent never returns self", () => {
+			const leaf = new TestAgent({ name: "leaf" });
+			const mid = new TestAgent({ name: "mid", subAgents: [leaf] });
+			const root = new TestAgent({ name: "tree_root", subAgents: [mid] });
+
+			expect(root.findAgent("missing_deep")).toBeUndefined();
+			expect(mid.findAgent("tree_root")).toBeUndefined();
+			expect(leaf.findSubAgent("leaf")).toBeUndefined();
+			expect(root.findSubAgent("leaf")).toBe(leaf);
+		});
+
+		it("runs without pluginManager and still invokes agent callbacks", async () => {
+			agent.beforeAgentCallback = () => undefined;
+			agent.afterAgentCallback = () => ({
+				parts: [{ text: "no-plugin-after" }],
+			});
+			expect(mockContext.pluginManager).toBeUndefined();
+
+			const events = [];
+			for await (const event of agent["runAsyncInternal"](mockContext)) {
+				events.push(event);
+			}
+
+			expect(agent.runAsyncImplMock).toHaveBeenCalledOnce();
+			expect(events).toHaveLength(2);
+			expect(events[1].content).toEqual({
+				parts: [{ text: "no-plugin-after" }],
 			});
 		});
 	});
