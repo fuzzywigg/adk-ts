@@ -2,6 +2,11 @@ import { afterEach, describe, expect, it } from "vitest";
 import type { BaseLlm } from "../../models/base-llm";
 import { LLMRegistry, type LlmModel } from "../../models/llm-registry";
 
+type LlmClassLike = {
+	new (model: string): BaseLlm;
+	supportedModels(): string[];
+};
+
 class FakeLlm {
 	constructor(public model: string) {}
 
@@ -9,6 +14,8 @@ class FakeLlm {
 		return ["^fake-.*$", "^stub-model$"];
 	}
 }
+
+const FakeLlmClass = FakeLlm as unknown as LlmClassLike;
 
 const fakeModel: LlmModel = {
 	async generateContent() {
@@ -22,11 +29,7 @@ describe("LLMRegistry", () => {
 	});
 
 	it("registers LLM classes from supportedModels patterns", () => {
-		LLMRegistry.registerLLM(
-			FakeLlm as unknown as new (
-				model: string,
-			) => BaseLlm,
-		);
+		LLMRegistry.registerLLM(FakeLlmClass);
 
 		expect(LLMRegistry.resolve("fake-1")?.name).toBe("FakeLlm");
 		expect(LLMRegistry.resolve("stub-model")?.name).toBe("FakeLlm");
@@ -34,11 +37,7 @@ describe("LLMRegistry", () => {
 	});
 
 	it("creates LLM instances and throws for unknown models", () => {
-		LLMRegistry.registerLLM(
-			FakeLlm as unknown as new (
-				model: string,
-			) => BaseLlm,
-		);
+		LLMRegistry.registerLLM(FakeLlmClass);
 
 		const llm = LLMRegistry.newLLM("fake-chat");
 		expect((llm as FakeLlm).model).toBe("fake-chat");
@@ -62,22 +61,14 @@ describe("LLMRegistry", () => {
 	});
 
 	it("falls back to class registry in getModelOrCreate", () => {
-		LLMRegistry.registerLLM(
-			FakeLlm as unknown as new (
-				model: string,
-			) => BaseLlm,
-		);
+		LLMRegistry.registerLLM(FakeLlmClass);
 
 		const created = LLMRegistry.getModelOrCreate("fake-2");
 		expect((created as FakeLlm).model).toBe("fake-2");
 	});
 
 	it("clears models and classes independently", () => {
-		LLMRegistry.registerLLM(
-			FakeLlm as unknown as new (
-				model: string,
-			) => BaseLlm,
-		);
+		LLMRegistry.registerLLM(FakeLlmClass);
 		LLMRegistry.registerModel("named", fakeModel);
 
 		LLMRegistry.clearModels();
@@ -89,11 +80,7 @@ describe("LLMRegistry", () => {
 	});
 
 	it("logRegisteredModels runs without throwing", () => {
-		LLMRegistry.registerLLM(
-			FakeLlm as unknown as new (
-				model: string,
-			) => BaseLlm,
-		);
+		LLMRegistry.registerLLM(FakeLlmClass);
 		LLMRegistry.registerModel("named", fakeModel);
 		expect(() => LLMRegistry.logRegisteredModels()).not.toThrow();
 	});
