@@ -160,4 +160,76 @@ describe("output-schema responseProcessor", () => {
 		expect(events).toEqual([]);
 		expect(response.errorCode).toBeUndefined();
 	});
+
+	it("strips prose before the first JSON object", async () => {
+		const schema = z.object({ answer: z.string() });
+		const response = new LlmResponse({
+			content: {
+				role: "model",
+				parts: [{ text: 'Here\'s the JSON:\n{"answer":"yes"}' }],
+			},
+		});
+
+		await collect(
+			responseProcessor.runAsync(
+				makeContext({ name: "schema-agent", outputSchema: schema }),
+				response,
+			),
+		);
+
+		expect(JSON.parse(response.content?.parts?.[0]?.text ?? "{}")).toEqual({
+			answer: "yes",
+		});
+	});
+
+	it("yields a parse error when JSON cannot be repaired", async () => {
+		const schema = z.object({ answer: z.string() });
+		const response = new LlmResponse({
+			content: {
+				role: "model",
+				parts: [{ text: "not-json-at-all {{{" }],
+			},
+		});
+
+		const events = await collect(
+			responseProcessor.runAsync(
+				makeContext({ name: "schema-agent", outputSchema: schema }),
+				response,
+			),
+		);
+
+		expect(events).toHaveLength(1);
+		expect(response.errorCode).toBe("OUTPUT_SCHEMA_VALIDATION_FAILED");
+		expect(response.errorMessage).toMatch(/JSON|parse|Unexpected/i);
+	});
+
+	it("ignores non-text parts when joining response text", async () => {
+		const schema = z.object({ answer: z.string() });
+		const response = new LlmResponse({
+			content: {
+				role: "model",
+				parts: [
+					{ inlineData: { mimeType: "image/png", data: "abc" } } as any,
+					{ text: '{"answer":"ok"}' },
+				],
+			},
+		});
+
+		const events = await collect(
+			responseProcessor.runAsync(
+				makeContext({ name: "schema-agent", outputSchema: schema }),
+				response,
+			),
+		);
+
+		expect(events).toEqual([]);
+		expect(response.errorCode).toBeUndefined();
+		const texts = (response.content?.parts || [])
+			.map((part) => ("text" in (part || {}) ? part.text : undefined))
+			.filter((t): t is string => Boolean(t));
+		expect(texts.some((t) => JSON.parse(t).answer === "ok")).toBe(true);
+		expect(response.content?.parts?.[0]).toMatchObject({
+			inlineData: { mimeType: "image/png", data: "abc" },
+		});
+	});
 });

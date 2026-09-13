@@ -11,6 +11,7 @@ import {
 	generateClientFunctionCallId,
 	getLongRunningFunctionCalls,
 	handleFunctionCallsAsync,
+	handleFunctionCallsLive,
 	mergeParallelFunctionResponseEvents,
 	populateClientFunctionCallId,
 	removeClientFunctionCallId,
@@ -27,13 +28,13 @@ vi.mock("../../../logger", () => ({
 
 vi.mock("../../../telemetry", () => ({
 	telemetryService: {
-		getTracer: () => ({
+		getTracer: vi.fn(() => ({
 			startSpan: () => ({
 				setStatus: vi.fn(),
 				recordException: vi.fn(),
 				end: vi.fn(),
 			}),
-		}),
+		})),
 		traceToolCall: vi.fn(),
 	},
 }));
@@ -410,5 +411,149 @@ describe("handleFunctionCallsAsync", () => {
 				{},
 			),
 		).rejects.toThrow(/Function missing is not found in the tools_dict/);
+	});
+
+	it("returns null when event has no function calls", async () => {
+		const result = await handleFunctionCallsAsync(
+			makeInvocationContext({
+				name: "llm-agent",
+				canonicalModel: "gpt-4o",
+				canonicalBeforeToolCallbacks: [],
+				canonicalAfterToolCallbacks: [],
+			}),
+			new Event({
+				author: "agent",
+				content: { role: "model", parts: [{ text: "no tools" }] },
+			}),
+			{},
+		);
+		expect(result).toBeNull();
+	});
+
+	it("skips long-running tools that return a falsy result", async () => {
+		const tool = new FakeTool(
+			{
+				name: "slow",
+				description: "Long running tool",
+				isLongRunning: true,
+			},
+			async () => null,
+		);
+		const result = await handleFunctionCallsAsync(
+			makeInvocationContext({
+				name: "llm-agent",
+				canonicalModel: "gpt-4o",
+				canonicalBeforeToolCallbacks: [],
+				canonicalAfterToolCallbacks: [],
+			}),
+			functionCallEvent([{ name: "slow", id: "lr-1" }]),
+			{ slow: tool },
+		);
+		expect(result).toBeNull();
+	});
+
+	it("wraps primitive tool results as { result }", async () => {
+		const tool = new FakeTool(
+			{ name: "echo_tool", description: "returns string" },
+			async () => "plain string",
+		);
+		const result = await handleFunctionCallsAsync(
+			makeInvocationContext({
+				name: "llm-agent",
+				canonicalModel: "gpt-4o",
+				canonicalBeforeToolCallbacks: [],
+				canonicalAfterToolCallbacks: [],
+			}),
+			functionCallEvent([{ name: "echo_tool", id: "c1", args: {} }]),
+			{ echo_tool: tool },
+		);
+		expect(result?.getFunctionResponses()[0].response).toEqual({
+			result: "plain string",
+		});
+	});
+
+	it("records span exception and rethrows when tool throws", async () => {
+		const recordException = vi.fn();
+		const setStatus = vi.fn();
+		const end = vi.fn();
+		const { telemetryService } = await import("../../../telemetry");
+		vi.mocked(telemetryService.getTracer).mockReturnValueOnce({
+			startSpan: () => ({
+				setStatus,
+				recordException,
+				end,
+			}),
+		} as any);
+
+		const tool = new FakeTool(
+			{ name: "boom", description: "throws" },
+			async () => {
+				throw new Error("tool failed");
+			},
+		);
+
+		await expect(
+			handleFunctionCallsAsync(
+				makeInvocationContext({
+					name: "llm-agent",
+					canonicalModel: "gpt-4o",
+					canonicalBeforeToolCallbacks: [],
+					canonicalAfterToolCallbacks: [],
+				}),
+				functionCallEvent([{ name: "boom", id: "c1" }]),
+				{ boom: tool },
+			),
+		).rejects.toThrow(/tool failed/);
+
+		expect(recordException).toHaveBeenCalled();
+		expect(setStatus).toHaveBeenCalledWith(
+			expect.objectContaining({ code: 2, message: "tool failed" }),
+		);
+		expect(end).toHaveBeenCalled();
+	});
+});
+
+describe("handleFunctionCallsLive", () => {
+	it("delegates to the async handler", async () => {
+		const tool = new FakeTool(
+			{ name: "echo_tool", description: "Echoes input args" },
+			async (args) => ({ live: args.value }),
+		);
+		const result = await handleFunctionCallsLive(
+			makeInvocationContext({
+				name: "llm-agent",
+				canonicalModel: "gpt-4o",
+				canonicalBeforeToolCallbacks: [],
+				canonicalAfterToolCallbacks: [],
+			}),
+			functionCallEvent([
+				{ name: "echo_tool", id: "live-1", args: { value: 9 } },
+			]),
+			{ echo_tool: tool },
+		);
+
+		expect(result?.getFunctionResponses()[0]).toMatchObject({
+			name: "echo_tool",
+			id: "live-1",
+			response: { live: 9 },
+		});
+	});
+});
+
+describe("function call helper edge cases", () => {
+	it("populateClientFunctionCallId is a no-op without function calls", () => {
+		const event = new Event({
+			author: "agent",
+			content: { role: "model", parts: [{ text: "hi" }] },
+		});
+		expect(() => populateClientFunctionCallId(event)).not.toThrow();
+		expect(event.getFunctionCalls()).toEqual([]);
+	});
+
+	it("removeClientFunctionCallId tolerates missing parts", () => {
+		expect(() =>
+			removeClientFunctionCallId({ role: "user" } as any),
+		).not.toThrow();
+		expect(() => removeClientFunctionCallId(undefined as any)).not.toThrow();
 	});
 });

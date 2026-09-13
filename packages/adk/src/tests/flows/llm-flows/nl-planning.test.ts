@@ -128,4 +128,103 @@ describe("nl-planning responseProcessor", () => {
 		};
 		expect(event.actions.stateDelta.plan_step).toBe("done");
 	});
+
+	it("returns early when response content is empty", async () => {
+		const planner = {
+			buildPlanningInstruction: vi.fn(),
+			processPlanningResponse: vi.fn(),
+		};
+		const events = await drain(
+			responseProcessor.runAsync(
+				makeContext({ agent: { name: "planner-agent", planner } }),
+				{ content: { role: "model", parts: [] } } as LlmResponse,
+			),
+		);
+		expect(events).toEqual([]);
+		expect(planner.processPlanningResponse).not.toHaveBeenCalled();
+	});
+
+	it("keeps original parts when processPlanningResponse returns falsy", async () => {
+		const originalParts = [{ text: "keep me" }];
+		const planner = {
+			buildPlanningInstruction: vi.fn(),
+			processPlanningResponse: () => undefined,
+		};
+		const llmResponse = {
+			content: { role: "model", parts: originalParts },
+		} as LlmResponse;
+
+		const events = await drain(
+			responseProcessor.runAsync(
+				makeContext({ agent: { name: "planner-agent", planner } }),
+				llmResponse,
+			),
+		);
+
+		expect(events).toEqual([]);
+		expect(llmResponse.content?.parts).toBe(originalParts);
+	});
+
+	it("does not yield when planner leaves state unchanged", async () => {
+		const planner = {
+			buildPlanningInstruction: vi.fn(),
+			processPlanningResponse: (_ctx: unknown, parts: unknown[]) => parts,
+		};
+		const events = await drain(
+			responseProcessor.runAsync(
+				makeContext({ agent: { name: "planner-agent", planner } }),
+				{
+					content: { role: "model", parts: [{ text: "stable" }] },
+				} as LlmResponse,
+			),
+		);
+		expect(events).toEqual([]);
+	});
+});
+
+describe("nl-planning requestProcessor thought stripping", () => {
+	it("clears thought flags from request contents", async () => {
+		const llmRequest = new LlmRequest();
+		llmRequest.contents = [
+			{
+				role: "user",
+				parts: [{ text: "plan", thought: true } as any, { text: "ok" }],
+			},
+			{ role: "model", parts: undefined as any },
+		];
+
+		await drain(
+			requestProcessor.runAsync(
+				makeContext({
+					agent: {
+						name: "planner-agent",
+						planner: new PlanReActPlanner(),
+					},
+				}),
+				llmRequest,
+			),
+		);
+
+		expect((llmRequest.contents[0].parts![0] as any).thought).toBeUndefined();
+		expect(llmRequest.contents[0].parts![1]).toEqual({ text: "ok" });
+	});
+
+	it("falls back to PlanReActPlanner for non-shaped planner objects", async () => {
+		const llmRequest = new LlmRequest();
+		await drain(
+			requestProcessor.runAsync(
+				makeContext({
+					agent: {
+						name: "planner-agent",
+						planner: { notAPlanner: true },
+					},
+				}),
+				llmRequest,
+			),
+		);
+
+		expect(String(llmRequest.config?.systemInstruction || "")).toContain(
+			"PLANNING",
+		);
+	});
 });

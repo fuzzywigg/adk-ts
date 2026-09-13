@@ -1,8 +1,12 @@
 import type { BaseAgent, InvocationContext } from "@adk/agents";
+import { StreamingMode } from "@adk/agents/run-config";
 import { Event } from "@adk/events";
+import { EventActions } from "@adk/events/event-actions";
 import { SingleFlow } from "@adk/flows";
 import type { LlmResponse } from "@adk/models";
 import { LlmRequest } from "@adk/models";
+import { BaseTool } from "@adk/tools/base/base-tool";
+import type { ToolContext } from "@adk/tools/tool-context";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@adk/helpers/logger", () => ({
@@ -471,5 +475,515 @@ describe("BaseLlmFlow._callLlmAsync", () => {
 		const tools = llmRequest.config?.tools as any[];
 		expect(tools.some((t) => t?.functionDeclarations?.length === 2)).toBe(true);
 		expect(tools.some((t) => t?.name === "gamma")).toBe(true);
+	});
+
+	it("passes streaming=true when runConfig.streamingMode is SSE", async () => {
+		const flow = new InspectableFlow();
+		const generateContentAsync = vi.fn(async function* () {
+			yield { content: { parts: [{ text: "sse" }] } };
+		});
+		const agent = {
+			name: "sse-agent",
+			canonicalModel: { model: "fake", generateContentAsync },
+		};
+		const ctx = makeCtx({
+			agent,
+			runConfig: { streamingMode: StreamingMode.SSE },
+		});
+
+		await collect(
+			flow._callLlmAsync(
+				ctx,
+				new LlmRequest(),
+				new Event({ author: "sse-agent" }),
+			),
+		);
+
+		expect(generateContentAsync).toHaveBeenCalledWith(
+			expect.any(LlmRequest),
+			true,
+		);
+	});
+
+	it("yields after-model callback result instead of raw model response", async () => {
+		const flow = new InspectableFlow();
+		const altered = { content: { parts: [{ text: "from-after" }] } };
+		const agent = {
+			name: "after-agent",
+			canonicalAfterModelCallbacks: [() => altered],
+			canonicalModel: {
+				model: "fake",
+				generateContentAsync: vi.fn(async function* () {
+					yield { content: { parts: [{ text: "raw" }] } };
+				}),
+			},
+		};
+		const responses = await collect(
+			flow._callLlmAsync(
+				makeCtx({ agent }),
+				new LlmRequest(),
+				new Event({ author: "after-agent" }),
+			),
+		);
+		expect(responses).toEqual([altered]);
+	});
+
+	it("treats falsy canonicalBefore/AfterModelCallbacks as no-ops", async () => {
+		const flow = new InspectableFlow();
+		const agent = {
+			name: "falsy-cb-agent",
+			canonicalBeforeModelCallbacks: null,
+			canonicalAfterModelCallbacks: null,
+			canonicalModel: {
+				model: "fake",
+				generateContentAsync: vi.fn(async function* () {
+					yield { content: { parts: [{ text: "ok" }] } };
+				}),
+			},
+		};
+		const ctx = makeCtx({ agent });
+		const llmRequest = new LlmRequest();
+		const modelEvent = new Event({ author: "falsy-cb-agent" });
+
+		await expect(
+			flow._handleBeforeModelCallback(ctx, llmRequest, modelEvent),
+		).resolves.toBeUndefined();
+		await expect(
+			flow._handleAfterModelCallback(
+				ctx,
+				{ content: { parts: [{ text: "x" }] } } as LlmResponse,
+				modelEvent,
+			),
+		).resolves.toBeUndefined();
+
+		const responses = await collect(
+			flow._callLlmAsync(ctx, llmRequest, modelEvent),
+		);
+		expect(responses).toHaveLength(1);
+		expect(responses[0].content?.parts?.[0]).toEqual({ text: "ok" });
+	});
+});
+
+class FlowTool extends BaseTool {
+	constructor(
+		config: ConstructorParameters<typeof BaseTool>[0],
+		private readonly impl: (
+			args: Record<string, unknown>,
+			context: ToolContext,
+		) => Promise<unknown>,
+	) {
+		super(config);
+	}
+
+	async runAsync(args: Record<string, unknown>, context: ToolContext) {
+		return this.impl(args, context);
+	}
+}
+
+function llmAgentCtx(
+	agentOverrides: Record<string, unknown> = {},
+): InvocationContext {
+	return makeCtx({
+		agent: {
+			name: "llm-agent",
+			canonicalModel: "fake-model",
+			canonicalBeforeToolCallbacks: [],
+			canonicalAfterToolCallbacks: [],
+			rootAgent: {
+				name: "root",
+				findAgent: vi.fn(),
+			},
+			...agentOverrides,
+		},
+	});
+}
+
+describe("BaseLlmFlow._finalizeModelResponseEvent function calls", () => {
+	it("populates missing function call ids and longRunningToolIds", () => {
+		const flow = new InspectableFlow();
+		const llmRequest = new LlmRequest();
+		llmRequest.toolsDict = {
+			slow: new FlowTool(
+				{ name: "slow", description: "slow", isLongRunning: true },
+				async () => ({ ok: true }),
+			),
+			fast: new FlowTool({ name: "fast", description: "fast" }, async () => ({
+				ok: true,
+			})),
+		};
+
+		const modelEvent = new Event({
+			id: "evt-fc",
+			author: "agent",
+			invocationId: "inv",
+		});
+		const llmResponse = {
+			content: {
+				role: "model",
+				parts: [
+					{ functionCall: { name: "slow", args: {} } },
+					{ functionCall: { name: "fast", id: "keep-me", args: {} } },
+				],
+			},
+		} as LlmResponse;
+
+		const finalized = flow._finalizeModelResponseEvent(
+			llmRequest,
+			llmResponse,
+			modelEvent,
+		);
+		const calls = finalized.getFunctionCalls();
+		expect(calls[0].id?.startsWith("adk-")).toBe(true);
+		expect(calls[1].id).toBe("keep-me");
+		expect(finalized.longRunningToolIds?.has(calls[0].id!)).toBe(true);
+		expect(finalized.longRunningToolIds?.has("keep-me")).toBe(false);
+	});
+});
+
+describe("BaseLlmFlow._postprocessLive", () => {
+	it("yields nothing when response has no content/error/interrupt/turnComplete", async () => {
+		const flow = new InspectableFlow();
+		const events = await collect(
+			flow._postprocessLive(
+				makeCtx(),
+				new LlmRequest(),
+				{} as LlmResponse,
+				new Event({ author: "agent" }),
+			),
+		);
+		expect(events).toEqual([]);
+	});
+
+	it("yields finalized event for turnComplete without content", async () => {
+		const flow = new InspectableFlow();
+		const events = await collect(
+			flow._postprocessLive(
+				makeCtx({ agent: { name: "live-agent" } }),
+				new LlmRequest(),
+				{ turnComplete: true } as unknown as LlmResponse,
+				new Event({
+					id: "live-1",
+					author: "live-agent",
+					invocationId: "inv",
+				}),
+			),
+		);
+		expect(events).toHaveLength(1);
+		expect(events[0].author).toBe("live-agent");
+	});
+
+	it("runs tools and transfers via runLive when transferToAgent is set", async () => {
+		const flow = new InspectableFlow();
+		const transferEvent = new Event({
+			author: "child",
+			content: { parts: [{ text: "from-child" }] },
+		});
+		const child = {
+			name: "child",
+			runLive: vi.fn(async function* () {
+				yield transferEvent;
+			}),
+			runAsync: vi.fn(async function* () {
+				yield new Event({ author: "child-async" });
+			}),
+		};
+		const findAgent = vi.fn((name: string) =>
+			name === "child" ? child : undefined,
+		);
+		const transferTool = new FlowTool(
+			{ name: "transfer_to_agent", description: "transfer" },
+			async (args, context) => {
+				context.actions.transferToAgent = String(args.agent_name);
+				return { transferred: true };
+			},
+		);
+		const llmRequest = new LlmRequest();
+		llmRequest.toolsDict = { transfer_to_agent: transferTool };
+
+		const ctx = llmAgentCtx({
+			name: "parent",
+			rootAgent: { name: "root", findAgent },
+		});
+
+		const events = await collect(
+			flow._postprocessLive(
+				ctx,
+				llmRequest,
+				{
+					content: {
+						role: "model",
+						parts: [
+							{
+								functionCall: {
+									name: "transfer_to_agent",
+									id: "fc-1",
+									args: { agent_name: "child" },
+								},
+							},
+						],
+					},
+				} as LlmResponse,
+				new Event({ id: "m1", author: "parent", invocationId: "inv" }),
+			),
+		);
+
+		expect(events.length).toBeGreaterThanOrEqual(3);
+		expect(events.some((e) => e === transferEvent)).toBe(true);
+		expect(findAgent).toHaveBeenCalledWith("child");
+		expect(child.runLive).toHaveBeenCalled();
+		expect(child.runAsync).not.toHaveBeenCalled();
+	});
+
+	it("falls back to runAsync when runLive is missing on transfer target", async () => {
+		const flow = new InspectableFlow();
+		const childEvent = new Event({ author: "child" });
+		const child = {
+			name: "child",
+			runAsync: vi.fn(async function* () {
+				yield childEvent;
+			}),
+		};
+		const findAgent = vi.fn(() => child);
+		const transferTool = new FlowTool(
+			{ name: "transfer_to_agent", description: "transfer" },
+			async (_args, context) => {
+				context.actions.transferToAgent = "child";
+				return { ok: true };
+			},
+		);
+		const llmRequest = new LlmRequest();
+		llmRequest.toolsDict = { transfer_to_agent: transferTool };
+		const ctx = llmAgentCtx({
+			name: "parent",
+			rootAgent: { name: "root", findAgent },
+		});
+
+		const events = await collect(
+			flow._postprocessLive(
+				ctx,
+				llmRequest,
+				{
+					content: {
+						role: "model",
+						parts: [
+							{
+								functionCall: {
+									name: "transfer_to_agent",
+									id: "fc-2",
+									args: {},
+								},
+							},
+						],
+					},
+				} as LlmResponse,
+				new Event({ id: "m2", author: "parent", invocationId: "inv" }),
+			),
+		);
+
+		expect(events.some((e) => e === childEvent)).toBe(true);
+		expect(child.runAsync).toHaveBeenCalled();
+	});
+});
+
+describe("BaseLlmFlow._postprocessHandleFunctionCallsAsync", () => {
+	it("yields auth event before function response when auth is requested", async () => {
+		const flow = new InspectableFlow();
+		const authTool = new FlowTool(
+			{ name: "secure_tool", description: "needs auth" },
+			async (_args, context) => {
+				context.actions.requestedAuthConfigs = {
+					[context.functionCallId!]: { authScheme: { type: "oauth2" } },
+				};
+				return { pending: true };
+			},
+		);
+		const llmRequest = new LlmRequest();
+		llmRequest.toolsDict = { secure_tool: authTool };
+		const ctx = llmAgentCtx();
+		const functionCallEvent = new Event({
+			author: "llm-agent",
+			invocationId: "inv",
+			content: {
+				role: "model",
+				parts: [
+					{ functionCall: { name: "secure_tool", id: "auth-1", args: {} } },
+				],
+			},
+		});
+
+		const events = await collect(
+			flow._postprocessHandleFunctionCallsAsync(
+				ctx,
+				functionCallEvent,
+				llmRequest,
+			),
+		);
+
+		expect(events).toHaveLength(2);
+		expect(events[0].getFunctionCalls()[0]?.name).toBe(
+			"adk_request_credential",
+		);
+		expect(events[1].getFunctionResponses()[0]?.name).toBe("secure_tool");
+	});
+
+	it("transfers to another agent via runAsync after tool response", async () => {
+		const flow = new InspectableFlow();
+		const childEvent = new Event({
+			author: "helper",
+			content: { parts: [{ text: "helped" }] },
+		});
+		const helper = {
+			name: "helper",
+			runAsync: vi.fn(async function* () {
+				yield childEvent;
+			}),
+		};
+		const findAgent = vi.fn((name: string) =>
+			name === "helper" ? helper : undefined,
+		);
+		const transferTool = new FlowTool(
+			{ name: "transfer_to_agent", description: "transfer" },
+			async (_args, context) => {
+				context.actions.transferToAgent = "helper";
+				return { ok: true };
+			},
+		);
+		const llmRequest = new LlmRequest();
+		llmRequest.toolsDict = { transfer_to_agent: transferTool };
+		const ctx = llmAgentCtx({
+			rootAgent: { name: "root", findAgent },
+		});
+		const functionCallEvent = new Event({
+			author: "llm-agent",
+			invocationId: "inv",
+			content: {
+				role: "model",
+				parts: [
+					{
+						functionCall: {
+							name: "transfer_to_agent",
+							id: "t-1",
+							args: { agent_name: "helper" },
+						},
+					},
+				],
+			},
+		});
+
+		const events = await collect(
+			flow._postprocessHandleFunctionCallsAsync(
+				ctx,
+				functionCallEvent,
+				llmRequest,
+			),
+		);
+
+		expect(events.some((e) => e.getFunctionResponses().length > 0)).toBe(true);
+		expect(events.some((e) => e === childEvent)).toBe(true);
+		expect(helper.runAsync).toHaveBeenCalled();
+	});
+
+	it("yields nothing when tools produce no response events", async () => {
+		const flow = new InspectableFlow();
+		const longRunning = new FlowTool(
+			{
+				name: "slow",
+				description: "long running",
+				isLongRunning: true,
+			},
+			async () => null,
+		);
+		const llmRequest = new LlmRequest();
+		llmRequest.toolsDict = { slow: longRunning };
+		const ctx = llmAgentCtx();
+		const functionCallEvent = new Event({
+			author: "llm-agent",
+			invocationId: "inv",
+			content: {
+				role: "model",
+				parts: [{ functionCall: { name: "slow", id: "lr-1", args: {} } }],
+			},
+		});
+
+		const events = await collect(
+			flow._postprocessHandleFunctionCallsAsync(
+				ctx,
+				functionCallEvent,
+				llmRequest,
+			),
+		);
+		expect(events).toEqual([]);
+	});
+});
+
+describe("BaseLlmFlow._postprocessAsync with function calls", () => {
+	it("finalizes FC ids then handles tools through postprocess", async () => {
+		const flow = new InspectableFlow();
+		const echo = new FlowTool(
+			{ name: "echo", description: "echo" },
+			async (args) => ({ echoed: args.value }),
+		);
+		const llmRequest = new LlmRequest();
+		llmRequest.toolsDict = { echo };
+		const ctx = llmAgentCtx();
+		const modelEvent = new Event({
+			id: "m-fc",
+			author: "llm-agent",
+			invocationId: "inv",
+			actions: new EventActions(),
+		});
+
+		const events = await collect(
+			flow._postprocessAsync(
+				ctx,
+				llmRequest,
+				{
+					content: {
+						role: "model",
+						parts: [
+							{
+								functionCall: {
+									name: "echo",
+									args: { value: "hi" },
+								},
+							},
+						],
+					},
+				} as LlmResponse,
+				modelEvent,
+			),
+		);
+
+		expect(events.length).toBeGreaterThanOrEqual(2);
+		const modelEvt = events[0];
+		expect(modelEvt.getFunctionCalls()[0].id?.startsWith("adk-")).toBe(true);
+		expect(events[1].getFunctionResponses()[0]).toMatchObject({
+			name: "echo",
+			response: { echoed: "hi" },
+		});
+	});
+
+	it("yields response processor events before model event", async () => {
+		const flow = new InspectableFlow();
+		const processorEvent = new Event({ author: "processor" });
+		flow.responseProcessors = [
+			{
+				runAsync: async function* () {
+					yield processorEvent;
+				},
+			},
+		];
+
+		const events = await collect(
+			flow._postprocessAsync(
+				makeCtx({ agent: { name: "agent" } }),
+				new LlmRequest(),
+				{ content: { role: "model", parts: [{ text: "hi" }] } } as LlmResponse,
+				new Event({ id: "e1", author: "agent", invocationId: "inv" }),
+			),
+		);
+
+		expect(events[0]).toBe(processorEvent);
+		expect(events[1].content?.parts?.[0]).toEqual({ text: "hi" });
 	});
 });
