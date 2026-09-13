@@ -57,4 +57,98 @@ describe("InMemorySessionService", () => {
 		expect(fetched?.state[`${State.APP_PREFIX}theme`]).toBe("dark");
 		expect(fetched?.state[`${State.USER_PREFIX}locale`]).toBe("en");
 	});
+
+	it("appends multiple events to a session", async () => {
+		const service = new InMemorySessionService();
+		const session = await service.createSession("app", "user", {}, "s1");
+		const base = Date.now() / 1000;
+
+		await service.appendEvent(session, {
+			author: "user",
+			timestamp: base,
+			content: { parts: [{ text: "one" }] },
+		} as any);
+		await service.appendEvent(session, {
+			author: "agent",
+			timestamp: base + 1,
+			content: { parts: [{ text: "two" }] },
+		} as any);
+		await service.appendEvent(session, {
+			author: "user",
+			timestamp: base + 2,
+			content: { parts: [{ text: "three" }] },
+		} as any);
+
+		const fetched = await service.getSession("app", "user", "s1");
+		expect(fetched?.events).toHaveLength(3);
+		expect(fetched?.events.map((e) => e.content?.parts?.[0]?.text)).toEqual([
+			"one",
+			"two",
+			"three",
+		]);
+	});
+
+	it("lists empty sessions for an unknown user", async () => {
+		const service = new InMemorySessionService();
+		await service.createSession("app", "user-a", {}, "s1");
+
+		const listed = await service.listSessions("app", "user-b");
+		expect(listed.sessions).toEqual([]);
+	});
+
+	it("getSession respects numRecentEvents and afterTimestamp config", async () => {
+		const service = new InMemorySessionService();
+		const session = await service.createSession("app", "user", {}, "s1");
+		const t0 = 1000;
+		const t1 = 2000;
+		const t2 = 3000;
+
+		await service.appendEvent(session, {
+			author: "user",
+			timestamp: t0,
+			content: { parts: [{ text: "a" }] },
+		} as any);
+		await service.appendEvent(session, {
+			author: "agent",
+			timestamp: t1,
+			content: { parts: [{ text: "b" }] },
+		} as any);
+		await service.appendEvent(session, {
+			author: "user",
+			timestamp: t2,
+			content: { parts: [{ text: "c" }] },
+		} as any);
+
+		const recent = await service.getSession("app", "user", "s1", {
+			numRecentEvents: 2,
+		});
+		expect(recent?.events).toHaveLength(2);
+		expect(recent?.events.map((e) => e.content?.parts?.[0]?.text)).toEqual([
+			"b",
+			"c",
+		]);
+
+		const after = await service.getSession("app", "user", "s1", {
+			afterTimestamp: 1500,
+		});
+		expect(after?.events.map((e) => e.content?.parts?.[0]?.text)).toEqual([
+			"b",
+			"c",
+		]);
+	});
+
+	it("creates concurrent sessions with different ids", async () => {
+		const service = new InMemorySessionService();
+		const [a, b, c] = await Promise.all([
+			service.createSession("app", "user"),
+			service.createSession("app", "user"),
+			service.createSession("app", "user"),
+		]);
+
+		const ids = new Set([a.id, b.id, c.id]);
+		expect(ids.size).toBe(3);
+
+		const listed = await service.listSessions("app", "user");
+		expect(listed.sessions).toHaveLength(3);
+	});
 });

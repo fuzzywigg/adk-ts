@@ -56,3 +56,15 @@ jobs:
 
       - name: Test
         run: pnpm test
+
+      - name: ADK coverage report
+        run: pnpm --filter @iqai/adk test:coverage
+
+      - name: Upload ADK coverage artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: adk-coverage
+          path: packages/adk/coverage
+          if-no-files-found: ignore
+          retention-days: 14

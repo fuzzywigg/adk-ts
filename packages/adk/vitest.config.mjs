@@ -15,11 +15,7 @@ export default defineConfig({
 			provider: "v8",
 			reporter: ["json", "lcov", "text", "clover", "json-summary"],
 			include: ["src/**/*.ts"],
-			exclude: [
-				"src/**/index.ts",
-				"src/**/*.d.ts",
-				"src/llm/registry/providers.ts",
-			],
+			exclude: ["src/**/index.ts", "src/**/*.d.ts"],
 			reportsDirectory: "./coverage",
 			// Uncomment when coverage improves:
 			/*
