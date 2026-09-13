@@ -14,14 +14,14 @@ import { DIRECTORIES_TO_SKIP } from "./providers/agent-scanner.service";
 import { HotReloadService } from "./reload/hot-reload.service";
 import type { RuntimeConfig } from "./runtime-config";
 
-function pathHasSkippedDir(p: string): boolean {
+export function pathHasSkippedDir(p: string): boolean {
 	const parts = p.split(sep).filter(Boolean);
 	return parts.some((part) =>
 		(DIRECTORIES_TO_SKIP as readonly string[]).includes(part),
 	);
 }
 
-function loadGitignorePrefixes(rootDir: string): string[] {
+export function loadGitignorePrefixes(rootDir: string): string[] {
 	try {
 		const igPath = resolve(rootDir, ".gitignore");
 		if (!existsSync(igPath)) return [];
@@ -41,7 +41,10 @@ function loadGitignorePrefixes(rootDir: string): string[] {
 	}
 }
 
-function shouldIgnorePath(fullPath: string, prefixes: string[]): boolean {
+export function shouldIgnorePath(
+	fullPath: string,
+	prefixes: string[],
+): boolean {
 	if (pathHasSkippedDir(fullPath)) return true;
 	for (const pref of prefixes) {
 		if (fullPath.startsWith(pref)) return true;
@@ -53,7 +56,7 @@ function shouldIgnorePath(fullPath: string, prefixes: string[]): boolean {
  * Setup hot reload file watching with .gitignore filtering and well-known directory skips.
  * Returns watcher/timeout references and a teardown function to close resources.
  */
-function setupHotReload(
+export function setupHotReload(
 	agentManager: AgentManager,
 	hotReload: HotReloadService | undefined,
 	config: RuntimeConfig,

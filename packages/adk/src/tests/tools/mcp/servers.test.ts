@@ -2,15 +2,21 @@ import { describe, expect, it, vi } from "vitest";
 import {
 	McpAbi,
 	McpAtp,
+	McpBamm,
 	McpCoinGecko,
 	McpCoinGeckoPro,
 	McpDiscord,
 	McpFilesystem,
+	McpFraxlend,
 	McpGeneric,
 	McpIqWiki,
 	McpMemory,
 	McpNearAgent,
+	McpNearIntents,
+	McpOdos,
+	McpPolymarket,
 	McpTelegram,
+	McpUpbit,
 	type McpToolset,
 } from "../../../tools/mcp";
 import type { McpConfig, SamplingHandler } from "../../../tools/mcp/types";
@@ -85,6 +91,20 @@ describe("MCP package server factories", () => {
 		expect(getConfig(McpDiscord()).name).toBe("Discord MCP Client");
 		expect(getConfig(McpFilesystem()).transport.mode).toBe("stdio");
 		expect(getConfig(McpMemory()).name).toBe("Memory MCP Client");
+		expect(getConfig(McpBamm()).name).toBe("BAMM MCP Client");
+		expect(getConfig(McpFraxlend()).name).toBe("Fraxlend MCP Client");
+		expect(getConfig(McpNearIntents()).name).toBe(
+			"Near Intents Swaps MCP Client",
+		);
+		expect(getConfig(McpOdos()).name).toBe("ODOS MCP Client");
+		expect(getConfig(McpUpbit()).name).toBe("Upbit MCP Client");
+		expect(getConfig(McpPolymarket()).name).toBe("Polymarket MCP Client");
+
+		const bamm = getConfig(McpBamm({ env: { WALLET_PRIVATE_KEY: "k" } }));
+		if (bamm.transport.mode === "stdio") {
+			expect(bamm.transport.args).toEqual(["-y", "@iqai/mcp-bamm"]);
+			expect(bamm.transport.env?.WALLET_PRIVATE_KEY).toBe("k");
+		}
 	});
 });
 

@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { LlmRequest } from "../../models/llm-request";
 import { LlmResponse } from "../../models/llm-response";
 import { OpenAiLlm } from "../../models/openai-llm";
 
@@ -380,6 +381,233 @@ describe("OpenAiLlm", () => {
 			expect(req.config.labels).toBeUndefined();
 			expect(req.contents[0].parts[0].inline_data).toBeUndefined();
 			expect(req.contents[0].parts[1]).toEqual({ text: "keep" });
+		});
+	});
+
+	describe("generateContentAsyncImpl", () => {
+		it("yields a non-streaming chat completion with tools and system instruction", async () => {
+			const create = vi.fn().mockResolvedValue({
+				choices: [
+					{
+						message: {
+							content: "done",
+							tool_calls: [
+								{
+									id: "c1",
+									type: "function",
+									function: {
+										name: "lookup",
+										arguments: JSON.stringify({ q: 1 }),
+									},
+								},
+							],
+						},
+						finish_reason: "tool_calls",
+					},
+				],
+				usage: {
+					prompt_tokens: 2,
+					completion_tokens: 4,
+					total_tokens: 6,
+				},
+			});
+			(llm as any)._client = { chat: { completions: { create } } };
+
+			const req = new LlmRequest({
+				model: "gpt-4o-mini",
+				contents: [{ role: "user", parts: [{ text: "hi" }] }],
+				config: {
+					systemInstruction: "be brief",
+					maxOutputTokens: 50,
+					temperature: 0.1,
+					topP: 0.8,
+					tools: [
+						{
+							functionDeclarations: [
+								{
+									name: "lookup",
+									description: "look things up",
+									parameters: {
+										type: "OBJECT",
+										properties: { q: { type: "NUMBER" } },
+									},
+								},
+							],
+						} as any,
+					],
+				},
+			});
+
+			const out: LlmResponse[] = [];
+			for await (const resp of (llm as any).generateContentAsyncImpl(
+				req,
+				false,
+			)) {
+				out.push(resp);
+			}
+
+			expect(create).toHaveBeenCalledWith(
+				expect.objectContaining({
+					model: "gpt-4o-mini",
+					stream: false,
+					tool_choice: "auto",
+					max_tokens: 50,
+				}),
+			);
+			const messages = create.mock.calls[0][0].messages;
+			expect(messages[0]).toEqual({ role: "system", content: "be brief" });
+			expect(out).toHaveLength(1);
+			expect(out[0].content?.parts?.[0]).toEqual({ text: "done" });
+			expect(out[0].finishReason).toBe("STOP");
+		});
+
+		it("streams text chunks and emits a final finish_reason response", async () => {
+			async function* streamChunks() {
+				yield {
+					choices: [{ delta: { content: "Hel" }, finish_reason: null }],
+					usage: undefined,
+				};
+				yield {
+					choices: [{ delta: { content: "lo" }, finish_reason: null }],
+					usage: undefined,
+				};
+				yield {
+					choices: [
+						{
+							delta: {},
+							finish_reason: "stop",
+						},
+					],
+					usage: {
+						prompt_tokens: 1,
+						completion_tokens: 2,
+						total_tokens: 3,
+					},
+				};
+			}
+
+			const create = vi.fn().mockResolvedValue(streamChunks());
+			(llm as any)._client = { chat: { completions: { create } } };
+
+			const req = new LlmRequest({
+				contents: [{ role: "user", parts: [{ text: "stream" }] }],
+			});
+
+			const out: LlmResponse[] = [];
+			for await (const resp of (llm as any).generateContentAsyncImpl(
+				req,
+				true,
+			)) {
+				out.push(resp);
+			}
+
+			expect(create).toHaveBeenCalledWith(
+				expect.objectContaining({ stream: true }),
+			);
+			expect(out.some((r) => r.partial === true)).toBe(true);
+			expect(out.some((r) => r.finishReason === "STOP")).toBe(true);
+			expect(
+				out.some((r) =>
+					r.content?.parts?.some(
+						(p: any) => p.text === "Hello" || p.text === "Hel",
+					),
+				),
+			).toBe(true);
+		});
+
+		it("accumulates streamed tool_calls into the final response", async () => {
+			async function* streamChunks() {
+				yield {
+					choices: [
+						{
+							delta: {
+								tool_calls: [
+									{
+										index: 0,
+										id: "tc1",
+										function: { name: "sea", arguments: "" },
+									},
+								],
+							},
+							finish_reason: null,
+						},
+					],
+				};
+				yield {
+					choices: [
+						{
+							delta: {
+								tool_calls: [
+									{
+										index: 0,
+										function: { name: "rch", arguments: '{"q":' },
+									},
+								],
+							},
+							finish_reason: null,
+						},
+					],
+				};
+				yield {
+					choices: [
+						{
+							delta: {
+								tool_calls: [
+									{
+										index: 0,
+										function: { arguments: "2}" },
+									},
+								],
+							},
+							finish_reason: "tool_calls",
+						},
+					],
+					usage: {
+						prompt_tokens: 1,
+						completion_tokens: 1,
+						total_tokens: 2,
+					},
+				};
+			}
+
+			const create = vi.fn().mockResolvedValue(streamChunks());
+			(llm as any)._client = { chat: { completions: { create } } };
+
+			const req = new LlmRequest({
+				contents: [{ role: "user", parts: [{ text: "tools" }] }],
+			});
+
+			const out: LlmResponse[] = [];
+			for await (const resp of (llm as any).generateContentAsyncImpl(
+				req,
+				true,
+			)) {
+				out.push(resp);
+			}
+
+			const final = out.find((r) => r.finishReason === "STOP");
+			expect(final?.content?.parts?.some((p: any) => p.functionCall)).toBe(
+				true,
+			);
+			const fc = final?.content?.parts?.find((p: any) => p.functionCall)
+				?.functionCall as any;
+			expect(fc.name).toBe("search");
+			expect(fc.args).toEqual({ q: 2 });
+		});
+
+		it("skips empty non-streaming choices", async () => {
+			const create = vi
+				.fn()
+				.mockResolvedValue({ choices: [], usage: undefined });
+			(llm as any)._client = { chat: { completions: { create } } };
+			const req = new LlmRequest({
+				contents: [{ role: "user", parts: [{ text: "empty" }] }],
+			});
+			const out: LlmResponse[] = [];
+			for await (const resp of (llm as any).generateContentAsyncImpl(req)) {
+				out.push(resp);
+			}
+			expect(out).toHaveLength(0);
 		});
 	});
 });

@@ -182,4 +182,123 @@ describe("McpClientService.close / sampling handlers", () => {
 		expect((service as any).mcpSamplingHandler).toBeNull();
 		expect(removeRequestHandler).toHaveBeenCalledWith("sampling/createMessage");
 	});
+
+	it("creates SSE/streamable HTTP transport with merged headers and timeout", async () => {
+		const { StreamableHTTPClientTransport } = await import(
+			"@modelcontextprotocol/sdk/client/streamableHttp.js"
+		);
+		const service = new McpClientService({
+			name: "sse-client",
+			description: "sse",
+			transport: {
+				mode: "sse",
+				serverUrl: "https://mcp.example.com/sse",
+				headers: { "x-transport": "1" },
+			},
+			headers: { Authorization: "Bearer t" },
+			timeout: 1500,
+		});
+
+		await service.initialize();
+
+		expect(StreamableHTTPClientTransport).toHaveBeenCalled();
+		const [url, opts] = (StreamableHTTPClientTransport as any).mock.calls.at(
+			-1,
+		);
+		expect(String(url)).toBe("https://mcp.example.com/sse");
+		expect(opts.requestInit.headers).toEqual({
+			"x-transport": "1",
+			Authorization: "Bearer t",
+		});
+		expect(opts.requestInit.timeout).toBe(1500);
+	});
+
+	it("reinitialize cleans up and reconnects", async () => {
+		const service = new McpClientService(stdioConfig());
+		await service.initialize();
+		expect(connect).toHaveBeenCalledTimes(1);
+
+		await service.reinitialize();
+
+		expect(close).toHaveBeenCalled();
+		expect(transportClose).toHaveBeenCalled();
+		expect(connect).toHaveBeenCalledTimes(2);
+		expect(service.isConnected()).toBe(true);
+	});
+
+	it("invokes registered sampling handler and wraps non-Mcp errors", async () => {
+		const service = new McpClientService(stdioConfig());
+		await service.initialize();
+
+		const handleSamplingRequest = vi
+			.fn()
+			.mockResolvedValueOnce({
+				role: "assistant",
+				content: { type: "text", text: "ok" },
+			})
+			.mockRejectedValueOnce(new Error("sample failed"));
+		(service as any).mcpSamplingHandler = { handleSamplingRequest };
+		await (service as any).setupSamplingHandler((service as any).client);
+
+		const cb = setRequestHandler.mock.calls.at(-1)?.[1];
+		expect(cb).toBeTypeOf("function");
+		await expect(cb({ method: "sampling/createMessage" })).resolves.toEqual({
+			role: "assistant",
+			content: { type: "text", text: "ok" },
+		});
+		await expect(
+			cb({ method: "sampling/createMessage" }),
+		).rejects.toMatchObject({
+			type: McpErrorType.SAMPLING_ERROR,
+			message: expect.stringContaining("Sampling request failed"),
+		});
+	});
+
+	it("rethrows McpError from sampling handler unchanged", async () => {
+		const service = new McpClientService(stdioConfig());
+		await service.initialize();
+		(service as any).mcpSamplingHandler = {
+			handleSamplingRequest: vi
+				.fn()
+				.mockRejectedValue(
+					new McpError("typed", McpErrorType.INVALID_SCHEMA_ERROR),
+				),
+		};
+		await (service as any).setupSamplingHandler((service as any).client);
+		const cb = setRequestHandler.mock.calls.at(-1)?.[1];
+		await expect(cb({})).rejects.toMatchObject({
+			type: McpErrorType.INVALID_SCHEMA_ERROR,
+			message: "typed",
+		});
+	});
+
+	it("continues initialize when sampling handler registration throws", async () => {
+		setRequestHandler.mockImplementation(() => {
+			throw new Error("cannot register");
+		});
+		const service = new McpClientService(
+			stdioConfig({ samplingHandler: vi.fn() }),
+		);
+		await expect(service.initialize()).resolves.toBeTruthy();
+		expect(service.isConnected()).toBe(true);
+	});
+
+	it("removeSamplingHandler swallows removeRequestHandler errors", async () => {
+		removeRequestHandler.mockImplementation(() => {
+			throw new Error("remove failed");
+		});
+		const service = new McpClientService(stdioConfig());
+		await service.initialize();
+		service.setSamplingHandler(vi.fn());
+		expect(() => service.removeSamplingHandler()).not.toThrow();
+		expect((service as any).mcpSamplingHandler).toBeNull();
+	});
+
+	it("cleanupResources ignores client.close failures and logs transport cleanup errors", async () => {
+		close.mockRejectedValue(new Error("close boom"));
+		const service = new McpClientService(stdioConfig());
+		await service.initialize();
+		await expect(service.close()).resolves.toBeUndefined();
+		expect(service.isConnected()).toBe(false);
+	});
 });
