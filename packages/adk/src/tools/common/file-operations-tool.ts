@@ -159,8 +159,11 @@ export class FileOperationsTool extends BaseTool {
 		const normalizedPath = path.normalize(filepath);
 		const normalizedBasePath = path.normalize(this.basePath);
 
-		// Check if the path is outside the base path
-		if (!normalizedPath.startsWith(normalizedBasePath)) {
+		const isInsideBase =
+			normalizedPath === normalizedBasePath ||
+			normalizedPath.startsWith(`${normalizedBasePath}${path.sep}`);
+
+		if (!isInsideBase) {
 			throw new Error(
 				`Access denied: Can't access paths outside the base directory`,
 			);

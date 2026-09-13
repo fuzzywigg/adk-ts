@@ -32,4 +32,12 @@ describe("GetUserChoiceTool", () => {
 		expect(result).toBeNull();
 		expect(context.actions.skipSummarization).toBe(true);
 	});
+
+	it("works without a question and still skips summarization", async () => {
+		const tool = new GetUserChoiceTool();
+		const context = makeContext();
+		const result = await tool.runAsync({ options: ["only"] }, context);
+		expect(result).toBeNull();
+		expect(context.actions.skipSummarization).toBe(true);
+	});
 });

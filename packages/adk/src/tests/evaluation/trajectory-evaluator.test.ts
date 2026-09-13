@@ -144,4 +144,34 @@ describe("TrajectoryEvaluator", () => {
 		expect(result.perInvocationResults[1].score).toBe(0);
 		expect(result.overallEvalStatus).toBe(EvalStatus.FAILED);
 	});
+
+	it("treats missing args as empty objects and passes below-1 thresholds", async () => {
+		const soft = new TrajectoryEvaluator({
+			metricName: "tool_trajectory_avg_score",
+			threshold: 0.5,
+		});
+		const tools = {
+			toolUses: [{ name: "noop" }, { name: "noop", args: {} }],
+			intermediateResponses: [],
+		};
+		const result = await soft.evaluateInvocations(
+			[invocation(tools)],
+			[invocation(tools)],
+		);
+		expect(result.overallScore).toBe(1);
+		expect(result.overallEvalStatus).toBe(EvalStatus.PASSED);
+	});
+
+	it("fails when tool names differ even if args match", async () => {
+		const actual = invocation({
+			toolUses: [{ name: "a", args: { x: 1 } }],
+			intermediateResponses: [],
+		});
+		const expected = invocation({
+			toolUses: [{ name: "b", args: { x: 1 } }],
+			intermediateResponses: [],
+		});
+		const result = await evaluator.evaluateInvocations([actual], [expected]);
+		expect(result.perInvocationResults[0].score).toBe(0);
+	});
 });

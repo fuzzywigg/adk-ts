@@ -216,4 +216,26 @@ describe("ReflectAndRetryToolPlugin", () => {
 		expect(response?.reflection_guidance).toContain("(no arguments)");
 		expect(response?.error_details).toBe("string-error");
 	});
+
+	it("afterToolCallback handles extracted errors from subclass extractErrorFromResult", async () => {
+		class ExtractingPlugin extends ReflectAndRetryToolPlugin {
+			override async extractErrorFromResult(): Promise<Error> {
+				return new Error("from-result");
+			}
+		}
+
+		const plugin = new ExtractingPlugin({ maxRetries: 2 });
+		const response = await plugin.afterToolCallback({
+			tool: makeTool("parser"),
+			toolArgs: { n: 1 },
+			toolContext: makeToolContext(),
+			result: { ok: false },
+		});
+
+		expect(response).toMatchObject({
+			response_type: REFLECT_AND_RETRY_RESPONSE_TYPE,
+			error_details: expect.stringContaining("from-result"),
+			retry_count: 1,
+		});
+	});
 });
