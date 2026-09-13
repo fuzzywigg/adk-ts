@@ -157,4 +157,98 @@ describe("InMemoryArtifactService", () => {
 			service.loadArtifact({ ...base, filename: "bad-ref.txt" }),
 		).rejects.toThrow(/Invalid artifact reference URI/);
 	});
+
+	it("deleteArtifact is a no-op for missing paths", async () => {
+		const service = new InMemoryArtifactService();
+		await expect(
+			service.deleteArtifact({ ...base, filename: "ghost.txt" }),
+		).resolves.toBeUndefined();
+	});
+
+	it("returns fileData-only artifacts and null for out-of-range negative versions", async () => {
+		const service = new InMemoryArtifactService();
+		await service.saveArtifact({
+			...base,
+			filename: "uri-only.txt",
+			artifact: {
+				fileData: {
+					fileUri: "https://example.com/x",
+					mimeType: "text/plain",
+				},
+			},
+		});
+		expect(
+			await service.loadArtifact({ ...base, filename: "uri-only.txt" }),
+		).toEqual({
+			fileData: {
+				fileUri: "https://example.com/x",
+				mimeType: "text/plain",
+			},
+		});
+
+		await service.saveArtifact({
+			...base,
+			filename: "versions.txt",
+			artifact: { text: "only" },
+		});
+		expect(
+			await service.loadArtifact({
+				...base,
+				filename: "versions.txt",
+				version: -99,
+			}),
+		).toBeNull();
+	});
+
+	it("lists mixed session and user keys in sorted order", async () => {
+		const service = new InMemoryArtifactService();
+		await service.saveArtifact({
+			...base,
+			filename: "z.txt",
+			artifact: { text: "z" },
+		});
+		await service.saveArtifact({
+			...base,
+			filename: "user:a.json",
+			artifact: { text: "a" },
+		});
+		await service.saveArtifact({
+			...base,
+			filename: "m.txt",
+			artifact: { text: "m" },
+		});
+		expect(await service.listArtifactKeys(base)).toEqual([
+			"m.txt",
+			"user:a.json",
+			"z.txt",
+		]);
+	});
+
+	it("resolves user-scoped URI refs using fallback sessionId", async () => {
+		const service = new InMemoryArtifactService();
+		await service.saveArtifact({
+			...base,
+			filename: "user:source.txt",
+			artifact: { text: "payload" },
+		});
+		const uri = getArtifactUri({
+			appName: base.appName,
+			userId: base.userId,
+			filename: "user:source.txt",
+			version: 0,
+		});
+		await service.saveArtifact({
+			...base,
+			filename: "alias-user.txt",
+			artifact: {
+				fileData: {
+					fileUri: uri,
+					mimeType: "text/plain",
+				},
+			},
+		});
+		expect(
+			await service.loadArtifact({ ...base, filename: "alias-user.txt" }),
+		).toEqual({ text: "payload" });
+	});
 });

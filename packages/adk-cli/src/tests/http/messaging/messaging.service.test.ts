@@ -93,4 +93,186 @@ describe("MessagingService", () => {
 		} as any);
 		expect(response.agentName).toBe("solo");
 	});
+
+	it("defaults missing body fields and works without HotReloadService", async () => {
+		const loaded = {
+			sessionId: "s1",
+			agent: { name: "solo" },
+		} as LoadedAgent;
+		const sessionsService = {
+			ensureAgentLoaded: vi.fn().mockResolvedValue(loaded),
+			getSessionEvents: vi
+				.fn()
+				.mockResolvedValue({ events: [], totalCount: 0 }),
+		};
+		const agentManager = {
+			sendMessageToAgent: vi.fn().mockResolvedValue("pong"),
+		};
+		const service = new MessagingService(
+			agentManager as never,
+			sessionsService as never,
+		);
+
+		const response = await service.postMessage("demo", undefined as any);
+		expect(agentManager.sendMessageToAgent).toHaveBeenCalledWith(
+			"demo",
+			"",
+			[],
+		);
+		expect(response).toEqual({ response: "pong", agentName: "solo" });
+	});
+
+	it("swallows broadcastState failures and still returns a response", async () => {
+		const loaded = {
+			sessionId: "s1",
+			agent: { name: "solo" },
+		} as LoadedAgent;
+		const sessionsService = {
+			ensureAgentLoaded: vi.fn().mockResolvedValue(loaded),
+			getSessionEvents: vi
+				.fn()
+				.mockResolvedValue({ events: [], totalCount: 0 }),
+		};
+		const agentManager = {
+			sendMessageToAgent: vi.fn().mockResolvedValue("ok"),
+		};
+		const hotReload = {
+			broadcastState: vi.fn(() => {
+				throw new Error("ws down");
+			}),
+		};
+		const service = new MessagingService(
+			agentManager as never,
+			sessionsService as never,
+			hotReload as never,
+		);
+
+		await expect(
+			service.postMessage("demo", { message: "hi", attachments: [] }),
+		).resolves.toEqual({ response: "ok", agentName: "solo" });
+	});
+
+	it("falls back to agentPath when load fails during agentName resolution", async () => {
+		const sessionsService = {
+			ensureAgentLoaded: vi
+				.fn()
+				.mockResolvedValueOnce(null)
+				.mockResolvedValueOnce(null),
+			getSessionEvents: vi.fn(),
+		};
+		const agentManager = {
+			sendMessageToAgent: vi.fn().mockResolvedValue("ok"),
+		};
+		const service = new MessagingService(
+			agentManager as never,
+			sessionsService as never,
+		);
+
+		await expect(
+			service.postMessage("demo-path", { message: "hi", attachments: [] }),
+		).resolves.toEqual({ response: "ok", agentName: "demo-path" });
+	});
+
+	it("prefers last non-user event when no final response exists", async () => {
+		const loaded = {
+			sessionId: "s1",
+			agent: { name: "fallback" },
+		} as LoadedAgent;
+		const sessionsService = {
+			ensureAgentLoaded: vi.fn().mockResolvedValue(loaded),
+			getSessionEvents: vi.fn().mockResolvedValue({
+				events: [
+					{ author: "user", isFinalResponse: false },
+					{ author: "helper", isFinalResponse: false },
+					{ author: "analyst", isFinalResponse: false },
+				],
+				totalCount: 3,
+			}),
+		};
+		const agentManager = {
+			sendMessageToAgent: vi.fn().mockResolvedValue("ok"),
+		};
+		const service = new MessagingService(
+			agentManager as never,
+			sessionsService as never,
+		);
+
+		await expect(
+			service.postMessage("demo", { message: "hi", attachments: [] }),
+		).resolves.toEqual({ response: "ok", agentName: "analyst" });
+	});
+
+	it("prefers final non-user over a later non-final assistant", async () => {
+		const loaded = {
+			sessionId: "s1",
+			agent: { name: "fallback" },
+		} as LoadedAgent;
+		const sessionsService = {
+			ensureAgentLoaded: vi.fn().mockResolvedValue(loaded),
+			getSessionEvents: vi.fn().mockResolvedValue({
+				events: [
+					{ author: "worker", isFinalResponse: true },
+					{ author: "narrator", isFinalResponse: false },
+				],
+				totalCount: 2,
+			}),
+		};
+		const agentManager = {
+			sendMessageToAgent: vi.fn().mockResolvedValue("ok"),
+		};
+		const service = new MessagingService(
+			agentManager as never,
+			sessionsService as never,
+		);
+
+		await expect(
+			service.postMessage("demo", { message: "hi", attachments: [] }),
+		).resolves.toEqual({ response: "ok", agentName: "worker" });
+	});
+
+	it("falls back to agentPath when getSessionEvents throws", async () => {
+		const loaded = {
+			sessionId: "s1",
+			agent: { name: "solo" },
+		} as LoadedAgent;
+		const sessionsService = {
+			ensureAgentLoaded: vi.fn().mockResolvedValue(loaded),
+			getSessionEvents: vi.fn().mockRejectedValue(new Error("events down")),
+		};
+		const agentManager = {
+			sendMessageToAgent: vi.fn().mockResolvedValue("ok"),
+		};
+		const service = new MessagingService(
+			agentManager as never,
+			sessionsService as never,
+		);
+
+		await expect(
+			service.postMessage("demo-path", { message: "hi", attachments: [] }),
+		).resolves.toEqual({ response: "ok", agentName: "demo-path" });
+	});
+
+	it("falls back to agentPath when loaded agent has no name", async () => {
+		const loaded = {
+			sessionId: "s1",
+			agent: {},
+		} as LoadedAgent;
+		const sessionsService = {
+			ensureAgentLoaded: vi.fn().mockResolvedValue(loaded),
+			getSessionEvents: vi
+				.fn()
+				.mockResolvedValue({ events: [], totalCount: 0 }),
+		};
+		const agentManager = {
+			sendMessageToAgent: vi.fn().mockResolvedValue("ok"),
+		};
+		const service = new MessagingService(
+			agentManager as never,
+			sessionsService as never,
+		);
+
+		await expect(
+			service.postMessage("path-only", { message: "hi", attachments: [] }),
+		).resolves.toEqual({ response: "ok", agentName: "path-only" });
+	});
 });

@@ -2,12 +2,56 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Event } from "../events/event";
 import type { LlmRequest } from "../models/llm-request";
 import type { LlmResponse } from "../models/llm-response";
-import { TelemetryService } from "../telemetry";
+import {
+	TelemetryService,
+	initializeTelemetry,
+	shutdownTelemetry,
+	telemetryService,
+	traceLlmCall,
+	traceToolCall,
+} from "../telemetry";
 import type { BaseTool } from "../tools";
+
+const { startMock, shutdownMock, NodeSDKMock, diagWarn, diagError, diagDebug } =
+	vi.hoisted(() => {
+		const startMock = vi.fn();
+		const shutdownMock = vi.fn().mockResolvedValue(undefined);
+		const NodeSDKMock = vi.fn(function NodeSDK(this: any) {
+			this.start = startMock;
+			this.shutdown = shutdownMock;
+		});
+		return {
+			startMock,
+			shutdownMock,
+			NodeSDKMock,
+			diagWarn: vi.fn(),
+			diagError: vi.fn(),
+			diagDebug: vi.fn(),
+		};
+	});
+
+vi.mock("@opentelemetry/sdk-node", () => ({
+	NodeSDK: NodeSDKMock,
+}));
+
+vi.mock("@opentelemetry/exporter-trace-otlp-http", () => ({
+	OTLPTraceExporter: vi.fn(),
+}));
+
+vi.mock("@opentelemetry/auto-instrumentations-node", () => ({
+	getNodeAutoInstrumentations: vi.fn(() => []),
+}));
+
+vi.mock("@opentelemetry/resources", () => ({
+	resourceFromAttributes: vi.fn((attrs) => attrs),
+}));
 
 afterEach(() => {
 	vi.restoreAllMocks();
 	vi.doUnmock("@opentelemetry/api");
+	startMock.mockReset();
+	shutdownMock.mockReset().mockResolvedValue(undefined);
+	NodeSDKMock.mockClear();
 });
 
 function fakeTool(name = "search"): BaseTool {
@@ -233,5 +277,195 @@ describe("TelemetryService with mocked active span", () => {
 			"gen_ai.content.completion",
 			expect.any(Object),
 		);
+	});
+
+	it("uses placeholders when functionResponse is missing and serializes circular args", async () => {
+		const setAttributes = vi.fn();
+		const { trace } = await import("@opentelemetry/api");
+		vi.spyOn(trace, "getActiveSpan").mockReturnValue({
+			setAttributes,
+			addEvent: vi.fn(),
+		} as any);
+
+		const service = new TelemetryService();
+		const circular: any = { q: "hi" };
+		circular.self = circular;
+		service.traceToolCall(
+			fakeTool("lookup"),
+			circular,
+			fakeEvent({
+				content: { role: "user", parts: [{ text: "no-fn" }] },
+			} as any),
+		);
+
+		expect(setAttributes).toHaveBeenCalledWith(
+			expect.objectContaining({
+				"gen_ai.tool.call.id": "<not specified>",
+				"adk.tool_call_args": "<not serializable>",
+			}),
+		);
+	});
+
+	it("strips response_schema/nulls and maps functions in llm request config", async () => {
+		const setAttributes = vi.fn();
+		const { trace } = await import("@opentelemetry/api");
+		vi.spyOn(trace, "getActiveSpan").mockReturnValue({
+			setAttributes,
+			addEvent: vi.fn(),
+		} as any);
+		const prev = process.env.NODE_ENV;
+		process.env.NODE_ENV = "test";
+
+		const service = new TelemetryService();
+		service.traceLlmCall(
+			{
+				invocationId: "inv",
+				userId: "u",
+				session: { id: "s" },
+			} as any,
+			"evt",
+			{
+				model: "m",
+				config: {
+					temperature: 0.2,
+					response_schema: { type: "object" },
+					nullableField: null,
+					functions: [
+						{
+							name: "fn",
+							description: "d",
+							parameters: { type: "object" },
+							handler: () => {},
+						},
+					],
+				},
+				contents: [],
+			} as any,
+			{ content: { role: "model", parts: [] } } as LlmResponse,
+		);
+
+		const attrs = setAttributes.mock.calls[0][0];
+		const request = JSON.parse(attrs["adk.llm_request"]);
+		expect(request.config.response_schema).toBeUndefined();
+		expect(request.config.nullableField).toBeUndefined();
+		expect(request.config.functions).toEqual([
+			{ name: "fn", description: "d", parameters: { type: "object" } },
+		]);
+		expect(attrs["deployment.environment.name"]).toBe("test");
+		if (prev === undefined) delete process.env.NODE_ENV;
+		else process.env.NODE_ENV = prev;
+	});
+});
+
+describe("TelemetryService.initialize and shutdown", () => {
+	it("initializes once and warns on second call", async () => {
+		const { diag } = await import("@opentelemetry/api");
+		vi.spyOn(diag, "warn").mockImplementation(diagWarn);
+		vi.spyOn(diag, "debug").mockImplementation(diagDebug);
+		vi.spyOn(diag, "error").mockImplementation(diagError);
+		vi.spyOn(diag, "setLogger").mockImplementation(() => {});
+
+		const service = new TelemetryService();
+		service.initialize({
+			appName: "adk-tests",
+			appVersion: "1.2.3",
+			otlpEndpoint: "http://localhost:4318/v1/traces",
+		});
+		expect(service.initialized).toBe(true);
+		expect(service.getConfig()?.appName).toBe("adk-tests");
+		expect(NodeSDKMock).toHaveBeenCalledTimes(1);
+		expect(startMock).toHaveBeenCalledTimes(1);
+
+		service.initialize({
+			appName: "again",
+			otlpEndpoint: "http://localhost:4318/v1/traces",
+		});
+		expect(diagWarn).toHaveBeenCalledWith(
+			"Telemetry is already initialized. Skipping.",
+		);
+		expect(NodeSDKMock).toHaveBeenCalledTimes(1);
+
+		await service.shutdown();
+		expect(service.initialized).toBe(false);
+		expect(shutdownMock).toHaveBeenCalled();
+	});
+
+	it("rethrows when SDK start fails", async () => {
+		const { diag } = await import("@opentelemetry/api");
+		vi.spyOn(diag, "error").mockImplementation(diagError);
+		vi.spyOn(diag, "setLogger").mockImplementation(() => {});
+		startMock.mockImplementationOnce(() => {
+			throw new Error("start failed");
+		});
+
+		const service = new TelemetryService();
+		expect(() =>
+			service.initialize({
+				appName: "adk-tests",
+				otlpEndpoint: "http://localhost:4318/v1/traces",
+			}),
+		).toThrow("start failed");
+		expect(diagError).toHaveBeenCalled();
+	});
+
+	it("warns on shutdown timeout and errors on non-timeout failures", async () => {
+		const { diag } = await import("@opentelemetry/api");
+		vi.spyOn(diag, "warn").mockImplementation(diagWarn);
+		vi.spyOn(diag, "error").mockImplementation(diagError);
+		vi.spyOn(diag, "debug").mockImplementation(diagDebug);
+		vi.spyOn(diag, "setLogger").mockImplementation(() => {});
+
+		const service = new TelemetryService();
+		shutdownMock.mockImplementationOnce(() => new Promise(() => {}));
+		service.initialize({
+			appName: "adk-tests",
+			otlpEndpoint: "http://localhost:4318/v1/traces",
+		});
+		await expect(service.shutdown(20)).rejects.toThrow(/timeout/);
+		expect(diagWarn).toHaveBeenCalledWith(expect.stringContaining("timed out"));
+
+		const service2 = new TelemetryService();
+		service2.initialize({
+			appName: "adk-tests",
+			otlpEndpoint: "http://localhost:4318/v1/traces",
+		});
+		shutdownMock.mockRejectedValueOnce(new Error("shutdown boom"));
+		await expect(service2.shutdown()).rejects.toThrow("shutdown boom");
+		expect(diagError).toHaveBeenCalled();
+	});
+});
+
+describe("telemetry module exports", () => {
+	it("delegates helpers to the singleton service", () => {
+		expect(telemetryService).toBeInstanceOf(TelemetryService);
+		const initSpy = vi
+			.spyOn(telemetryService, "initialize")
+			.mockImplementation(() => {});
+		const shutSpy = vi
+			.spyOn(telemetryService, "shutdown")
+			.mockResolvedValue(undefined);
+		const toolSpy = vi
+			.spyOn(telemetryService, "traceToolCall")
+			.mockImplementation(() => {});
+		const llmSpy = vi
+			.spyOn(telemetryService, "traceLlmCall")
+			.mockImplementation(() => {});
+
+		initializeTelemetry({
+			appName: "x",
+			otlpEndpoint: "http://localhost",
+		});
+		expect(initSpy).toHaveBeenCalled();
+		traceToolCall(fakeTool(), {}, fakeEvent());
+		expect(toolSpy).toHaveBeenCalled();
+		traceLlmCall(
+			{ invocationId: "i", userId: "u", session: { id: "s" } } as any,
+			"e",
+			{ model: "m", config: {}, contents: [] } as LlmRequest,
+			{} as LlmResponse,
+		);
+		expect(llmSpy).toHaveBeenCalled();
+		void shutdownTelemetry(1);
+		expect(shutSpy).toHaveBeenCalledWith(1);
 	});
 });
