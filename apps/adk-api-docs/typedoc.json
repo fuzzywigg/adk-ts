@@ -6,6 +6,7 @@
 	"name": "@iqai/adk API Documentation",
 	"readme": "../../packages/adk/README.md",
 	"tsconfig": "../../packages/adk/tsconfig.json",
+	"exclude": ["**/tests/**", "**/*.test.ts"],
 	"excludePrivate": true,
 	"excludeProtected": false,
 	"excludeExternals": true,
