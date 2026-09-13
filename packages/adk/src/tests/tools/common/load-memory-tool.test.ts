@@ -39,4 +39,41 @@ describe("LoadMemoryTool", () => {
 			message: "offline",
 		});
 	});
+
+	it("defaults memories and count when searchMemory omits memories", async () => {
+		const tool = new LoadMemoryTool();
+		const context = {
+			actions: {},
+			searchMemory: vi.fn().mockResolvedValue({}),
+		} as unknown as ToolContext;
+
+		await expect(tool.runAsync({ query: "empty" }, context)).resolves.toEqual({
+			memories: [],
+			count: 0,
+		});
+	});
+
+	it("stringifies non-Error memory search failures", async () => {
+		const tool = new LoadMemoryTool();
+		const context = {
+			actions: {},
+			searchMemory: vi.fn().mockRejectedValue("backend-down"),
+		} as unknown as ToolContext;
+		vi.spyOn(console, "error").mockImplementation(() => {});
+
+		await expect(tool.runAsync({ query: "facts" }, context)).resolves.toEqual({
+			error: "Memory search failed",
+			message: "backend-down",
+		});
+	});
+
+	it("exposes load_memory description on the declaration", () => {
+		const tool = new LoadMemoryTool();
+		const declaration = tool.getDeclaration();
+
+		expect(declaration.description).toContain("Loads the memory");
+		expect(declaration.parameters?.properties?.query?.description).toContain(
+			"query to load memories",
+		);
+	});
 });

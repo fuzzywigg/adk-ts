@@ -90,4 +90,41 @@ describe("UserInteractionTool", () => {
 			error: "dialog cancelled",
 		});
 	});
+
+	it("stringifies non-Error promptUser failures", async () => {
+		const tool = new UserInteractionTool();
+		const context = {
+			actions: {
+				promptUser: vi.fn().mockRejectedValue("aborted"),
+			},
+		} as unknown as ToolContext;
+
+		await expect(tool.runAsync({ prompt: "Name?" }, context)).resolves.toEqual({
+			success: false,
+			error: "aborted",
+		});
+	});
+
+	it("returns unsupported when actions is missing entirely", async () => {
+		const tool = new UserInteractionTool();
+		const context = {} as ToolContext;
+
+		await expect(tool.runAsync({ prompt: "Hello?" }, context)).resolves.toEqual(
+			{
+				success: false,
+				error: "User interaction is not supported in the current environment",
+			},
+		);
+	});
+
+	it("declares optional options and defaultValue properties", () => {
+		const tool = new UserInteractionTool();
+		const declaration = tool.getDeclaration();
+
+		expect(declaration.parameters?.properties?.options?.type).toBeDefined();
+		expect(
+			declaration.parameters?.properties?.defaultValue?.type,
+		).toBeDefined();
+		expect(declaration.description).toContain("Prompt the user");
+	});
 });

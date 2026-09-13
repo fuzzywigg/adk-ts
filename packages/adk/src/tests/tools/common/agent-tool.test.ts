@@ -343,4 +343,122 @@ describe("AgentTool", () => {
 			"Agent tool execution failed: boom",
 		);
 	});
+
+	it("nests child branch under parentInvocation.branch", async () => {
+		const runAsync = vi.fn(async function* () {
+			yield new Event({
+				author: "child",
+				content: { role: "model", parts: [{ text: "ok" }] },
+			});
+		});
+		const agent = makeStubAgent({ name: "child", runAsync });
+		const tool = new AgentTool({ name: "child_tool", agent });
+		const { context } = makeToolContext(agent);
+
+		await tool.runAsync({ input: "x" }, context);
+
+		expect(runAsync.mock.calls[0][0].branch).toBe("root.child");
+	});
+
+	it("ignores non-text parts when merging the last agent event", async () => {
+		const agent = makeStubAgent({
+			runAsync: async function* () {
+				yield new Event({
+					author: "stub_agent",
+					content: {
+						role: "model",
+						parts: [
+							{ inlineData: { mimeType: "image/png", data: "abc" } },
+							{ text: "visible" },
+							{ functionCall: { name: "noop", args: {} } } as any,
+						],
+					},
+				});
+			},
+		});
+		const tool = new AgentTool({ name: "filter_tool", agent });
+		const { context } = makeToolContext(agent);
+
+		await expect(tool.runAsync({ input: "x" }, context)).resolves.toBe(
+			"visible",
+		);
+	});
+
+	it("uses the last author-matching event when earlier ones also match", async () => {
+		const agent = makeStubAgent({
+			runAsync: async function* () {
+				yield new Event({
+					author: "stub_agent",
+					content: { role: "model", parts: [{ text: "first" }] },
+				});
+				yield new Event({
+					author: "other",
+					content: { role: "model", parts: [{ text: "noise" }] },
+				});
+				yield new Event({
+					author: "stub_agent",
+					content: { role: "model", parts: [{ text: "second" }] },
+				});
+			},
+		});
+		const tool = new AgentTool({ name: "last_wins", agent });
+		const { context } = makeToolContext(agent);
+
+		await expect(tool.runAsync({ input: "x" }, context)).resolves.toBe(
+			"second",
+		);
+	});
+
+	it("returns result when outputKey is set but context.state is missing", async () => {
+		const agent = makeStubAgent({
+			runAsync: async function* () {
+				yield new Event({
+					author: "stub_agent",
+					content: { role: "model", parts: [{ text: "plain" }] },
+				});
+			},
+		});
+		const tool = new AgentTool({
+			name: "no_state",
+			agent,
+			outputKey: "out",
+		});
+		const { context } = makeToolContext(agent);
+		Object.defineProperty(context, "state", {
+			get: () => undefined,
+		});
+
+		await expect(tool.runAsync({ input: "x" }, context)).resolves.toBe("plain");
+	});
+
+	it("stringifies undefined input when params are empty", async () => {
+		const runAsync = vi.fn(async function* () {
+			yield new Event({
+				author: "stub_agent",
+				content: { role: "model", parts: [{ text: "done" }] },
+			});
+		});
+		const agent = makeStubAgent({ runAsync });
+		const tool = new AgentTool({ name: "empty_params", agent });
+		const { context } = makeToolContext(agent);
+
+		await expect(tool.runAsync({}, context)).resolves.toBe("done");
+		const childCtx = runAsync.mock.calls[0][0] as {
+			userContent?: { parts?: Array<{ text?: string }> };
+		};
+		expect(childCtx.userContent?.parts?.[0]?.text).toBe("undefined");
+	});
+
+	it("honors shouldRetryOnFailure and maxRetryAttempts from config", () => {
+		const agent = makeStubAgent();
+		const tool = new AgentTool({
+			name: "retry_tool",
+			agent,
+			shouldRetryOnFailure: true,
+			maxRetryAttempts: 5,
+		});
+
+		expect(tool.shouldRetryOnFailure).toBe(true);
+		expect(tool.maxRetryAttempts).toBe(5);
+	});
 });

@@ -270,6 +270,125 @@ describe("AiSdkLlm", () => {
 				}),
 			).toBeNull();
 		});
+
+		it("returns multi-text user and assistant content as arrays", () => {
+			expect(
+				(llm as any).contentToAiSdkMessage({
+					role: "user",
+					parts: [{ text: "one" }, { text: "two" }],
+				}),
+			).toEqual({
+				role: "user",
+				content: [
+					{ type: "text", text: "one" },
+					{ type: "text", text: "two" },
+				],
+			});
+
+			expect(
+				(llm as any).contentToAiSdkMessage({
+					role: "model",
+					parts: [{ text: "alpha" }, { text: "beta" }],
+				}),
+			).toEqual({
+				role: "assistant",
+				content: [
+					{ type: "text", text: "alpha" },
+					{ type: "text", text: "beta" },
+				],
+			});
+		});
+
+		it("keeps single text after filtering mixed non-text parts", () => {
+			expect(
+				(llm as any).contentToAiSdkMessage({
+					role: "assistant",
+					parts: [
+						{ inlineData: { mimeType: "image/png", data: "x" } },
+						{ text: "only-text" },
+					],
+				}),
+			).toEqual({ role: "assistant", content: "only-text" });
+
+			expect(
+				(llm as any).contentToAiSdkMessage({
+					role: "user",
+					parts: [
+						{ inlineData: { mimeType: "image/png", data: "x" } },
+						{ text: "user-only" },
+					],
+				}),
+			).toEqual({ role: "user", content: "user-only" });
+		});
+
+		it("builds tool-call-only assistant content without preceding text", () => {
+			const msg = (llm as any).contentToAiSdkMessage({
+				role: "model",
+				parts: [
+					{
+						functionCall: {
+							id: "c9",
+							name: "lookup",
+							args: { id: 1 },
+						},
+					},
+				],
+			});
+			expect(msg).toEqual({
+				role: "assistant",
+				content: [
+					{
+						type: "tool-call",
+						toolCallId: "c9",
+						toolName: "lookup",
+						input: { id: 1 },
+					},
+				],
+			});
+		});
+	});
+
+	describe("convertToAiSdkMessages", () => {
+		it("drops contents that convert to null", () => {
+			const request = new LlmRequest({
+				contents: [
+					{ role: "user", parts: [] },
+					{ role: "user", parts: [{ text: "keep" }] },
+					{
+						role: "user",
+						parts: [{ inlineData: { mimeType: "image/png", data: "x" } }],
+					},
+				],
+			});
+
+			expect((llm as any).convertToAiSdkMessages(request)).toEqual([
+				{ role: "user", content: "keep" },
+			]);
+		});
+	});
+
+	describe("convertToAiSdkTools extras", () => {
+		it("ignores tool configs without functionDeclarations", () => {
+			const request = new LlmRequest({
+				config: {
+					tools: [
+						{ googleSearch: {} } as any,
+						{
+							functionDeclarations: [
+								{
+									name: "ping",
+									description: "Ping",
+									parameters: { type: "OBJECT" },
+								},
+							],
+						},
+					],
+				},
+			});
+
+			const tools = (llm as any).convertToAiSdkTools(request);
+			expect(Object.keys(tools)).toEqual(["ping"]);
+		});
 	});
 
 	describe("generateContentAsyncImpl", () => {
@@ -406,6 +525,88 @@ describe("AiSdkLlm", () => {
 			expect(responses).toHaveLength(1);
 			expect(responses[0].errorCode).toBe("AI_SDK_ERROR");
 			expect(responses[0].errorMessage).toContain("provider down");
+		});
+
+		it("yields empty text part when generateText returns no text or tools", async () => {
+			generateText.mockResolvedValue({
+				text: "",
+				toolCalls: [],
+				finishReason: "stop",
+			});
+
+			const responses = [];
+			for await (const response of (llm as any).generateContentAsyncImpl(
+				new LlmRequest({
+					contents: [{ role: "user", parts: [{ text: "hi" }] }],
+				}),
+				false,
+			)) {
+				responses.push(response);
+			}
+
+			expect(responses).toHaveLength(1);
+			expect(responses[0].content.parts).toEqual([{ text: "" }]);
+			expect(responses[0].usageMetadata).toBeUndefined();
+			expect(responses[0].finishReason).toBe("STOP");
+		});
+
+		it("omits usageMetadata when provider usage is missing on stream", async () => {
+			streamText.mockReturnValue({
+				textStream: (async function* () {})(),
+				toolCalls: Promise.resolve([
+					{
+						toolCallId: "t2",
+						toolName: "ping",
+						input: {},
+					},
+				]),
+				usage: Promise.resolve(undefined),
+				finishReason: Promise.resolve("stop"),
+			});
+
+			const responses = [];
+			for await (const response of (llm as any).generateContentAsyncImpl(
+				new LlmRequest({
+					contents: [{ role: "user", parts: [{ text: "hi" }] }],
+				}),
+				true,
+			)) {
+				responses.push(response);
+			}
+
+			expect(responses).toHaveLength(1);
+			expect(responses[0].turnComplete).toBe(true);
+			expect(responses[0].usageMetadata).toBeUndefined();
+			expect(responses[0].content.parts).toEqual([
+				{
+					functionCall: {
+						id: "t2",
+						name: "ping",
+						args: {},
+					},
+				},
+			]);
+		});
+
+		it("yields empty text when stream has neither text nor tool calls", async () => {
+			streamText.mockReturnValue({
+				textStream: (async function* () {})(),
+				toolCalls: Promise.resolve([]),
+				usage: Promise.resolve(undefined),
+				finishReason: Promise.resolve("other"),
+			});
+
+			const responses = [];
+			for await (const response of (llm as any).generateContentAsyncImpl(
+				new LlmRequest(),
+				true,
+			)) {
+				responses.push(response);
+			}
+
+			expect(responses).toHaveLength(1);
+			expect(responses[0].content.parts).toEqual([{ text: "" }]);
+			expect(responses[0].finishReason).toBe("FINISH_REASON_UNSPECIFIED");
 		});
 	});
 });
