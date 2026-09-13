@@ -39,9 +39,9 @@ vi.mock("node:fs", async (importOriginal) => {
 import { ContainerCodeExecutor } from "../../code-executors/container-code-executor";
 
 function makeStream(chunks: Buffer[] = []) {
-	const handlers: Record<string, Function[]> = {};
+	const handlers: Record<string, Array<(...args: any[]) => void>> = {};
 	return {
-		on(event: string, cb: Function) {
+		on(event: string, cb: (...args: any[]) => void) {
 			handlers[event] = handlers[event] || [];
 			handlers[event].push(cb);
 			if (event === "end") {
@@ -237,7 +237,9 @@ describe("ContainerCodeExecutor", () => {
 		existsSync.mockReturnValue(true);
 		const stream = {};
 		buildImage.mockResolvedValue(stream);
-		followProgress.mockImplementation((_s: any, done: Function) => done(null));
+		followProgress.mockImplementation(
+			(_s: any, done: (err: Error | null) => void) => done(null),
+		);
 		await expect((executor as any).buildDockerImage()).resolves.toBeUndefined();
 		expect(buildImage).toHaveBeenCalled();
 	});
