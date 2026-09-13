@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, expect, it } from "vitest";
 import { LlmResponse } from "../../models/llm-response";
 
 describe("LlmResponse", () => {
@@ -75,6 +75,32 @@ describe("LlmResponse", () => {
 			expect(resp.errorMessage).toBe("Unknown error.");
 			expect(resp.usageMetadata).toEqual({ totalTokens: 0 });
 			expect(resp.content).toBeUndefined();
+		});
+	});
+
+	describe("fromError", () => {
+		it("wraps Error instances with model context", () => {
+			const cause = new Error("rate limited");
+			const resp = LlmResponse.fromError(cause, {
+				errorCode: "RATE_LIMIT",
+				model: "gpt-4o",
+			});
+
+			expect(resp.errorCode).toBe("RATE_LIMIT");
+			expect(resp.errorMessage).toContain("gpt-4o");
+			expect(resp.errorMessage).toContain("rate limited");
+			expect(resp.content?.parts?.[0]?.text).toBe("Error: rate limited");
+			expect(resp.finishReason).toBe("STOP");
+			expect(resp.error).toBe(cause);
+		});
+
+		it("stringifies non-Error values and defaults codes", () => {
+			const resp = LlmResponse.fromError("boom");
+			expect(resp.errorCode).toBe("UNKNOWN_ERROR");
+			expect(resp.errorMessage).toContain("model unknown");
+			expect(resp.errorMessage).toContain("boom");
+			expect(resp.error).toBeInstanceOf(Error);
+			expect(resp.error?.message).toBe("boom");
 		});
 	});
 });
