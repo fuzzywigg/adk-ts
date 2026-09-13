@@ -114,4 +114,86 @@ describe("convertMcpToolToBaseTool", () => {
 			McpError,
 		);
 	});
+
+	it("reads metadata from mcpTool.metadata and _meta", async () => {
+		const withMetadata = await convertMcpToolToBaseTool({
+			mcpTool: {
+				name: "meta_tool",
+				description: "Has metadata",
+				inputSchema: { type: "object", properties: {} },
+				metadata: {
+					isLongRunning: true,
+					shouldRetryOnFailure: true,
+					maxRetryAttempts: 5,
+				},
+			} as any,
+			toolHandler: async () => ({ content: [] }),
+		});
+		expect(withMetadata.isLongRunning).toBe(true);
+		expect(withMetadata.shouldRetryOnFailure).toBe(true);
+		expect(withMetadata.maxRetryAttempts).toBe(5);
+
+		const withMeta = await convertMcpToolToBaseTool({
+			mcpTool: {
+				name: "underscore_meta",
+				description: "Has _meta",
+				inputSchema: { type: "object", properties: {} },
+				_meta: { isLongRunning: true },
+			} as any,
+			toolHandler: async () => ({ content: [] }),
+		});
+		expect(withMeta.isLongRunning).toBe(true);
+	});
+
+	it("prefers mcpTool.execute and clientService.callTool over toolHandler", async () => {
+		const execute = vi
+			.fn()
+			.mockResolvedValue({ content: [{ type: "text", text: "exec" }] });
+		const executed = await convertMcpToolToBaseTool({
+			mcpTool: {
+				name: "executable",
+				description: "Has execute",
+				inputSchema: { type: "object", properties: {} },
+				execute,
+			} as any,
+			toolHandler: vi.fn(),
+		});
+		await expect(executed.runAsync({ x: 1 }, makeContext())).resolves.toEqual({
+			content: [{ type: "text", text: "exec" }],
+		});
+		expect(execute).toHaveBeenCalledWith({ x: 1 });
+
+		const callTool = vi.fn().mockResolvedValue({ ok: true });
+		const reinitialize = vi.fn();
+		const withService = await convertMcpToolToBaseTool({
+			mcpTool: {
+				name: "service_tool",
+				description: "Uses client service",
+				inputSchema: { type: "object", properties: {} },
+			} as any,
+			client: { callTool, reinitialize } as any,
+		});
+		await expect(
+			withService.runAsync({ a: 2 }, makeContext()),
+		).resolves.toEqual({ ok: true });
+		expect(callTool).toHaveBeenCalledWith("service_tool", { a: 2 });
+	});
+
+	it("wraps non-McpError execution failures", async () => {
+		const tool = await convertMcpToolToBaseTool({
+			mcpTool: {
+				name: "broken",
+				description: "Throws",
+				inputSchema: { type: "object", properties: {} },
+			} as any,
+			toolHandler: async () => {
+				throw new Error("boom");
+			},
+		});
+
+		await expect(tool.runAsync({}, makeContext())).rejects.toMatchObject({
+			message: expect.stringContaining("Error executing MCP tool broken: boom"),
+			type: McpErrorType.TOOL_EXECUTION_ERROR,
+		});
+	});
 });

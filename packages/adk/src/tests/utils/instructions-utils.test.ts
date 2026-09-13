@@ -1,7 +1,7 @@
-import { describe, it, expect, beforeEach } from "vitest";
-import { injectSessionState } from "../../utils/instructions-utils";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { InvocationContext } from "../../agents/invocation-context";
 import { ReadonlyContext } from "../../agents/readonly-context";
+import { injectSessionState } from "../../utils/instructions-utils";
 
 describe("injectSessionState", () => {
 	let mockContext: InvocationContext;
@@ -166,6 +166,58 @@ describe("injectSessionState", () => {
 			await expect(
 				injectSessionState("Hello {userName}!", readonlyContext),
 			).rejects.toThrow("Context variable not found: `userName`.");
+		});
+	});
+
+	describe("artifact variables", () => {
+		it("injects artifact contents when the artifact service is available", async () => {
+			mockContext.artifactService = {
+				loadArtifact: vi.fn().mockResolvedValue("artifact-body"),
+			} as any;
+
+			const result = await injectSessionState(
+				"Data: {artifact.report}",
+				readonlyContext,
+			);
+
+			expect(result).toBe("Data: artifact-body");
+			expect(mockContext.artifactService.loadArtifact).toHaveBeenCalledWith({
+				appName: "test-app",
+				userId: "test-user",
+				sessionId: "test-session",
+				filename: "report",
+			});
+		});
+
+		it("throws when artifact service is missing for required artifact vars", async () => {
+			mockContext.artifactService = null;
+			await expect(
+				injectSessionState("Data: {artifact.report}", readonlyContext),
+			).rejects.toThrow("Artifact service is not initialized.");
+		});
+
+		it("returns empty string for optional missing artifacts", async () => {
+			mockContext.artifactService = {
+				loadArtifact: vi.fn().mockResolvedValue(undefined),
+			} as any;
+
+			const result = await injectSessionState(
+				"Data: {artifact.missing?}",
+				readonlyContext,
+			);
+			expect(result).toBe("Data: ");
+		});
+
+		it("supports prefixed state names like user: and app:", async () => {
+			mockContext.session.state = {
+				"user:name": "Pat",
+				"app:mode": "prod",
+			};
+			const result = await injectSessionState(
+				"{user:name} @ {app:mode}",
+				readonlyContext,
+			);
+			expect(result).toBe("Pat @ prod");
 		});
 	});
 

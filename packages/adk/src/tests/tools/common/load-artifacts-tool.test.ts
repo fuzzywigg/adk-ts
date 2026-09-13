@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
+import { LlmRequest } from "../../../models/llm-request";
 import { LoadArtifactsTool } from "../../../tools/common/load-artifacts-tool";
 import type { ToolContext } from "../../../tools/tool-context";
-import { LlmRequest } from "../../../models/llm-request";
 
 describe("LoadArtifactsTool", () => {
 	it("exposes load_artifacts metadata", () => {
@@ -58,5 +58,82 @@ describe("LoadArtifactsTool", () => {
 		await tool.processLlmRequest(context, llmRequest);
 
 		expect(llmRequest.config?.systemInstruction).toBeUndefined();
+	});
+
+	it("loads requested artifacts from a load_artifacts function response", async () => {
+		const tool = new LoadArtifactsTool();
+		const loadArtifact = vi
+			.fn()
+			.mockResolvedValueOnce({
+				inlineData: { mimeType: "text/plain", data: "YQ==" },
+			})
+			.mockResolvedValueOnce(undefined);
+		const context = {
+			actions: {},
+			listArtifacts: vi.fn().mockResolvedValue(["a.txt", "b.txt"]),
+			loadArtifact,
+		} as unknown as ToolContext;
+		const llmRequest = new LlmRequest();
+		llmRequest.contents = [
+			{
+				role: "user",
+				parts: [
+					{
+						functionResponse: {
+							name: "load_artifacts",
+							response: { artifact_names: ["a.txt", "b.txt"] },
+						},
+					} as any,
+				],
+			},
+		];
+
+		await tool.processLlmRequest(context, llmRequest);
+
+		expect(loadArtifact).toHaveBeenCalledWith("a.txt");
+		expect(loadArtifact).toHaveBeenCalledWith("b.txt");
+		expect(
+			llmRequest.contents.some((c) =>
+				c.parts?.some((p) => (p as any).text === "Artifact a.txt is:"),
+			),
+		).toBe(true);
+	});
+
+	it("swallows per-artifact load failures and listArtifacts errors", async () => {
+		const tool = new LoadArtifactsTool();
+		const errorSpy = vi
+			.spyOn(console, "error")
+			.mockImplementation(() => undefined);
+
+		const failingContext = {
+			actions: {},
+			listArtifacts: vi.fn().mockResolvedValue(["bad.bin"]),
+			loadArtifact: vi.fn().mockRejectedValue(new Error("read fail")),
+		} as unknown as ToolContext;
+		const llmRequest = new LlmRequest();
+		llmRequest.contents = [
+			{
+				role: "user",
+				parts: [
+					{
+						functionResponse: {
+							name: "load_artifacts",
+							response: { artifact_names: ["bad.bin"] },
+						},
+					} as any,
+				],
+			},
+		];
+		await tool.processLlmRequest(failingContext, llmRequest);
+		expect(errorSpy).toHaveBeenCalled();
+
+		const listFailContext = {
+			actions: {},
+			listArtifacts: vi.fn().mockRejectedValue(new Error("list fail")),
+		} as unknown as ToolContext;
+		await tool.processLlmRequest(listFailContext, new LlmRequest());
+		expect(errorSpy).toHaveBeenCalled();
+
+		errorSpy.mockRestore();
 	});
 });

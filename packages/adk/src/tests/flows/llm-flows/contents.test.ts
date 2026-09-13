@@ -136,6 +136,36 @@ describe("contents requestProcessor", () => {
 		]);
 	});
 
+	it("builds current-turn contents for other includeContents values", async () => {
+		const llmRequest = new LlmRequest();
+		const events = [
+			userEvent("older", { invocationId: "inv-1", timestamp: 1 }),
+			agentEvent("assistant", "older-reply", {
+				invocationId: "inv-1",
+				timestamp: 2,
+			}),
+			userEvent("latest", { invocationId: "inv-2", timestamp: 3 }),
+		];
+
+		await drain(
+			requestProcessor.runAsync(
+				ctx(
+					{
+						name: "assistant",
+						canonicalModel: "gpt-4o",
+						includeContents: "current_turn",
+					},
+					events,
+				),
+				llmRequest,
+			),
+		);
+
+		const texts = llmRequest.contents.map((c) => c.parts?.[0]?.text);
+		expect(texts).toContain("latest");
+		expect(texts).not.toContain("older");
+	});
+
 	it("skips empty and state-only events", async () => {
 		const llmRequest = new LlmRequest();
 		const emptyParts = new Event({
