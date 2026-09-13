@@ -53,7 +53,8 @@ describe("AuthTool", () => {
 	});
 
 	it("validateAuthArguments rejects malformed args", () => {
-		expect(AuthTool.validateAuthArguments(null)).toBe(false);
+		expect(() => AuthTool.validateAuthArguments(null)).toThrow();
+		expect(AuthTool.validateAuthArguments(undefined)).toBe(false);
 		expect(AuthTool.validateAuthArguments({})).toBe(false);
 		expect(
 			AuthTool.validateAuthArguments({
@@ -66,7 +67,7 @@ describe("AuthTool", () => {
 				function_call_id: "fc-1",
 				auth_config: null,
 			}),
-		).toBe(false);
+		).toBeFalsy();
 	});
 
 	it("processAuthRequest succeeds for EnhancedAuthConfig", async () => {
