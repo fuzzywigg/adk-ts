@@ -67,4 +67,24 @@ describe("InvocationContext", () => {
 		const grandchild = child.createChildContext(makeAgent("grand"));
 		expect(grandchild.branch).toBe("child.grand");
 	});
+
+	it("defaults endInvocation to false and preserves service accessors", () => {
+		const sessionService = {} as BaseSessionService;
+		const pluginManager = new PluginManager();
+		const context = new InvocationContext({
+			sessionService,
+			pluginManager,
+			agent: makeAgent("root"),
+			session: makeSession(),
+			branch: "root.branch",
+		});
+
+		expect(context.endInvocation).toBe(false);
+		expect(context.sessionService).toBe(sessionService);
+		expect(context.pluginManager).toBe(pluginManager);
+		expect(context.branch).toBe("root.branch");
+
+		context.endInvocation = true;
+		expect(context.endInvocation).toBe(true);
+	});
 });

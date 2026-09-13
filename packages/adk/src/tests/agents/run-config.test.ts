@@ -20,11 +20,18 @@ describe("RunConfig", () => {
 			streamingMode: StreamingMode.SSE,
 			maxLlmCalls: 10,
 			supportCFC: true,
+			saveInputBlobsAsArtifacts: true,
 		});
 
 		expect(config.streamingMode).toBe(StreamingMode.SSE);
 		expect(config.maxLlmCalls).toBe(10);
 		expect(config.supportCFC).toBe(true);
+		expect(config.saveInputBlobsAsArtifacts).toBe(true);
+	});
+
+	it("accepts BIDI streaming mode", () => {
+		const config = new RunConfig({ streamingMode: StreamingMode.BIDI });
+		expect(config.streamingMode).toBe(StreamingMode.BIDI);
 	});
 
 	it("throws when maxLlmCalls is Number.MAX_SAFE_INTEGER", () => {
