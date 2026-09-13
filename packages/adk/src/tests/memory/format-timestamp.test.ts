@@ -15,4 +15,13 @@ describe("formatTimestamp", () => {
 		const ms = Date.parse("2024-06-01T00:00:00.000Z");
 		expect(formatTimestamp(ms)).toBe("2024-06-01T00:00:00.000Z");
 	});
+
+	it("falls back to current time for unexpected types", () => {
+		const before = Date.now();
+		const formatted = formatTimestamp(null as unknown as string);
+		const after = Date.now();
+		const parsed = Date.parse(formatted);
+		expect(parsed).toBeGreaterThanOrEqual(before);
+		expect(parsed).toBeLessThanOrEqual(after);
+	});
 });

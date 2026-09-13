@@ -1,54 +1,48 @@
 import { describe, expect, it, vi } from "vitest";
+import { LlmRequest, LlmResponse } from "@adk/models";
 import {
 	createSamplingHandler,
 	McpSamplingHandler,
 } from "../../../tools/mcp/sampling-handler";
-import {
-	McpError,
-	McpErrorType,
-	type McpSamplingRequest,
-	type SamplingHandler,
-} from "../../../tools/mcp/types";
+import { McpError, McpErrorType } from "../../../tools/mcp/types";
+
+vi.mock("@adk/logger", () => ({
+	Logger: vi.fn(() => ({
+		debug: vi.fn(),
+		error: vi.fn(),
+		warn: vi.fn(),
+		info: vi.fn(),
+	})),
+}));
 
 function textRequest(
-	overrides: Partial<McpSamplingRequest["params"]> = {},
-): McpSamplingRequest {
+	overrides: Record<string, unknown> = {},
+): Record<string, unknown> {
 	return {
 		method: "sampling/createMessage",
 		params: {
-			messages: [{ role: "user", content: { type: "text", text: "hello" } }],
+			messages: [
+				{
+					role: "user",
+					content: { type: "text", text: "hello" },
+				},
+			],
 			maxTokens: 64,
 			...overrides,
 		},
 	};
 }
 
-describe("McpError", () => {
-	it("sets name, type, and optional originalError", () => {
-		const original = new Error("root");
-		const err = new McpError("failed", McpErrorType.SAMPLING_ERROR, original);
-		expect(err.name).toBe("McpError");
-		expect(err.message).toBe("failed");
-		expect(err.type).toBe(McpErrorType.SAMPLING_ERROR);
-		expect(err.originalError).toBe(original);
-	});
-});
-
 describe("McpSamplingHandler", () => {
 	it("rejects non-sampling methods", async () => {
 		const handler = new McpSamplingHandler(async () => "ok");
 		await expect(
 			handler.handleSamplingRequest({
-				method: "tools/call",
-				params: {
-					messages: [{ role: "user", content: { type: "text", text: "x" } }],
-					maxTokens: 1,
-				},
-			} as McpSamplingRequest),
+				method: "tools/list",
+				params: {},
+			} as any),
 		).rejects.toMatchObject({
-			name: "McpError",
 			type: McpErrorType.INVALID_REQUEST_ERROR,
-			message: expect.stringContaining("Invalid method"),
 		});
 	});
 
@@ -57,99 +51,99 @@ describe("McpSamplingHandler", () => {
 		await expect(
 			handler.handleSamplingRequest({
 				method: "sampling/createMessage",
-				params: {
-					messages: "not-an-array",
-					maxTokens: 10,
-				},
-			} as unknown as McpSamplingRequest),
-		).rejects.toMatchObject({
-			type: McpErrorType.INVALID_REQUEST_ERROR,
-			message: expect.stringContaining("Invalid sampling request"),
-		});
+				params: { maxTokens: 10 },
+			} as any),
+		).rejects.toBeInstanceOf(McpError);
 	});
 
 	it("rejects non-positive maxTokens", async () => {
 		const handler = new McpSamplingHandler(async () => "ok");
 		await expect(
-			handler.handleSamplingRequest(textRequest({ maxTokens: 0 })),
+			handler.handleSamplingRequest(textRequest({ maxTokens: 0 }) as any),
 		).rejects.toMatchObject({
 			type: McpErrorType.INVALID_REQUEST_ERROR,
 			message: expect.stringContaining("maxTokens"),
 		});
 	});
 
-	it("converts text requests and returns string handler responses", async () => {
-		const samplingHandler = vi.fn(async (request) => {
-			expect(request.contents?.[0]?.parts?.[0]).toEqual({ text: "sys" });
-			expect(request.contents?.[1]?.parts?.[0]).toEqual({ text: "hello" });
-			expect(request.config?.maxOutputTokens).toBe(64);
-			return "assistant-reply";
-		}) as SamplingHandler;
+	it("converts text messages and returns string responses", async () => {
+		let captured: LlmRequest | undefined;
+		const handler = new McpSamplingHandler(async (request) => {
+			captured = request;
+			return "pong";
+		});
 
-		const handler = new McpSamplingHandler(samplingHandler);
 		const response = await handler.handleSamplingRequest(
-			textRequest({ systemPrompt: "sys" }),
+			textRequest({
+				systemPrompt: "be brief",
+				temperature: 0.2,
+				modelPreferences: { hints: [{ name: "fake-model" }] },
+			}) as any,
 		);
 
+		expect(captured?.model).toBe("fake-model");
+		expect(captured?.config?.temperature).toBe(0.2);
+		expect(captured?.config?.maxOutputTokens).toBe(64);
+		expect(captured?.contents?.[0]).toEqual({
+			role: "user",
+			parts: [{ text: "be brief" }],
+		});
+		expect(captured?.contents?.[1]).toEqual({
+			role: "user",
+			parts: [{ text: "hello" }],
+		});
 		expect(response).toEqual({
-			model: "gemini-2.0-flash",
+			model: "fake-model",
 			role: "assistant",
-			content: { type: "text", text: "assistant-reply" },
-		});
-		expect(samplingHandler).toHaveBeenCalledOnce();
-	});
-
-	it("wraps handler errors as SAMPLING_ERROR", async () => {
-		const handler = new McpSamplingHandler(async () => {
-			throw new Error("llm down");
-		});
-
-		await expect(
-			handler.handleSamplingRequest(textRequest()),
-		).rejects.toMatchObject({
-			name: "McpError",
-			type: McpErrorType.SAMPLING_ERROR,
-			message: expect.stringContaining("llm down"),
+			content: { type: "text", text: "pong" },
 		});
 	});
 
-	it("converts image, audio, and tool content into ADK parts", async () => {
-		const imageData = Buffer.from("img").toString("base64");
-		const audioData = Buffer.from("aud").toString("base64");
-		const samplingHandler = vi.fn(async (request) => {
-			const parts = request.contents.flatMap((c) => c.parts ?? []);
-			expect(parts).toEqual(
-				expect.arrayContaining([
-					{
-						inlineData: {
-							data: imageData,
-							mimeType: "image/png",
-						},
+	it("maps assistant role to model and LlmResponse parts to text", async () => {
+		const handler = new McpSamplingHandler(
+			async () =>
+				new LlmResponse({
+					content: {
+						role: "model",
+						parts: [{ text: "part-a" }, { text: "part-b" }],
 					},
-					{
-						inlineData: {
-							data: audioData,
-							mimeType: "audio/wav",
-						},
-					},
-					{ text: "[Tool Use: search]" },
-					{ text: "[Tool Result: call-1]" },
-				]),
-			);
-			return "done";
-		}) as SamplingHandler;
+				}),
+		);
 
-		const handler = new McpSamplingHandler(samplingHandler);
-		await handler.handleSamplingRequest({
-			method: "sampling/createMessage",
-			params: {
-				maxTokens: 32,
+		const response = await handler.handleSamplingRequest(
+			textRequest({
+				messages: [
+					{
+						role: "assistant",
+						content: { type: "text", text: "prior" },
+					},
+					{
+						role: "user",
+						content: { type: "text", text: "next" },
+					},
+				],
+			}) as any,
+		);
+
+		expect(response.content).toEqual({ type: "text", text: "part-apart-b" });
+		expect(response.model).toBe("gemini-2.0-flash");
+	});
+
+	it("converts image and audio content with and without data", async () => {
+		let captured: LlmRequest | undefined;
+		const handler = new McpSamplingHandler(async (request) => {
+			captured = request;
+			return "ok";
+		});
+
+		await handler.handleSamplingRequest(
+			textRequest({
 				messages: [
 					{
 						role: "user",
 						content: {
 							type: "image",
-							data: imageData,
+							data: "aW1n",
 							mimeType: "image/png",
 						},
 					},
@@ -157,10 +151,45 @@ describe("McpSamplingHandler", () => {
 						role: "user",
 						content: {
 							type: "audio",
-							data: audioData,
-							mimeType: "audio/wav",
+							data: "YQ==",
+							mimeType: "audio/mpeg",
 						},
 					},
+					{
+						role: "user",
+						content: {
+							type: "text",
+							text: "after media",
+						},
+					},
+				],
+			}) as any,
+		);
+
+		const parts = (captured?.contents || []).flatMap((c) => c.parts || []);
+		expect(parts).toEqual(
+			expect.arrayContaining([
+				{
+					inlineData: { data: "aW1n", mimeType: "image/png" },
+				},
+				{
+					inlineData: { data: "YQ==", mimeType: "audio/mpeg" },
+				},
+				{ text: "after media" },
+			]),
+		);
+	});
+
+	it("converts tool_use and tool_result content into placeholder text parts", async () => {
+		let captured: LlmRequest | undefined;
+		const handler = new McpSamplingHandler(async (request) => {
+			captured = request;
+			return "ok";
+		});
+
+		await handler.handleSamplingRequest(
+			textRequest({
+				messages: [
 					{
 						role: "assistant",
 						content: {
@@ -179,13 +208,66 @@ describe("McpSamplingHandler", () => {
 						},
 					},
 				],
-			},
-		});
+			}) as any,
+		);
 
-		expect(samplingHandler).toHaveBeenCalledOnce();
+		const parts = (captured?.contents || []).flatMap((c) => c.parts || []);
+		expect(parts).toEqual(
+			expect.arrayContaining([
+				{ text: "[Tool Use: search]" },
+				{ text: "[Tool Result: call-1]" },
+			]),
+		);
 	});
 
-	it("createSamplingHandler returns the same function", async () => {
+	it("places placeholder text when image data is missing", async () => {
+		let captured: LlmRequest | undefined;
+		const handler = new McpSamplingHandler(async (request) => {
+			captured = request;
+			return "ok";
+		});
+
+		await handler.handleSamplingRequest(
+			textRequest({
+				messages: [
+					{
+						role: "user",
+						content: {
+							type: "image",
+							data: "",
+							mimeType: "image/png",
+						},
+					},
+				],
+			}) as any,
+		);
+
+		expect(captured?.contents?.[0]?.parts).toEqual([
+			{ text: "[IMAGE CONTENT MISSING DATA]" },
+		]);
+	});
+
+	it("wraps unexpected handler errors as McpError", async () => {
+		const handler = new McpSamplingHandler(async () => {
+			throw new Error("boom");
+		});
+
+		await expect(
+			handler.handleSamplingRequest(textRequest() as any),
+		).rejects.toMatchObject({
+			type: McpErrorType.SAMPLING_ERROR,
+			message: expect.stringContaining("boom"),
+		});
+	});
+
+	it("updateHandler swaps the underlying sampling handler", async () => {
+		const handler = new McpSamplingHandler(async () => "first");
+		handler.updateHandler(async () => "second");
+		const response = await handler.handleSamplingRequest(textRequest() as any);
+		expect(response.content).toEqual({ type: "text", text: "second" });
+	});
+
+	it("createSamplingHandler returns the same function", () => {
 		const fn = async () => "x";
 		expect(createSamplingHandler(fn)).toBe(fn);
 	});

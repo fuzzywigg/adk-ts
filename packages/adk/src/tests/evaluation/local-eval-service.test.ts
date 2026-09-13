@@ -37,7 +37,7 @@ describe("LocalEvalService", () => {
 		};
 
 		const batches: {
-			invocationId: string;
+			invocationId?: string;
 			finalResponse?: { parts?: { text?: string }[] };
 		}[][] = [];
 		for await (const batch of service.performInference({
@@ -148,5 +148,40 @@ describe("LocalEvalService", () => {
 			evalResult.evalCaseResults[0].evalMetricResultPerInvocation[0]
 				.evalMetricResults[0].score,
 		).toBe(1);
+	});
+
+	it("logs session input when runner has no session helpers", async () => {
+		const service = new LocalEvalService({
+			name: "ask-agent",
+			ask: async () => "ok",
+		} as any);
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+
+		for await (const _ of service.performInference({
+			evalSetId: "set-1",
+			evalCases: [
+				makeEvalSet({
+					evalId: "with-session",
+					sessionInput: {
+						appName: "app",
+						userId: "user",
+						state: { k: 1 },
+					},
+					conversation: [
+						{
+							invocationId: "x",
+							userContent: { role: "user", parts: [{ text: "hi" }] },
+							creationTimestamp: 1,
+						},
+					],
+				}),
+			],
+		})) {
+			// drain
+		}
+
+		expect(logSpy).toHaveBeenCalled();
+		logSpy.mockRestore();
 	});
 });

@@ -6,6 +6,8 @@ import {
 	type EvaluatorConstructor,
 	MetricEvaluatorRegistry,
 } from "../../evaluation/metric-evaluator-registry";
+import { FinalResponseMatchV2Evaluator } from "../../evaluation/final-response-match-v2";
+import { ResponseEvaluator } from "../../evaluation/response-evaluator";
 import { TrajectoryEvaluator } from "../../evaluation/trajectory-evaluator";
 
 class StubEvaluator {
@@ -84,5 +86,23 @@ describe("MetricEvaluatorRegistry", () => {
 			threshold: 1,
 		});
 		expect(evaluator).toBeInstanceOf(TrajectoryEvaluator);
+	});
+
+	it("instantiates ResponseEvaluator and FinalResponseMatchV2 from defaults", () => {
+		const response = DEFAULT_METRIC_EVALUATOR_REGISTRY.getEvaluator({
+			metricName: PrebuiltMetrics.RESPONSE_MATCH_SCORE,
+			threshold: 0.8,
+		});
+		expect(response).toBeInstanceOf(ResponseEvaluator);
+
+		const matchV2 = DEFAULT_METRIC_EVALUATOR_REGISTRY.getEvaluator({
+			metricName: PrebuiltMetrics.FINAL_RESPONSE_MATCH_V2,
+			threshold: 0.8,
+			judgeModelOptions: {
+				judgeModel: "fake-judge",
+				numSamples: 1,
+			},
+		});
+		expect(matchV2).toBeInstanceOf(FinalResponseMatchV2Evaluator);
 	});
 });

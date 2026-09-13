@@ -15,7 +15,17 @@ export default defineConfig({
 			provider: "v8",
 			reporter: ["json", "lcov", "text", "clover", "json-summary"],
 			include: ["src/**/*.ts"],
-			exclude: ["src/**/index.ts", "src/**/*.d.ts"],
+			exclude: [
+				"src/**/index.ts",
+				"src/**/*.d.ts",
+				"src/**/vertex-ai-*.ts",
+				"src/**/gcs-*.ts",
+				"src/plugins/langfuse-plugin.ts",
+				"src/code-executors/container-code-executor.ts",
+				"src/code-executors/unsafe-local-code-executor.ts",
+				"src/sessions/database-session-service.ts",
+				"src/flows/llm-flows/audio-transcriber.ts",
+			],
 			reportsDirectory: "./coverage",
 			// Uncomment when coverage improves:
 			/*

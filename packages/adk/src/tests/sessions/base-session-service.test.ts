@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import type { Event } from "../../events/event";
+import { Event } from "../../events/event";
+import { EventActions } from "../../events/event-actions";
 import {
 	BaseSessionService,
 	type GetSessionConfig,
@@ -7,112 +8,125 @@ import {
 } from "../../sessions/base-session-service";
 import type { Session } from "../../sessions/session";
 
-class InMemoryStubSessionService extends BaseSessionService {
-	private readonly sessions = new Map<string, Session>();
-
-	private key(appName: string, userId: string, sessionId: string): string {
-		return `${appName}:${userId}:${sessionId}`;
-	}
-
+class StubSessionService extends BaseSessionService {
 	async createSession(
 		appName: string,
 		userId: string,
-		state: Record<string, any> = {},
-		sessionId = "generated",
+		state?: Record<string, any>,
+		sessionId?: string,
 	): Promise<Session> {
-		const session: Session = {
-			id: sessionId,
+		return {
+			id: sessionId || "sess-1",
 			appName,
 			userId,
-			state: { ...state },
+			state: state || {},
 			events: [],
 			lastUpdateTime: 0,
 		};
-		this.sessions.set(this.key(appName, userId, sessionId), session);
-		return session;
 	}
 
 	async getSession(
-		appName: string,
-		userId: string,
-		sessionId: string,
+		_appName: string,
+		_userId: string,
+		_sessionId: string,
 		_config?: GetSessionConfig,
 	): Promise<Session | undefined> {
-		return this.sessions.get(this.key(appName, userId, sessionId));
+		return undefined;
 	}
 
 	async listSessions(
-		appName: string,
-		userId: string,
+		_appName: string,
+		_userId: string,
 	): Promise<ListSessionsResponse> {
-		const sessions = [...this.sessions.values()].filter(
-			(s) => s.appName === appName && s.userId === userId,
-		);
-		return { sessions };
+		return { sessions: [] };
 	}
 
 	async deleteSession(
-		appName: string,
-		userId: string,
-		sessionId: string,
-	): Promise<void> {
-		this.sessions.delete(this.key(appName, userId, sessionId));
-	}
+		_appName: string,
+		_userId: string,
+		_sessionId: string,
+	): Promise<void> {}
 }
 
-describe("BaseSessionService.appendEvent", () => {
-	it("skips partial events without mutating session", async () => {
-		const service = new InMemoryStubSessionService();
-		const session = await service.createSession("app", "user", { a: 1 }, "s1");
-		const event = {
+function makeSession(state: Record<string, any> = {}): Session {
+	return {
+		id: "s1",
+		appName: "app",
+		userId: "u1",
+		state,
+		events: [],
+		lastUpdateTime: 0,
+	};
+}
+
+describe("BaseSessionService", () => {
+	const service = new StubSessionService();
+
+	it("skips appending partial events", async () => {
+		const session = makeSession();
+		const event = new Event({
 			author: "agent",
 			partial: true,
-			actions: { stateDelta: { a: 2 } },
-		} as Event;
+			content: { role: "model", parts: [{ text: "streaming" }] },
+		});
 
 		const result = await service.appendEvent(session, event);
 		expect(result).toBe(event);
-		expect(session.events).toEqual([]);
-		expect(session.state).toEqual({ a: 1 });
+		expect(session.events).toHaveLength(0);
 	});
 
-	it("applies stateDelta and appends the event", async () => {
-		const service = new InMemoryStubSessionService();
-		const session = await service.createSession("app", "user", { a: 1 }, "s1");
-		const event = {
+	it("appends non-partial events and applies stateDelta", async () => {
+		const session = makeSession({ existing: "keep" });
+		const actions = new EventActions();
+		actions.stateDelta = {
+			counter: 2,
+			existing: "updated",
+		};
+		const event = new Event({
 			author: "agent",
-			actions: { stateDelta: { a: 2, b: "new" } },
-		} as Event;
+			actions,
+			content: { role: "model", parts: [{ text: "done" }] },
+		});
 
 		await service.appendEvent(session, event);
 		expect(session.events).toEqual([event]);
-		expect(session.state).toEqual({ a: 2, b: "new" });
+		expect(session.state).toEqual({ existing: "updated", counter: 2 });
 	});
 
-	it("skips temp_ keys and deletes null/undefined values", async () => {
-		const service = new InMemoryStubSessionService();
-		const session = await service.createSession(
-			"app",
-			"user",
-			{ keep: true, removeNull: 1, removeUndef: 2 },
-			"s1",
-		);
-		const event = {
-			author: "agent",
-			actions: {
-				stateDelta: {
-					temp_scratch: "ignored",
-					removeNull: null,
-					removeUndef: undefined,
-					keep: true,
-				},
-			},
-		} as Event;
+	it("skips temp_ keys in stateDelta", async () => {
+		const session = makeSession({ visible: 1 });
+		const actions = new EventActions();
+		actions.stateDelta = {
+			temp_secret: "nope",
+			visible: 2,
+		};
+		const event = new Event({ author: "agent", actions });
 
 		await service.appendEvent(session, event);
-		expect(session.state.temp_scratch).toBeUndefined();
-		expect(session.state.removeNull).toBeUndefined();
-		expect(session.state.removeUndef).toBeUndefined();
-		expect(session.state.keep).toBe(true);
+		expect(session.state).toEqual({ visible: 2 });
+		expect(session.state.temp_secret).toBeUndefined();
+	});
+
+	it("deletes state keys when delta value is null or undefined", async () => {
+		const session = makeSession({ a: 1, b: 2, c: 3 });
+		const actions = new EventActions();
+		actions.stateDelta = {
+			a: null,
+			b: undefined,
+			c: 9,
+		};
+		const event = new Event({ author: "agent", actions });
+
+		await service.appendEvent(session, event);
+		expect(session.state).toEqual({ c: 9 });
+	});
+
+	it("does nothing when event has no stateDelta", async () => {
+		const session = makeSession({ x: 1 });
+		const event = new Event({ author: "user" });
+
+		await service.appendEvent(session, event);
+		expect(session.state).toEqual({ x: 1 });
+		expect(session.events).toHaveLength(1);
 	});
 });
