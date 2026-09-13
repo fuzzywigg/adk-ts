@@ -34,13 +34,13 @@ export class ConsoleManager {
 	private verbose: boolean;
 	private outputAllowed = false;
 	private isDestroyed = false;
+	private readonly onProcessExit = () => this.restore();
 
 	constructor(verbose: boolean) {
 		this.verbose = verbose;
-		// Ensure cleanup on process exit
-		process.on("exit", () => this.restore());
-		process.on("SIGINT", () => this.restore());
-		process.on("SIGTERM", () => this.restore());
+		process.on("exit", this.onProcessExit);
+		process.on("SIGINT", this.onProcessExit);
+		process.on("SIGTERM", this.onProcessExit);
 	}
 
 	hookConsole(): void {
@@ -214,6 +214,10 @@ export class ConsoleManager {
 	restore(): void {
 		if (this.isDestroyed) return;
 		this.isDestroyed = true;
+
+		process.off("exit", this.onProcessExit);
+		process.off("SIGINT", this.onProcessExit);
+		process.off("SIGTERM", this.onProcessExit);
 
 		try {
 			if (this.originals) {

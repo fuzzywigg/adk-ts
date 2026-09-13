@@ -73,9 +73,9 @@ function makeSpawnChild(options: {
 }
 
 describe("NewCommand", () => {
-	let exitSpy: ReturnType<typeof vi.spyOn>;
-	let clearSpy: ReturnType<typeof vi.spyOn>;
-	let logSpy: ReturnType<typeof vi.spyOn>;
+	let exitSpy: any;
+	let clearSpy: any;
+	let logSpy: any;
 	const originalExit = process.exit;
 
 	beforeEach(() => {
@@ -87,8 +87,8 @@ describe("NewCommand", () => {
 		exitSpy = vi.spyOn(process, "exit").mockImplementation((() => {
 			throw new Error("process.exit");
 		}) as never);
-		clearSpy = vi.spyOn(console, "clear").mockImplementation(() => {});
-		logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+		clearSpy = vi.spyOn(console, "clear").mockImplementation(() => undefined);
+		logSpy = vi.spyOn(console, "log").mockImplementation(() => undefined);
 
 		spawnMock.mockImplementation((command: string, args: string[]) => {
 			if (Array.isArray(args) && args[0] === "--version") {
