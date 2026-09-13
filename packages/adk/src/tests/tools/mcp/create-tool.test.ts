@@ -196,4 +196,47 @@ describe("convertMcpToolToBaseTool", () => {
 			type: McpErrorType.TOOL_EXECUTION_ERROR,
 		});
 	});
+
+	it("defaults name/description and retries client.callTool on closed errors", async () => {
+		let attempts = 0;
+		const callTool = vi.fn(async () => {
+			attempts++;
+			if (attempts === 1) {
+				throw new Error("socket hang up");
+			}
+			return { content: [{ type: "text", text: "retry-ok" }] };
+		});
+		const tool = await convertMcpToolToBaseTool({
+			mcpTool: {
+				inputSchema: { type: "object", properties: {} },
+				_meta: { shouldRetryOnFailure: true, maxRetryAttempts: 2 },
+			} as any,
+			client: { callTool } as any,
+		});
+
+		expect(tool.name).toMatch(/^mcp_/);
+		expect(tool.description).toBe("MCP Tool");
+		await expect(tool.runAsync({ q: 1 }, makeContext())).resolves.toEqual({
+			content: [{ type: "text", text: "retry-ok" }],
+		});
+		expect(callTool).toHaveBeenCalledTimes(2);
+	});
+
+	it("rethrows McpError from execute without wrapping", async () => {
+		const tool = await convertMcpToolToBaseTool({
+			mcpTool: {
+				name: "typed",
+				description: "typed fail",
+				inputSchema: { type: "object", properties: {} },
+				execute: async () => {
+					throw new McpError("typed", McpErrorType.INVALID_SCHEMA_ERROR);
+				},
+			} as any,
+		});
+
+		await expect(tool.runAsync({}, makeContext())).rejects.toMatchObject({
+			type: McpErrorType.INVALID_SCHEMA_ERROR,
+			message: "typed",
+		});
+	});
 });

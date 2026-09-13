@@ -2,21 +2,36 @@ import { describe, expect, it, vi } from "vitest";
 import {
 	McpAbi,
 	McpAtp,
+	McpBamm,
 	McpCoinGecko,
 	McpCoinGeckoPro,
 	McpDiscord,
 	McpFilesystem,
+	McpFraxlend,
 	McpGeneric,
 	McpIqWiki,
 	McpMemory,
 	McpNearAgent,
+	McpNearIntents,
+	McpOdos,
+	McpPolymarket,
 	McpTelegram,
+	McpUpbit,
 	type McpToolset,
 } from "../../../tools/mcp";
 import type { McpConfig, SamplingHandler } from "../../../tools/mcp/types";
 
 function getConfig(toolset: McpToolset): McpConfig {
 	return (toolset as unknown as { config: McpConfig }).config;
+}
+
+function expectStdioPackage(config: McpConfig, packageName: string) {
+	expect(config.transport.mode).toBe("stdio");
+	if (config.transport.mode !== "stdio") {
+		throw new Error("expected stdio transport");
+	}
+	expect(config.transport.command).toBe("npx");
+	expect(config.transport.args).toEqual(["-y", packageName]);
 }
 
 describe("MCP package server factories", () => {
@@ -27,10 +42,8 @@ describe("MCP package server factories", () => {
 		expect(config.description).toBe("Client for ABI MCP Client");
 		expect(config.debug).toBe(false);
 		expect(config.retryOptions).toEqual({ maxRetries: 2, initialDelay: 200 });
-		expect(config.transport.mode).toBe("stdio");
+		expectStdioPackage(config, "@iqai/mcp-abi");
 		if (config.transport.mode === "stdio") {
-			expect(config.transport.command).toBe("npx");
-			expect(config.transport.args).toEqual(["-y", "@iqai/mcp-abi"]);
 			expect(config.transport.env?.PATH).toBe(process.env.PATH || "");
 		}
 	});
@@ -73,18 +86,68 @@ describe("MCP package server factories", () => {
 		expect(config.description).toBe("custom near");
 		expect(config.retryOptions).toEqual({ maxRetries: 5, initialDelay: 10 });
 		expect(config.samplingHandler).toBe(samplingHandler);
+		expectStdioPackage(config, "@iqai/mcp-near-agent");
 		if (config.transport.mode === "stdio") {
-			expect(config.transport.args).toEqual(["-y", "@iqai/mcp-near-agent"]);
 			expect(config.transport.env?.ACCOUNT_ID).toBe("alice.near");
 		}
 	});
 
-	it("covers additional package factories", () => {
-		expect(getConfig(McpIqWiki()).name).toBe("IQWiki MCP Client");
-		expect(getConfig(McpTelegram()).name).toBe("Telegram MCP Client");
-		expect(getConfig(McpDiscord()).name).toBe("Discord MCP Client");
-		expect(getConfig(McpFilesystem()).transport.mode).toBe("stdio");
-		expect(getConfig(McpMemory()).name).toBe("Memory MCP Client");
+	it("covers remaining IQAI and third-party package factories", () => {
+		const cases: Array<[string, McpToolset, string]> = [
+			["IQWiki", McpIqWiki(), "@iqai/mcp-iqwiki"],
+			["Telegram", McpTelegram(), "@iqai/mcp-telegram"],
+			["Discord", McpDiscord(), "@iqai/mcp-discord"],
+			["BAMM", McpBamm(), "@iqai/mcp-bamm"],
+			["Fraxlend", McpFraxlend(), "@iqai/mcp-fraxlend"],
+			["Near Intents", McpNearIntents(), "@iqai/mcp-near-intents"],
+			["ODOS", McpOdos(), "@iqai/mcp-odos"],
+			["Upbit", McpUpbit(), "@iqai/mcp-upbit"],
+			["Polymarket", McpPolymarket(), "@iqai/mcp-polymarket"],
+			[
+				"Filesystem",
+				McpFilesystem(),
+				"@modelcontextprotocol/server-filesystem",
+			],
+			["Memory", McpMemory(), "@modelcontextprotocol/server-memory"],
+		];
+
+		for (const [, toolset, pkg] of cases) {
+			const config = getConfig(toolset);
+			expect(config.name).toContain("MCP Client");
+			expectStdioPackage(config, pkg);
+			expect(config.debug).toBe(false);
+			expect(config.retryOptions).toEqual({
+				maxRetries: 2,
+				initialDelay: 200,
+			});
+		}
+	});
+
+	it("passes custom env through Bamm and Polymarket factories", () => {
+		const bamm = getConfig(
+			McpBamm({ env: { WALLET_PRIVATE_KEY: "0xabc", PATH: "/bamm" } }),
+		);
+		if (bamm.transport.mode !== "stdio") {
+			throw new Error("expected stdio");
+		}
+		expect(bamm.transport.env).toEqual({
+			WALLET_PRIVATE_KEY: "0xabc",
+			PATH: "/bamm",
+		});
+
+		const poly = getConfig(
+			McpPolymarket({
+				description: "poly custom",
+				env: { FUNDER_ADDRESS: "0x1", POLYMARKET_PRIVATE_KEY: 99 },
+			}),
+		);
+		expect(poly.description).toBe("poly custom");
+		if (poly.transport.mode !== "stdio") {
+			throw new Error("expected stdio");
+		}
+		expect(poly.transport.env?.FUNDER_ADDRESS).toBe("0x1");
+		expect(poly.transport.env?.POLYMARKET_PRIVATE_KEY).toBe("99");
+		expect(poly.transport.env?.PATH).toBe(process.env.PATH || "");
 	});
 });
 
@@ -123,6 +186,34 @@ describe("MCP remote URL factories", () => {
 			throw new Error("expected stdio transport");
 		}
 		expect(config.transport.args).toEqual(["-y", "not-a-url"]);
+	});
+
+	it("treats ftp and malformed URLs as package names, http as remote", () => {
+		const ftp = getConfig(McpGeneric("ftp://files.example/mcp"));
+		if (ftp.transport.mode !== "stdio") {
+			throw new Error("expected stdio");
+		}
+		expect(ftp.transport.args).toEqual(["-y", "ftp://files.example/mcp"]);
+
+		const bad = getConfig(McpGeneric("://not-a-valid-url"));
+		if (bad.transport.mode !== "stdio") {
+			throw new Error("expected stdio");
+		}
+		expect(bad.transport.args).toEqual(["-y", "://not-a-valid-url"]);
+
+		const http = getConfig(
+			McpGeneric("http://localhost:3100/mcp", { debug: true }, "Local MCP"),
+		);
+		expect(http.name).toBe("Local MCP");
+		expect(http.debug).toBe(true);
+		if (http.transport.mode !== "stdio") {
+			throw new Error("expected stdio");
+		}
+		expect(http.transport.args).toEqual([
+			"-y",
+			"mcp-remote@latest",
+			"http://localhost:3100/mcp",
+		]);
 	});
 });
 
