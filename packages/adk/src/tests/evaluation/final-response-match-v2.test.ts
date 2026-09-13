@@ -158,4 +158,147 @@ describe("FinalResponseMatchV2Evaluator", () => {
 		expect(result.overallScore).toBeCloseTo(2 / 3);
 		expect(result.overallEvalStatus).toBe(EvalStatus.PASSED);
 	});
+
+	it("defaults numSamples to 5 when judgeModelOptions omit it", async () => {
+		const sampleJudge = vi.fn().mockResolvedValue([Label.VALID]);
+		const evaluator = new FinalResponseMatchV2Evaluator(
+			{
+				metricName: PrebuiltMetrics.FINAL_RESPONSE_MATCH_V2,
+				threshold: 0.5,
+			},
+			{ sampleJudge } as unknown as LlmAsJudge,
+		);
+
+		await evaluator.evaluateInvocations(
+			[invocation("actual")],
+			[invocation("golden")],
+		);
+
+		expect(sampleJudge.mock.calls[0][1]).toBe(5);
+	});
+
+	it("substitutes prompt, response, and golden_response into the judge prompt", async () => {
+		const sampleJudge = vi.fn().mockResolvedValue([Label.VALID]);
+		const evaluator = new FinalResponseMatchV2Evaluator(
+			{
+				metricName: PrebuiltMetrics.FINAL_RESPONSE_MATCH_V2,
+				threshold: 0.5,
+			},
+			{ sampleJudge } as unknown as LlmAsJudge,
+		);
+
+		await evaluator.evaluateInvocations(
+			[invocation("agent-says-this")],
+			[
+				{
+					userContent: { parts: [{ text: "user-asks-this" }] },
+					creationTimestamp: 1,
+					finalResponse: {
+						role: "model",
+						parts: [{ text: "golden-says-this" }],
+					},
+				},
+			],
+		);
+
+		const prompt = sampleJudge.mock.calls[0][0] as string;
+		expect(prompt).toContain("user-asks-this");
+		expect(prompt).toContain("agent-says-this");
+		expect(prompt).toContain("golden-says-this");
+		expect(prompt).toContain("is_the_agent_response_valid");
+	});
+
+	it("parseCritique maps valid/invalid variants and filters NOT_FOUND", async () => {
+		const sampleJudge = vi.fn(
+			async (
+				_prompt: string,
+				_numSamples: number,
+				critiqueParser: (response: string) => Label,
+			) => {
+				expect(
+					critiqueParser(
+						'{"reasoning":"ok","is_the_agent_response_valid": "valid"}',
+					),
+				).toBe(Label.VALID);
+				expect(
+					critiqueParser(
+						'{"is_the_agent_response_valid": ["Valid"], "reasoning": "x"}',
+					),
+				).toBe(Label.VALID);
+				expect(
+					critiqueParser('"is_the_agent_response_valid":\n  "INVALID"\n}'),
+				).toBe(Label.INVALID);
+				expect(
+					critiqueParser(
+						'{"is_the_agent_response_valid": ["invalid"], "reasoning": "no"}',
+					),
+				).toBe(Label.INVALID);
+				expect(critiqueParser("not json at all")).toBe(Label.NOT_FOUND);
+				expect(critiqueParser('{"reasoning": "x"}')).toBe(Label.NOT_FOUND);
+				return [Label.VALID, Label.INVALID];
+			},
+		);
+
+		const evaluator = new FinalResponseMatchV2Evaluator(
+			{
+				metricName: PrebuiltMetrics.FINAL_RESPONSE_MATCH_V2,
+				threshold: 0.5,
+			},
+			{ sampleJudge } as unknown as LlmAsJudge,
+		);
+
+		const result = await evaluator.evaluateInvocations(
+			[invocation("a")],
+			[invocation("b")],
+		);
+		expect(result.overallScore).toBe(0.5);
+		expect(sampleJudge).toHaveBeenCalledTimes(1);
+	});
+
+	it("averages overall score across multiple invocations", async () => {
+		const sampleJudge = vi
+			.fn()
+			.mockResolvedValueOnce([Label.VALID, Label.VALID])
+			.mockResolvedValueOnce([Label.INVALID, Label.INVALID]);
+		const evaluator = new FinalResponseMatchV2Evaluator(
+			{
+				metricName: PrebuiltMetrics.FINAL_RESPONSE_MATCH_V2,
+				threshold: 0.5,
+			},
+			{ sampleJudge } as unknown as LlmAsJudge,
+		);
+
+		const result = await evaluator.evaluateInvocations(
+			[invocation("a1"), invocation("a2")],
+			[invocation("g1"), invocation("g2")],
+		);
+
+		expect(result.overallScore).toBe(0.5);
+		expect(result.perInvocationResults).toHaveLength(2);
+		expect(result.perInvocationResults[0].score).toBe(1);
+		expect(result.perInvocationResults[1].score).toBe(0);
+		expect(sampleJudge).toHaveBeenCalledTimes(2);
+	});
+
+	it("still judges when final responses are missing (empty strings)", async () => {
+		const sampleJudge = vi.fn().mockResolvedValue([Label.VALID]);
+		const evaluator = new FinalResponseMatchV2Evaluator(
+			{
+				metricName: PrebuiltMetrics.FINAL_RESPONSE_MATCH_V2,
+				threshold: 0.5,
+			},
+			{ sampleJudge } as unknown as LlmAsJudge,
+		);
+
+		const result = await evaluator.evaluateInvocations(
+			[invocation(undefined)],
+			[invocation(undefined)],
+		);
+
+		expect(sampleJudge).toHaveBeenCalledTimes(1);
+		const prompt = sampleJudge.mock.calls[0][0] as string;
+		expect(prompt).toContain('"Agent response":');
+		expect(prompt).toContain('"Reference response":');
+		expect(result.overallScore).toBe(1);
+	});
 });

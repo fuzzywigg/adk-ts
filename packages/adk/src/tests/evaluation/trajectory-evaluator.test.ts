@@ -174,4 +174,105 @@ describe("TrajectoryEvaluator", () => {
 		const result = await evaluator.evaluateInvocations([actual], [expected]);
 		expect(result.perInvocationResults[0].score).toBe(0);
 	});
+
+	it("compares nested object args via JSON.stringify equality", async () => {
+		const tools = {
+			toolUses: [
+				{
+					name: "write",
+					args: { payload: { nested: { a: 1, b: ["x"] }, flag: true } },
+				},
+			],
+			intermediateResponses: [],
+		};
+		const mismatch = {
+			toolUses: [
+				{
+					name: "write",
+					args: { payload: { nested: { a: 1, b: ["y"] }, flag: true } },
+				},
+			],
+			intermediateResponses: [],
+		};
+
+		const match = await evaluator.evaluateInvocations(
+			[invocation(tools)],
+			[invocation(tools)],
+		);
+		expect(match.overallScore).toBe(1);
+
+		const miss = await evaluator.evaluateInvocations(
+			[invocation(tools)],
+			[invocation(mismatch)],
+		);
+		expect(miss.overallScore).toBe(0);
+	});
+
+	it("treats arg key order as significant after sorting keys", async () => {
+		const actual = invocation({
+			toolUses: [{ name: "search", args: { b: 2, a: 1 } }],
+			intermediateResponses: [],
+		});
+		const expected = invocation({
+			toolUses: [{ name: "search", args: { a: 1, b: 2 } }],
+			intermediateResponses: [],
+		});
+
+		const result = await evaluator.evaluateInvocations([actual], [expected]);
+		expect(result.overallScore).toBe(1);
+		expect(result.overallEvalStatus).toBe(EvalStatus.PASSED);
+	});
+
+	it("marks empty toolUses arrays as evaluated equals, missing as NOT_EVALUATED", async () => {
+		const empty = {
+			toolUses: [],
+			intermediateResponses: [],
+		};
+		const emptyResult = await evaluator.evaluateInvocations(
+			[invocation(empty)],
+			[invocation(empty)],
+		);
+		expect(emptyResult.perInvocationResults[0].score).toBe(1);
+		expect(emptyResult.overallEvalStatus).toBe(EvalStatus.PASSED);
+
+		const oneMissing = await evaluator.evaluateInvocations(
+			[invocation(empty)],
+			[invocation(undefined)],
+		);
+		expect(oneMissing.perInvocationResults[0].evalStatus).toBe(
+			EvalStatus.NOT_EVALUATED,
+		);
+		expect(oneMissing.overallScore).toBe(0);
+	});
+
+	it("averages only evaluated invocations when mixing NOT_EVALUATED rows", async () => {
+		const match = {
+			toolUses: [{ name: "search", args: { q: "ok" } }],
+			intermediateResponses: [],
+		};
+		const result = await evaluator.evaluateInvocations(
+			[invocation(undefined), invocation(match)],
+			[invocation(undefined), invocation(match)],
+		);
+
+		expect(result.perInvocationResults[0].evalStatus).toBe(
+			EvalStatus.NOT_EVALUATED,
+		);
+		expect(result.perInvocationResults[1].score).toBe(1);
+		expect(result.overallScore).toBe(1);
+		expect(result.overallEvalStatus).toBe(EvalStatus.PASSED);
+	});
+
+	it("fails when sorted arg key sets differ by name", async () => {
+		const actual = invocation({
+			toolUses: [{ name: "search", args: { q: "adk" } }],
+			intermediateResponses: [],
+		});
+		const expected = invocation({
+			toolUses: [{ name: "search", args: { query: "adk" } }],
+			intermediateResponses: [],
+		});
+		const result = await evaluator.evaluateInvocations([actual], [expected]);
+		expect(result.overallScore).toBe(0);
+	});
 });

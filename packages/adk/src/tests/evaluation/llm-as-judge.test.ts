@@ -84,6 +84,40 @@ describe("LlmAsJudge.sampleJudge", () => {
 			expect.objectContaining({ prompt: "p" }),
 		);
 	});
+
+	it("spreads judgeModelConfig into generateContent", async () => {
+		const generateContent = vi.fn().mockResolvedValue({ text: "ok" });
+		LLMRegistry.registerModel("judge-model", {
+			generateContent,
+		} as any);
+
+		const judge = new LlmAsJudge();
+		await judge.sampleJudge("rate", 1, () => Label.VALID, {
+			judgeModel: "judge-model",
+			judgeModelConfig: { temperature: 0.1, maxOutputTokens: 64 },
+		});
+
+		expect(generateContent).toHaveBeenCalledWith({
+			prompt: "rate",
+			temperature: 0.1,
+			maxOutputTokens: 64,
+		});
+	});
+
+	it("returns an empty label list when every sample fails", async () => {
+		vi.spyOn(console, "error").mockImplementation(() => {});
+		LLMRegistry.registerModel("judge-model", {
+			generateContent: vi.fn().mockRejectedValue(new Error("offline")),
+		} as any);
+
+		const judge = new LlmAsJudge();
+		const labels = await judge.sampleJudge("p", 3, () => Label.VALID, {
+			judgeModel: "judge-model",
+		});
+
+		expect(labels).toEqual([]);
+		expect(console.error).toHaveBeenCalledTimes(3);
+	});
 });
 
 describe("LlmAsJudgeEvaluator", () => {
@@ -182,5 +216,108 @@ describe("LlmAsJudgeEvaluator", () => {
 
 		expect(result.perInvocationResults).toEqual([]);
 		expect(result.overallEvalStatus).toBe(EvalStatus.NOT_EVALUATED);
+	});
+
+	it("defaults numSamples to 5 when omitted from judgeModelOptions", async () => {
+		const generateContent = vi.fn().mockResolvedValue({ text: "high" });
+		LLMRegistry.registerModel("judge-model", {
+			generateContent,
+		} as any);
+
+		const evaluator = new StubJudgeEvaluator({
+			metricName: "judge",
+			threshold: 0.5,
+			judgeModelOptions: {
+				judgeModel: "judge-model",
+			},
+		});
+
+		await evaluator.evaluateInvocations([invocation("a")], [invocation("b")]);
+		expect(generateContent).toHaveBeenCalledTimes(5);
+	});
+
+	it("treats undefined convertAutoRaterResponseToScore as INVALID", async () => {
+		const generateContent = vi
+			.fn()
+			.mockResolvedValueOnce({ text: "unknown" })
+			.mockResolvedValueOnce({ text: "high" });
+		LLMRegistry.registerModel("judge-model", {
+			generateContent,
+		} as any);
+
+		const evaluator = new StubJudgeEvaluator({
+			metricName: "judge",
+			threshold: 0.5,
+			judgeModelOptions: {
+				judgeModel: "judge-model",
+				numSamples: 2,
+			},
+		});
+
+		const result = await evaluator.evaluateInvocations(
+			[invocation("a")],
+			[invocation("b")],
+		);
+
+		expect(result.perInvocationResults[0].score).toBe(0.5);
+		expect(evaluator.convertAutoRaterResponseToScore).toHaveBeenCalled();
+	});
+
+	it("marks majority INVALID labels as FAILED", async () => {
+		const generateContent = vi
+			.fn()
+			.mockResolvedValueOnce({ text: "low" })
+			.mockResolvedValueOnce({ text: "low" })
+			.mockResolvedValueOnce({ text: "high" });
+		LLMRegistry.registerModel("judge-model", {
+			generateContent,
+		} as any);
+
+		const evaluator = new StubJudgeEvaluator({
+			metricName: "judge",
+			threshold: 0.5,
+			judgeModelOptions: {
+				judgeModel: "judge-model",
+				numSamples: 3,
+			},
+		});
+
+		const result = await evaluator.evaluateInvocations(
+			[invocation("a")],
+			[invocation("b")],
+		);
+
+		expect(result.perInvocationResults[0].score).toBeCloseTo(1 / 3);
+		expect(result.perInvocationResults[0].evalStatus).toBe(EvalStatus.FAILED);
+	});
+
+	it("aggregates scores across multiple invocations", async () => {
+		const generateContent = vi
+			.fn()
+			.mockResolvedValueOnce({ text: "high" })
+			.mockResolvedValueOnce({ text: "low" });
+		LLMRegistry.registerModel("judge-model", {
+			generateContent,
+		} as any);
+
+		const evaluator = new StubJudgeEvaluator({
+			metricName: "judge",
+			threshold: 0.5,
+			judgeModelOptions: {
+				judgeModel: "judge-model",
+				numSamples: 1,
+			},
+		});
+
+		const result = await evaluator.evaluateInvocations(
+			[invocation("a1"), invocation("a2")],
+			[invocation("b1"), invocation("b2")],
+		);
+
+		expect(result.perInvocationResults).toHaveLength(2);
+		expect(result.perInvocationResults[0].score).toBe(1);
+		expect(result.perInvocationResults[1].score).toBe(0);
+		expect(result.overallScore).toBe(0.5);
+		expect(evaluator.formatAutoRaterPrompt).toHaveBeenCalledTimes(2);
 	});
 });
