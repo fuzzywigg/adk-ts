@@ -1,7 +1,11 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { ServeCommand } from "../../cli/serve.command";
+import { WebCommand } from "../../cli/web.command";
 
-const startHttpServer = vi.fn();
-const createGracefulShutdownHandler = vi.fn(() => vi.fn());
+const { startHttpServer, createGracefulShutdownHandler } = vi.hoisted(() => ({
+	startHttpServer: vi.fn(),
+	createGracefulShutdownHandler: vi.fn(() => vi.fn()),
+}));
 
 vi.mock("../../http/bootstrap", () => ({
 	startHttpServer,
@@ -19,9 +23,6 @@ vi.mock("chalk", () => ({
 		gray: (s: string) => s,
 	},
 }));
-
-const { ServeCommand } = await import("../../cli/serve.command");
-const { WebCommand } = await import("../../cli/web.command");
 
 describe("ServeCommand.run", () => {
 	afterEach(() => {
@@ -56,7 +57,6 @@ describe("ServeCommand.run", () => {
 		expect(onSpy).toHaveBeenCalledWith("SIGINT", expect.any(Function));
 		expect(onSpy).toHaveBeenCalledWith("SIGTERM", expect.any(Function));
 
-		// run() awaits an never-resolving promise; leave it hanging intentionally
 		void runPromise;
 	});
 

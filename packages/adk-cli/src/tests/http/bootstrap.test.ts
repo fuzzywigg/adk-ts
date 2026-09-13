@@ -1,7 +1,19 @@
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve, sep } from "node:path";
+import { NestFactory } from "@nestjs/core";
+import { SwaggerModule } from "@nestjs/swagger";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+	loadGitignorePrefixes,
+	pathHasSkippedDir,
+	setupHotReload,
+	shouldIgnorePath,
+	startHttpServer,
+} from "../../http/bootstrap";
+import { AgentManager } from "../../http/providers/agent-manager.service";
+import { DIRECTORIES_TO_SKIP } from "../../http/providers/agent-scanner.service";
+import { HotReloadService } from "../../http/reload/hot-reload.service";
 
 const watchHandlers: Array<{
 	close: ReturnType<typeof vi.fn>;
@@ -58,25 +70,6 @@ vi.mock("../../http/filters/pretty-error.filter", () => ({
 		return {};
 	}),
 }));
-
-const { NestFactory } = await import("@nestjs/core");
-const { SwaggerModule } = await import("@nestjs/swagger");
-const {
-	loadGitignorePrefixes,
-	pathHasSkippedDir,
-	setupHotReload,
-	shouldIgnorePath,
-	startHttpServer,
-} = await import("../../http/bootstrap");
-const { DIRECTORIES_TO_SKIP } = await import(
-	"../../http/providers/agent-scanner.service"
-);
-const { AgentManager } = await import(
-	"../../http/providers/agent-manager.service"
-);
-const { HotReloadService } = await import(
-	"../../http/reload/hot-reload.service"
-);
 
 describe("bootstrap path helpers", () => {
 	it("pathHasSkippedDir detects well-known directories", () => {
