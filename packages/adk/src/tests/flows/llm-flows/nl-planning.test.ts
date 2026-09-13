@@ -128,4 +128,242 @@ describe("nl-planning responseProcessor", () => {
 		};
 		expect(event.actions.stateDelta.plan_step).toBe("done");
 	});
+
+	it("returns early when response content is empty", async () => {
+		const planner = {
+			buildPlanningInstruction: vi.fn(),
+			processPlanningResponse: vi.fn(),
+		};
+		const events = await drain(
+			responseProcessor.runAsync(
+				makeContext({ agent: { name: "planner-agent", planner } }),
+				{ content: { role: "model", parts: [] } } as LlmResponse,
+			),
+		);
+		expect(events).toEqual([]);
+		expect(planner.processPlanningResponse).not.toHaveBeenCalled();
+	});
+
+	it("keeps original parts when processPlanningResponse returns falsy", async () => {
+		const originalParts = [{ text: "keep me" }];
+		const planner = {
+			buildPlanningInstruction: vi.fn(),
+			processPlanningResponse: () => undefined,
+		};
+		const llmResponse = {
+			content: { role: "model", parts: originalParts },
+		} as LlmResponse;
+
+		const events = await drain(
+			responseProcessor.runAsync(
+				makeContext({ agent: { name: "planner-agent", planner } }),
+				llmResponse,
+			),
+		);
+
+		expect(events).toEqual([]);
+		expect(llmResponse.content?.parts).toBe(originalParts);
+	});
+
+	it("does not yield when planner leaves state unchanged", async () => {
+		const planner = {
+			buildPlanningInstruction: vi.fn(),
+			processPlanningResponse: (_ctx: unknown, parts: unknown[]) => parts,
+		};
+		const events = await drain(
+			responseProcessor.runAsync(
+				makeContext({ agent: { name: "planner-agent", planner } }),
+				{
+					content: { role: "model", parts: [{ text: "stable" }] },
+				} as LlmResponse,
+			),
+		);
+		expect(events).toEqual([]);
+	});
+});
+
+describe("nl-planning requestProcessor thought stripping", () => {
+	it("clears thought flags from request contents", async () => {
+		const llmRequest = new LlmRequest();
+		llmRequest.contents = [
+			{
+				role: "user",
+				parts: [{ text: "plan", thought: true } as any, { text: "ok" }],
+			},
+			{ role: "model", parts: undefined as any },
+		];
+
+		await drain(
+			requestProcessor.runAsync(
+				makeContext({
+					agent: {
+						name: "planner-agent",
+						planner: new PlanReActPlanner(),
+					},
+				}),
+				llmRequest,
+			),
+		);
+
+		expect((llmRequest.contents[0].parts![0] as any).thought).toBeUndefined();
+		expect(llmRequest.contents[0].parts![1]).toEqual({ text: "ok" });
+	});
+
+	it("falls back to PlanReActPlanner for non-shaped planner objects", async () => {
+		const llmRequest = new LlmRequest();
+		await drain(
+			requestProcessor.runAsync(
+				makeContext({
+					agent: {
+						name: "planner-agent",
+						planner: { notAPlanner: true },
+					},
+				}),
+				llmRequest,
+			),
+		);
+
+		expect(String(llmRequest.config?.systemInstruction || "")).toContain(
+			"PLANNING",
+		);
+	});
+
+	it("is a no-op when planner property is null", async () => {
+		const llmRequest = new LlmRequest();
+		await drain(
+			requestProcessor.runAsync(
+				makeContext({
+					agent: { name: "planner-agent", planner: null },
+				}),
+				llmRequest,
+			),
+		);
+		expect(llmRequest.config).toBeUndefined();
+	});
+
+	it("skips thought stripping when contents are absent", async () => {
+		const llmRequest = new LlmRequest();
+		await drain(
+			requestProcessor.runAsync(
+				makeContext({
+					agent: {
+						name: "planner-agent",
+						planner: new PlanReActPlanner(),
+					},
+				}),
+				llmRequest,
+			),
+		);
+		expect(llmRequest.contents ?? []).toEqual([]);
+		expect(String(llmRequest.config?.systemInstruction || "")).toContain(
+			"PLANNING",
+		);
+	});
+
+	it("skips appending when buildPlanningInstruction returns empty", async () => {
+		const llmRequest = new LlmRequest();
+		await drain(
+			requestProcessor.runAsync(
+				makeContext({
+					agent: {
+						name: "planner-agent",
+						planner: {
+							buildPlanningInstruction: () => "",
+							processPlanningResponse: vi.fn(),
+							applyThinkingConfig: vi.fn(),
+						},
+					},
+				}),
+				llmRequest,
+			),
+		);
+		expect(llmRequest.config?.systemInstruction).toBeUndefined();
+	});
+});
+
+describe("nl-planning responseProcessor more edges", () => {
+	it("returns early for nullish responses", async () => {
+		const planner = {
+			buildPlanningInstruction: vi.fn(),
+			processPlanningResponse: vi.fn(),
+		};
+		const events = await drain(
+			responseProcessor.runAsync(
+				makeContext({ agent: { name: "planner-agent", planner } }),
+				null as unknown as LlmResponse,
+			),
+		);
+		expect(events).toEqual([]);
+		expect(planner.processPlanningResponse).not.toHaveBeenCalled();
+	});
+
+	it("returns early when content parts are missing", async () => {
+		const planner = {
+			buildPlanningInstruction: vi.fn(),
+			processPlanningResponse: vi.fn(),
+		};
+		const events = await drain(
+			responseProcessor.runAsync(
+				makeContext({ agent: { name: "planner-agent", planner } }),
+				{ content: { role: "model" } } as LlmResponse,
+			),
+		);
+		expect(events).toEqual([]);
+		expect(planner.processPlanningResponse).not.toHaveBeenCalled();
+	});
+
+	it("replaces response parts when planner returns new parts", async () => {
+		const replacement = [{ text: "rewritten" }];
+		const planner = {
+			buildPlanningInstruction: vi.fn(),
+			processPlanningResponse: () => replacement,
+		};
+		const llmResponse = {
+			content: { role: "model", parts: [{ text: "original" }] },
+		} as LlmResponse;
+
+		await drain(
+			responseProcessor.runAsync(
+				makeContext({ agent: { name: "planner-agent", planner } }),
+				llmResponse,
+			),
+		);
+
+		expect(llmResponse.content?.parts).toBe(replacement);
+	});
+
+	it("yields state update with agent author and branch", async () => {
+		const planner = {
+			buildPlanningInstruction: vi.fn(),
+			processPlanningResponse: (
+				callbackContext: { state: Record<string, unknown> },
+				parts: unknown[],
+			) => {
+				callbackContext.state.flag = true;
+				return parts;
+			},
+		};
+		const events = await drain(
+			responseProcessor.runAsync(
+				makeContext({
+					invocationId: "inv-99",
+					branch: "feature",
+					agent: { name: "named-planner", planner },
+				}),
+				{
+					content: { role: "model", parts: [{ text: "x" }] },
+				} as LlmResponse,
+			),
+		);
+
+		expect(events).toHaveLength(1);
+		const event = events[0] as {
+			author: string;
+			branch?: string;
+			invocationId: string;
+		};
+		expect(event.author).toBe("named-planner");
+		expect(event.branch).toBe("feature");
+		expect(event.invocationId).toBe("inv-99");
+	});
 });

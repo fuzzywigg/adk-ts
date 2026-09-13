@@ -4,6 +4,7 @@ import type { EvalSet } from "../../evaluation/eval-set";
 import { PrebuiltMetrics } from "../../evaluation/eval-metrics";
 import { EvalStatus } from "../../evaluation/evaluator";
 import { LocalEvalService } from "../../evaluation/local-eval-service";
+import { DEFAULT_METRIC_EVALUATOR_REGISTRY } from "../../evaluation/metric-evaluator-registry";
 
 function makeEvalSet(evalCase: EvalCase): EvalSet {
 	return {
@@ -248,5 +249,265 @@ describe("LocalEvalService", () => {
 
 		expect(results).toHaveLength(1);
 		expect(results[0].evalSetId).toBe("case-with-dashes");
+	});
+
+	it("uses initializeSession when provided on the runner", async () => {
+		const initializeSession = vi.fn(async () => undefined);
+		const ask = vi.fn(async () => "ok");
+		const service = new LocalEvalService({
+			name: "stub-agent",
+			ask,
+			initializeSession,
+		} as any);
+
+		const evalCase: EvalCase = {
+			evalId: "init-session",
+			sessionInput: { state: { a: 1 } } as any,
+			conversation: [
+				{
+					userContent: { role: "user", parts: [{ text: "hi" }] },
+					creationTimestamp: 1,
+				},
+			],
+		};
+
+		for await (const _ of service.performInference({
+			evalSetId: "set-1",
+			evalCases: [makeEvalSet(evalCase)],
+		})) {
+			/* drain */
+		}
+
+		expect(initializeSession).toHaveBeenCalledWith({ state: { a: 1 } });
+		expect(ask).toHaveBeenCalledTimes(1);
+	});
+
+	it("falls back to setSessionState when initializeSession is absent", async () => {
+		const setSessionState = vi.fn(async () => undefined);
+		const ask = vi.fn(async () => "ok");
+		const service = new LocalEvalService({
+			name: "stub-agent",
+			ask,
+			setSessionState,
+		} as any);
+
+		const evalCase: EvalCase = {
+			evalId: "set-state",
+			sessionInput: { state: { b: 2 } } as any,
+			conversation: [
+				{
+					userContent: { role: "user", parts: [{ text: "hi" }] },
+					creationTimestamp: 1,
+				},
+			],
+		};
+
+		for await (const _ of service.performInference({
+			evalSetId: "set-1",
+			evalCases: [makeEvalSet(evalCase)],
+		})) {
+			/* drain */
+		}
+
+		expect(setSessionState).toHaveBeenCalledWith({ state: { b: 2 } });
+	});
+
+	it("warns and continues when session initialization throws", async () => {
+		const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+		const ask = vi.fn(async () => "still-runs");
+		const service = new LocalEvalService({
+			name: "stub-agent",
+			ask,
+			initializeSession: async () => {
+				throw new Error("session boom");
+			},
+		} as any);
+
+		const evalCase: EvalCase = {
+			evalId: "session-fail",
+			sessionInput: { state: {} } as any,
+			conversation: [
+				{
+					userContent: { role: "user", parts: [{ text: "hi" }] },
+					creationTimestamp: 1,
+				},
+			],
+		};
+
+		const batches: { finalResponse?: { parts?: { text?: string }[] } }[][] = [];
+		for await (const batch of service.performInference({
+			evalSetId: "set-1",
+			evalCases: [makeEvalSet(evalCase)],
+		})) {
+			batches.push(batch);
+		}
+
+		expect(warn).toHaveBeenCalledWith(
+			expect.stringContaining("Failed to initialize session for session-fail"),
+			expect.any(Error),
+		);
+		expect(batches[0][0].finalResponse?.parts?.[0]?.text).toBe("still-runs");
+		warn.mockRestore();
+	});
+
+	it("skips inference batches whose first invocation lacks an id", async () => {
+		const service = new LocalEvalService({
+			name: "unused",
+			ask: async () => "unused",
+		} as any);
+
+		const results: unknown[] = [];
+		for await (const evalResult of service.evaluate({
+			inferenceResults: [
+				[
+					{
+						userContent: { role: "user", parts: [{ text: "q" }] },
+						finalResponse: {
+							role: "model",
+							parts: [{ text: "x" }],
+						},
+						creationTimestamp: 1,
+					} as any,
+				],
+			],
+			evaluateConfig: {
+				evalMetrics: [
+					{
+						metricName: PrebuiltMetrics.RESPONSE_MATCH_SCORE,
+						threshold: 0.5,
+					},
+				],
+			},
+		})) {
+			results.push(evalResult);
+		}
+
+		expect(results).toEqual([]);
+	});
+
+	it("marks NOT_EVALUATED when metric returns empty perInvocationResults", async () => {
+		const service = new LocalEvalService({
+			name: "unused",
+			ask: async () => "unused",
+		} as any);
+
+		const originalGet = DEFAULT_METRIC_EVALUATOR_REGISTRY.getEvaluator.bind(
+			DEFAULT_METRIC_EVALUATOR_REGISTRY,
+		);
+		const spy = vi
+			.spyOn(DEFAULT_METRIC_EVALUATOR_REGISTRY, "getEvaluator")
+			.mockImplementation((metric) => {
+				if (metric.metricName === PrebuiltMetrics.RESPONSE_MATCH_SCORE) {
+					return {
+						evaluateInvocations: async () => ({
+							overallScore: undefined,
+							overallEvalStatus: EvalStatus.NOT_EVALUATED,
+							perInvocationResults: [],
+						}),
+					} as any;
+				}
+				return originalGet(metric);
+			});
+
+		const results: {
+			evalCaseResults: { finalEvalStatus: EvalStatus }[];
+		}[] = [];
+		for await (const evalResult of service.evaluate({
+			inferenceResults: [
+				[
+					{
+						invocationId: "empty-metric-expected",
+						userContent: { role: "user", parts: [{ text: "q" }] },
+						finalResponse: {
+							role: "model",
+							parts: [{ text: "a" }],
+						},
+						creationTimestamp: 1,
+					},
+					{
+						invocationId: "empty-metric-actual",
+						userContent: { role: "user", parts: [{ text: "q" }] },
+						finalResponse: {
+							role: "model",
+							parts: [{ text: "a" }],
+						},
+						creationTimestamp: 2,
+					},
+				],
+			],
+			evaluateConfig: {
+				evalMetrics: [
+					{
+						metricName: PrebuiltMetrics.RESPONSE_MATCH_SCORE,
+						threshold: 0.5,
+					},
+				],
+			},
+		})) {
+			results.push(evalResult);
+		}
+
+		expect(results[0].evalCaseResults[0].finalEvalStatus).toBe(
+			EvalStatus.NOT_EVALUATED,
+		);
+		spy.mockRestore();
+	});
+
+	it("treats falsy ask responses as empty text", async () => {
+		const service = new LocalEvalService({
+			name: "stub-agent",
+			ask: async () => null,
+		} as any);
+
+		const evalCase: EvalCase = {
+			evalId: "null-resp",
+			conversation: [
+				{
+					userContent: { role: "user", parts: [{ text: "hi" }] },
+					creationTimestamp: 1,
+				},
+			],
+		};
+
+		let text = "unset";
+		for await (const batch of service.performInference({
+			evalSetId: "set-1",
+			evalCases: [makeEvalSet(evalCase)],
+		})) {
+			text = batch[0].finalResponse?.parts?.[0]?.text ?? "missing";
+		}
+
+		expect(text).toBe("");
+	});
+
+	it("embeds Unknown error when a non-Error is thrown", async () => {
+		const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+		const service = new LocalEvalService({
+			name: "failing-agent",
+			ask: async () => {
+				throw "string-boom";
+			},
+		} as any);
+
+		const evalCase: EvalCase = {
+			evalId: "non-error",
+			conversation: [
+				{
+					userContent: { role: "user", parts: [{ text: "hi" }] },
+					creationTimestamp: 1,
+				},
+			],
+		};
+
+		let actualText = "";
+		for await (const batch of service.performInference({
+			evalSetId: "set-1",
+			evalCases: [makeEvalSet(evalCase)],
+		})) {
+			actualText = batch[0].finalResponse?.parts?.[0]?.text ?? "";
+		}
+
+		expect(actualText).toContain("Error: Unknown error");
+		errorSpy.mockRestore();
 	});
 });
