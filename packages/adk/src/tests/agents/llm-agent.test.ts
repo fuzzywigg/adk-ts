@@ -1,7 +1,7 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { InvocationContext } from "../../agents/invocation-context";
 import { LlmAgent } from "../../agents/llm-agent";
 import { Event } from "../../events/event";
-import type { InvocationContext } from "../../agents/invocation-context";
 import { AutoFlow, SingleFlow } from "../../flows/llm-flows";
 import { FunctionTool } from "../../tools/function/function-tool";
 
@@ -114,6 +114,93 @@ describe("LlmAgent (Run Logic)", () => {
 
 			agent["maybeSaveOutputToState"](event);
 			expect(event.actions.stateDelta).toBeUndefined();
+		});
+
+		it("skips events authored by another agent", () => {
+			agent.outputKey = "result";
+			const event = new Event({
+				content: { parts: [{ text: "secret" }] },
+				author: "other-agent",
+			});
+			vi.spyOn(event, "isFinalResponse").mockReturnValue(true);
+
+			agent["maybeSaveOutputToState"](event);
+			expect(event.actions.stateDelta).toStrictEqual({});
+		});
+
+		it("parses JSON against outputSchema and skips whitespace final chunks", async () => {
+			const { z } = await import("zod");
+			agent.outputKey = "result";
+			agent.outputSchema = z.object({ answer: z.string() });
+
+			const empty = new Event({
+				content: { parts: [{ text: "   " }] },
+				author: agent.name,
+			});
+			vi.spyOn(empty, "isFinalResponse").mockReturnValue(true);
+			agent["maybeSaveOutputToState"](empty);
+			expect(empty.actions.stateDelta).toStrictEqual({});
+
+			const valid = new Event({
+				content: { parts: [{ text: '{"answer":"ok"}' }] },
+				author: agent.name,
+			});
+			vi.spyOn(valid, "isFinalResponse").mockReturnValue(true);
+			agent["maybeSaveOutputToState"](valid);
+			expect(valid.actions.stateDelta?.result).toEqual({ answer: "ok" });
+
+			const invalid = new Event({
+				content: { parts: [{ text: '{"answer":1}' }] },
+				author: agent.name,
+			});
+			vi.spyOn(invalid, "isFinalResponse").mockReturnValue(true);
+			expect(() => agent["maybeSaveOutputToState"](invalid)).toThrow(
+				/Output validation failed/,
+			);
+		});
+	});
+
+	describe("validateOutputSchemaConfig", () => {
+		it("warns when transfers, subAgents, or tools are mixed with outputSchema", async () => {
+			const { z } = await import("zod");
+			const schema = z.object({ value: z.string() });
+			const warn = vi.fn();
+			const child = new LlmAgent({ name: "child" });
+			const tool = new FunctionTool(
+				async function noop() {
+					return "ok";
+				},
+				{
+					description: "No-op tool used for outputSchema warning coverage",
+				},
+			);
+
+			const mixed = new LlmAgent({
+				name: "mixed",
+				outputSchema: schema,
+				subAgents: [child],
+				tools: [tool],
+			});
+			(mixed as any).logger = { warn, debug: vi.fn(), error: vi.fn() };
+			mixed["validateOutputSchemaConfig"]();
+
+			expect(warn).toHaveBeenCalled();
+			expect(
+				warn.mock.calls.some((c) => String(c[0]).includes("transfer")),
+			).toBe(true);
+			expect(
+				warn.mock.calls.some((c) => String(c[0]).includes("subAgents")),
+			).toBe(true);
+			expect(warn.mock.calls.some((c) => String(c[0]).includes("tools"))).toBe(
+				true,
+			);
+		});
+
+		it("does nothing when outputSchema is unset", () => {
+			const warn = vi.fn();
+			(agent as any).logger = { warn, debug: vi.fn(), error: vi.fn() };
+			agent["validateOutputSchemaConfig"]();
+			expect(warn).not.toHaveBeenCalled();
 		});
 	});
 

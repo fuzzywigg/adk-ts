@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
+import { BaseAgent } from "../../../agents/base-agent";
+import type { InvocationContext } from "../../../agents/invocation-context";
 import { requestProcessor } from "../../../flows/llm-flows/agent-transfer";
 import { LlmRequest } from "../../../models/llm-request";
-import type { InvocationContext } from "../../../agents/invocation-context";
-import { BaseAgent } from "../../../agents/base-agent";
 import { PluginManager } from "../../../plugins/plugin-manager";
 
 class StubAgent extends BaseAgent {
@@ -88,5 +88,30 @@ describe("AgentTransferLlmRequestProcessor", () => {
 		expect(request.config?.systemInstruction).toContain("parent");
 		expect(request.config?.systemInstruction).toContain("peer");
 		expect(request.config?.systemInstruction).toContain("leaf");
+	});
+
+	it("honors disallowTransferToParent and disallowTransferToPeers", async () => {
+		const request = new LlmRequest();
+		const parent = new StubAgent("parent", "Parent agent");
+		const peer = new StubAgent("peer", "Peer agent");
+		const agent = new StubAgent("child", "Child agent");
+		(agent as any).disallowTransferToParent = true;
+		(agent as any).disallowTransferToPeers = true;
+		parent.subAgents = [agent, peer];
+		agent.parentAgent = parent;
+		peer.parentAgent = parent;
+		agent.subAgents = [new StubAgent("leaf", "Leaf only")];
+
+		for await (const _ of requestProcessor.runAsync(
+			makeContext(agent),
+			request,
+		)) {
+		}
+
+		expect(request.config?.systemInstruction).toContain("leaf");
+		expect(request.config?.systemInstruction).not.toContain(
+			"Your parent agent is parent",
+		);
+		expect(request.config?.systemInstruction).not.toContain("Peer agent");
 	});
 });
