@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { InMemoryMemoryService } from "../../memory/in-memory-memory-service";
 import type { Session } from "../../sessions/session";
 
@@ -150,5 +150,59 @@ describe("InMemoryMemoryService", () => {
 			query: "sunny",
 		});
 		expect(oldHits.memories).toEqual([]);
+	});
+
+	it("skips events whose parts have no extractable words", async () => {
+		const service = new InMemoryMemoryService();
+		await service.addSessionToMemory(
+			makeSession({
+				events: [
+					{
+						author: "user",
+						timestamp: Date.parse("2024-01-01T00:00:00.000Z"),
+						content: {
+							parts: [{ text: "12345 !!!" }],
+						},
+					} as any,
+					{
+						author: "user",
+						timestamp: Date.parse("2024-01-01T00:01:00.000Z"),
+						content: {
+							parts: [{ functionCall: { name: "noop", args: {} } }],
+						},
+					} as any,
+				],
+			}),
+		);
+
+		const hits = await service.searchMemory({
+			appName: "app",
+			userId: "user",
+			query: "12345",
+		});
+		expect(hits.memories).toEqual([]);
+	});
+
+	it("matches when any query token appears in the event text", async () => {
+		const service = new InMemoryMemoryService();
+		await service.addSessionToMemory(makeSession());
+
+		const hits = await service.searchMemory({
+			appName: "app",
+			userId: "user",
+			query: "tokyo sunny",
+		});
+		expect(hits.memories).toHaveLength(1);
+		expect(hits.memories[0].content?.parts?.[0]?.text).toContain("sunny");
+	});
+
+	it("deprecated helpers warn and return empty values", () => {
+		const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+		const service = new InMemoryMemoryService();
+
+		expect(service.getAllSessions()).toEqual([]);
+		expect(service.getSession("session-1")).toBeUndefined();
+		expect(warn).toHaveBeenCalledTimes(2);
+		warn.mockRestore();
 	});
 });

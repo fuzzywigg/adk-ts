@@ -127,4 +127,56 @@ describe("FunctionTool", () => {
 		expect(missing.error).toContain("value");
 		expect(missing.error).not.toContain("context");
 	});
+
+	it("coerces boolean false strings and leaves null args intact", async () => {
+		function inspect(flag: boolean, maybe: string | null) {
+			return { flag, maybe };
+		}
+
+		const tool = new FunctionTool(inspect, {
+			description: "Coercion edges",
+			parameterTypes: {
+				flag: "boolean" as any,
+				maybe: "string" as any,
+			},
+		});
+
+		await expect(
+			tool.runAsync({ flag: "false", maybe: null } as any, makeContext()),
+		).resolves.toEqual({ flag: false, maybe: null });
+	});
+
+	it("skips optional params with defaults when description is provided", async () => {
+		function greet(name: string, suffix = "!") {
+			return { text: `${name}${suffix}` };
+		}
+
+		const tool = new FunctionTool(greet, {
+			description: "Greets a user with an optional suffix.",
+		});
+
+		const missing = await tool.runAsync({} as any, makeContext());
+		expect(missing.error).toContain("name");
+		expect(missing.error).not.toContain("suffix");
+
+		await expect(
+			tool.runAsync({ name: "Ada" } as any, makeContext()),
+		).resolves.toEqual({ text: "Ada!" });
+	});
+
+	it("wraps non-Error throws and preserves sync falsy zero via || {}", async () => {
+		function boom() {
+			throw "sync fail";
+		}
+		const boomTool = new FunctionTool(boom, { description: "boom" });
+		expect(await boomTool.runAsync({}, makeContext())).toEqual({
+			error: "Error executing function boom: sync fail",
+		});
+
+		function zero() {
+			return 0;
+		}
+		const zeroTool = new FunctionTool(zero, { description: "zero" });
+		await expect(zeroTool.runAsync({}, makeContext())).resolves.toEqual({});
+	});
 });

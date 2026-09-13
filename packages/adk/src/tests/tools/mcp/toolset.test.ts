@@ -1,6 +1,19 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { McpToolset } from "../../../tools/mcp";
 import { McpErrorType } from "../../../tools/mcp/types";
+
+const convertMcpToolToBaseTool = vi.hoisted(() =>
+	vi.fn(async ({ mcpTool }: { mcpTool: { name: string } }) => {
+		if (mcpTool.name === "bad") {
+			throw new Error("convert failed");
+		}
+		return { name: mcpTool.name } as any;
+	}),
+);
+
+vi.mock("../../../tools/mcp/create-tool", () => ({
+	convertMcpToolToBaseTool,
+}));
 
 describe("McpToolset offline helpers", () => {
 	const baseConfig = {
@@ -12,6 +25,10 @@ describe("McpToolset offline helpers", () => {
 			args: ["-y", "@example/mcp"],
 		},
 	};
+
+	beforeEach(() => {
+		convertMcpToolToBaseTool.mockClear();
+	});
 
 	it("isSelected includes all tools when no filter is set", () => {
 		const toolset = new McpToolset(baseConfig);
@@ -93,5 +110,51 @@ describe("McpToolset offline helpers", () => {
 		expect((toolset as any).tools).toEqual([]);
 		expect(getTools).toHaveBeenCalled();
 		expect(result).toEqual([{ name: "fresh" }]);
+	});
+
+	it("getTools returns empty array when listTools payload is invalid", async () => {
+		const toolset = new McpToolset(baseConfig);
+		(toolset as any).clientService = {
+			initialize: vi.fn().mockResolvedValue({
+				listTools: vi.fn().mockResolvedValue({ tools: null }),
+			}),
+		};
+		const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+		await expect(toolset.getTools()).resolves.toEqual([]);
+		expect(warn).toHaveBeenCalled();
+		warn.mockRestore();
+	});
+
+	it("getTools filters tools, skips convert failures, and wraps unexpected errors", async () => {
+		const toolset = new McpToolset(baseConfig, ["keep", "bad"]);
+		(toolset as any).clientService = {
+			initialize: vi.fn().mockResolvedValue({
+				listTools: vi.fn().mockResolvedValue({
+					tools: [
+						{ name: "keep", description: "keep tool with enough text" },
+						{ name: "bad", description: "bad tool with enough text" },
+						{ name: "drop", description: "filtered out tool description" },
+					],
+				}),
+			}),
+		};
+		const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+		const tools = await toolset.getTools();
+		expect(tools.map((t) => t.name)).toEqual(["keep"]);
+		expect(errorSpy).toHaveBeenCalled();
+		expect(convertMcpToolToBaseTool).toHaveBeenCalledTimes(2);
+
+		const failing = new McpToolset(baseConfig);
+		(failing as any).clientService = {
+			initialize: vi.fn().mockRejectedValue(new Error("socket dead")),
+		};
+		await expect(failing.getTools()).rejects.toMatchObject({
+			type: McpErrorType.CONNECTION_ERROR,
+			message: expect.stringContaining("socket dead"),
+		});
+
+		errorSpy.mockRestore();
 	});
 });

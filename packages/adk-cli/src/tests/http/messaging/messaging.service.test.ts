@@ -93,4 +93,36 @@ describe("MessagingService", () => {
 		} as any);
 		expect(response.agentName).toBe("solo");
 	});
+
+	it("ignores broadcast failures and falls back when events lookup throws", async () => {
+		const loaded = {
+			sessionId: "s1",
+			agent: { name: "fallback-agent" },
+		} as LoadedAgent;
+		const sessionsService = {
+			ensureAgentLoaded: vi.fn().mockResolvedValue(loaded),
+			getSessionEvents: vi.fn().mockRejectedValue(new Error("events down")),
+		};
+		const agentManager = {
+			sendMessageToAgent: vi.fn().mockResolvedValue("ok"),
+		};
+		const hotReload = {
+			broadcastState: vi.fn(() => {
+				throw new Error("broadcast failed");
+			}),
+		};
+		const service = new MessagingService(
+			agentManager as never,
+			sessionsService as never,
+			hotReload as never,
+		);
+
+		await expect(
+			service.postMessage("demo-path", { message: "hi" } as any),
+		).resolves.toEqual({
+			response: "ok",
+			agentName: "demo-path",
+		});
+		expect(hotReload.broadcastState).toHaveBeenCalled();
+	});
 });

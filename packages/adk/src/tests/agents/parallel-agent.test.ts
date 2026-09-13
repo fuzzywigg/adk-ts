@@ -125,6 +125,30 @@ describe("mergeAgentRun", () => {
 		expect(events.indexOf(a1)).toBeLessThan(events.indexOf(b1));
 		expect(events.indexOf(b1)).toBeLessThan(events.indexOf(a2));
 	});
+
+	it("isolates generator errors so other agents continue", async () => {
+		const ok = new Event({ author: "ok" });
+		const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+		async function* genOk() {
+			await new Promise((r) => setTimeout(r, 20));
+			yield ok;
+		}
+
+		async function* genFail() {
+			await Promise.reject(new Error("parallel boom"));
+			yield undefined as never;
+		}
+
+		const events: Event[] = [];
+		for await (const event of mergeAgentRun([genFail(), genOk()])) {
+			events.push(event);
+		}
+
+		expect(events).toEqual([ok]);
+		expect(errorSpy).toHaveBeenCalled();
+		errorSpy.mockRestore();
+	});
 });
 
 describe("ParallelAgent", () => {
@@ -184,6 +208,20 @@ describe("ParallelAgent", () => {
 			expect(branch2.branch).toBe("parallel.subAgent2");
 			expect(yieldedEvents).toContain(event1);
 			expect(yieldedEvents).toContain(event2);
+		});
+
+		it("yields nothing when there are no subAgents", async () => {
+			const agent = new ParallelAgent({
+				name: "parallel",
+				description: "desc",
+				subAgents: [],
+			});
+
+			const yieldedEvents: Event[] = [];
+			for await (const event of agent["runAsyncImpl"](makeContext())) {
+				yieldedEvents.push(event);
+			}
+			expect(yieldedEvents).toEqual([]);
 		});
 	});
 

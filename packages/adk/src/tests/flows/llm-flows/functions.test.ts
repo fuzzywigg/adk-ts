@@ -11,6 +11,7 @@ import {
 	generateClientFunctionCallId,
 	getLongRunningFunctionCalls,
 	handleFunctionCallsAsync,
+	handleFunctionCallsLive,
 	mergeParallelFunctionResponseEvents,
 	populateClientFunctionCallId,
 	removeClientFunctionCallId,
@@ -410,5 +411,58 @@ describe("handleFunctionCallsAsync", () => {
 				{},
 			),
 		).rejects.toThrow(/Function missing is not found in the tools_dict/);
+	});
+
+	it("wraps string and null tool results as { result }", async () => {
+		const stringTool = new FakeTool(
+			{ name: "string_tool", description: "Returns a string" },
+			async () => "plain",
+		);
+		const nullTool = new FakeTool(
+			{ name: "null_tool", description: "Returns null" },
+			async () => null,
+		);
+		const agent = {
+			name: "llm-agent",
+			canonicalModel: "gpt-4o",
+			canonicalBeforeToolCallbacks: [],
+			canonicalAfterToolCallbacks: [],
+		};
+
+		const stringResult = await handleFunctionCallsAsync(
+			makeInvocationContext(agent),
+			functionCallEvent([{ name: "string_tool", id: "s1" }]),
+			{ string_tool: stringTool },
+		);
+		expect(stringResult?.getFunctionResponses()[0].response).toEqual({
+			result: "plain",
+		});
+
+		const nullResult = await handleFunctionCallsAsync(
+			makeInvocationContext(agent),
+			functionCallEvent([{ name: "null_tool", id: "n1" }]),
+			{ null_tool: nullTool },
+		);
+		expect(nullResult?.getFunctionResponses()[0].response).toEqual({
+			result: null,
+		});
+	});
+
+	it("handleFunctionCallsLive delegates to the async path", async () => {
+		const tool = new FakeTool(
+			{ name: "echo_tool", description: "Echoes input args" },
+			async () => ({ live: true }),
+		);
+		const result = await handleFunctionCallsLive(
+			makeInvocationContext({
+				name: "llm-agent",
+				canonicalModel: "gpt-4o",
+				canonicalBeforeToolCallbacks: [],
+				canonicalAfterToolCallbacks: [],
+			}),
+			functionCallEvent([{ name: "echo_tool", id: "live-1" }]),
+			{ echo_tool: tool },
+		);
+		expect(result?.getFunctionResponses()[0].response).toEqual({ live: true });
 	});
 });

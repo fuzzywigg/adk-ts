@@ -109,4 +109,57 @@ describe("instructions requestProcessor", () => {
 		expect(text).toContain("answer");
 		expect(text).toContain("IMPORTANT: After any tool calls");
 	});
+
+	it("swallows outputSchema conversion failures without appending schema text", async () => {
+		const agent = {
+			name: "bad-schema-agent",
+			canonicalModel: "gpt-4o",
+			rootAgent: { name: "root" },
+			outputSchema: { not: "a zod schema" },
+		};
+
+		const llmRequest = new LlmRequest();
+		await drain(
+			requestProcessor.runAsync(
+				{ agent } as unknown as InvocationContext,
+				llmRequest,
+			),
+		);
+
+		const text = llmRequest.getSystemInstructionText() ?? "";
+		expect(text).not.toContain("application/json");
+		expect(text).not.toContain("IMPORTANT: After any tool calls");
+	});
+
+	it("appends only globalInstruction when agent instruction is falsy", async () => {
+		const rootAgent = {
+			canonicalModel: "gpt-4o",
+			globalInstruction: "Global only",
+			canonicalGlobalInstruction: async () =>
+				["Global only", false] as [string, boolean],
+		};
+		const agent = {
+			name: "child",
+			canonicalModel: "gpt-4o",
+			instruction: "",
+			rootAgent,
+			canonicalInstruction: async () => ["", false] as [string, boolean],
+		};
+
+		const llmRequest = new LlmRequest();
+		await drain(
+			requestProcessor.runAsync(
+				{ agent } as unknown as InvocationContext,
+				llmRequest,
+			),
+		);
+
+		const text = llmRequest.getSystemInstructionText() ?? "";
+		expect(injectSessionState).toHaveBeenCalledTimes(1);
+		expect(text).toContain("injected:Global only");
+		expect(injectSessionState).toHaveBeenCalledWith(
+			"Global only",
+			expect.anything(),
+		);
+	});
 });

@@ -98,4 +98,59 @@ describe("Event", () => {
 			expect(id).toHaveLength(8);
 		}
 	});
+
+	it("returns empty function lists when content is missing or empty", () => {
+		expect(new Event({ author: "agent" }).getFunctionCalls()).toEqual([]);
+		expect(new Event({ author: "agent" }).getFunctionResponses()).toEqual([]);
+		expect(
+			new Event({
+				author: "agent",
+				content: { parts: [] },
+			}).getFunctionCalls(),
+		).toEqual([]);
+		expect(
+			new Event({
+				author: "agent",
+				content: { parts: [{ text: "plain" }] },
+			}).getFunctionCalls(),
+		).toEqual([]);
+	});
+
+	it("is not final when a trailing code execution result is present", () => {
+		expect(
+			new Event({
+				author: "agent",
+				content: {
+					parts: [{ text: "ran" }, { codeExecutionResult: { output: "ok" } }],
+				},
+			}).isFinalResponse(),
+		).toBe(false);
+	});
+
+	it("hasTrailingCodeExecutionResult is false for empty or missing parts", () => {
+		expect(
+			new Event({ author: "agent" }).hasTrailingCodeExecutionResult(),
+		).toBe(false);
+		expect(
+			new Event({
+				author: "agent",
+				content: { parts: [] },
+			}).hasTrailingCodeExecutionResult(),
+		).toBe(false);
+	});
+
+	it("preserves explicit id, timestamp, branch, and invocationId", () => {
+		const event = new Event({
+			author: "agent",
+			id: "fixedid1",
+			timestamp: 123,
+			branch: "root.child",
+			invocationId: "inv-9",
+		});
+
+		expect(event.id).toBe("fixedid1");
+		expect(event.timestamp).toBe(123);
+		expect(event.branch).toBe("root.child");
+		expect(event.invocationId).toBe("inv-9");
+	});
 });

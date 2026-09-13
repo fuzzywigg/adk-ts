@@ -39,4 +39,9 @@ describe("experimental", () => {
 		const target = { value: undefined };
 		expect(experimental(target)).toBe(target);
 	});
+
+	it("returns plain objects without a value property unchanged", () => {
+		const target = { get: () => 1 };
+		expect(experimental(target)).toBe(target);
+	});
 });

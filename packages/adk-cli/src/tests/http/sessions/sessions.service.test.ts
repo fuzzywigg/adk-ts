@@ -268,4 +268,84 @@ describe("SessionsService", () => {
 			/Session missing not found/,
 		);
 	});
+
+	it("deletes sessions and errors when session state is missing", async () => {
+		const sessionService = new InMemorySessionService();
+		const loaded = makeLoaded({ sessionId: "to-delete" });
+		const agentManager = {
+			getLoadedAgents: vi.fn(() => new Map([["demo", loaded]])),
+			startAgent: vi.fn(),
+			getInitialStateForAgent: vi.fn(),
+		};
+		const service = new SessionsService(
+			agentManager as never,
+			sessionService,
+			true,
+		);
+
+		await sessionService.createSession(
+			loaded.appName,
+			loaded.userId,
+			{},
+			"to-delete",
+		);
+		await expect(service.deleteSession("demo", "to-delete")).resolves.toEqual({
+			success: true,
+		});
+		expect(
+			await sessionService.getSession(
+				loaded.appName,
+				loaded.userId,
+				"to-delete",
+			),
+		).toBeUndefined();
+
+		await expect(
+			service.getSessionState(loaded, "missing-state"),
+		).rejects.toThrow(/Session not found/);
+	});
+
+	it("returns empty events/messages when session fetch throws", async () => {
+		const sessionService = {
+			getSession: vi.fn().mockRejectedValue(new Error("db offline")),
+		};
+		const service = new SessionsService(
+			{ getLoadedAgents: vi.fn(), startAgent: vi.fn() } as never,
+			sessionService as never,
+			true,
+		);
+		const loaded = makeLoaded();
+
+		await expect(service.getSessionEvents(loaded, "s1")).resolves.toEqual({
+			events: [],
+			totalCount: 0,
+		});
+		await expect(service.getSessionMessages(loaded)).resolves.toEqual([]);
+	});
+
+	it("marks codeExecutionResult last parts as non-final", async () => {
+		const sessionService = {
+			getSession: vi.fn().mockResolvedValue({
+				events: [
+					{
+						id: "code-1",
+						author: "demo",
+						timestamp: Date.now(),
+						content: {
+							role: "model",
+							parts: [{ codeExecutionResult: { outcome: "ok" } }],
+						},
+					},
+				],
+			}),
+		};
+		const service = new SessionsService(
+			{ getLoadedAgents: vi.fn(), startAgent: vi.fn() } as never,
+			sessionService as never,
+			true,
+		);
+
+		const events = await service.getSessionEvents(makeLoaded(), "s1");
+		expect(events.events[0].isFinalResponse).toBe(false);
+	});
 });

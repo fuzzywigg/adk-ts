@@ -1,6 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
 import { LlmAgent } from "../../../agents/llm-agent";
 import type { InvocationContext } from "../../../agents/invocation-context";
+import { InMemoryArtifactService } from "../../../artifacts/in-memory-artifact-service";
+import { BaseCodeExecutor } from "../../../code-executors/base-code-executor";
 import { BuiltInCodeExecutor } from "../../../code-executors/built-in-code-executor";
 import { CodeExecutorContext } from "../../../code-executors/code-executor-context";
 import {
@@ -156,6 +158,125 @@ describe("code-execution processors", () => {
 			),
 		);
 		expect(events).toEqual([]);
+	});
+
+	it("responseProcessor executes delimited code via BaseCodeExecutor", async () => {
+		class StubExecutor extends BaseCodeExecutor {
+			executeCode = vi.fn(async () => ({
+				stdout: "42",
+				stderr: "",
+				outputFiles: [],
+			}));
+
+			constructor() {
+				super({
+					codeBlockDelimiters: [["```python\n", "\n```"]],
+					errorRetryAttempts: 2,
+				});
+			}
+		}
+
+		const executor = new StubExecutor();
+		const agent = new LlmAgent({
+			name: "coder",
+			model: "gpt-4o",
+			codeExecutor: executor,
+		});
+		const artifactService = new InMemoryArtifactService();
+		const response = {
+			partial: false,
+			content: {
+				role: "model",
+				parts: [{ text: "```python\nprint(42)\n```" }],
+			},
+		} as LlmResponse;
+
+		const events = await collect(
+			responseProcessor.runAsync(
+				{
+					agent,
+					session: { id: "s1", state: {}, events: [] },
+					invocationId: "inv-code",
+					artifactService,
+					appName: "app",
+					userId: "u1",
+				} as unknown as InvocationContext,
+				response,
+			),
+		);
+
+		expect(executor.executeCode).toHaveBeenCalled();
+		expect(events).toHaveLength(2);
+		expect(response.content).toBeUndefined();
+	});
+
+	it("responseProcessor no-ops without extractable code or when retries are exhausted", async () => {
+		class StubExecutor extends BaseCodeExecutor {
+			executeCode = vi.fn(async () => ({
+				stdout: "",
+				stderr: "",
+				outputFiles: [],
+			}));
+
+			constructor(retries: number) {
+				super({
+					codeBlockDelimiters: [["```python\n", "\n```"]],
+					errorRetryAttempts: retries,
+				});
+			}
+		}
+
+		const agent = new LlmAgent({
+			name: "coder",
+			codeExecutor: new StubExecutor(2),
+		});
+
+		const noCode = await collect(
+			responseProcessor.runAsync(
+				{
+					agent,
+					session: { id: "s1", state: {}, events: [] },
+					invocationId: "inv-1",
+					artifactService: new InMemoryArtifactService(),
+					appName: "app",
+					userId: "u1",
+				} as unknown as InvocationContext,
+				{
+					partial: false,
+					content: { role: "model", parts: [{ text: "no code here" }] },
+				} as LlmResponse,
+			),
+		);
+		expect(noCode).toEqual([]);
+
+		const state = State.create({}, {});
+		const ctx = new CodeExecutorContext(state);
+		ctx.incrementErrorCount("inv-exhausted");
+		ctx.incrementErrorCount("inv-exhausted");
+		const exhaustedAgent = new LlmAgent({
+			name: "coder",
+			codeExecutor: new StubExecutor(1),
+		});
+		const exhausted = await collect(
+			responseProcessor.runAsync(
+				{
+					agent: exhaustedAgent,
+					session: { id: "s1", state, events: [] },
+					invocationId: "inv-exhausted",
+					artifactService: new InMemoryArtifactService(),
+					appName: "app",
+					userId: "u1",
+				} as unknown as InvocationContext,
+				{
+					partial: false,
+					content: {
+						role: "model",
+						parts: [{ text: "```python\nprint(1)\n```" }],
+					},
+				} as LlmResponse,
+			),
+		);
+		expect(exhausted).toEqual([]);
 	});
 });
 

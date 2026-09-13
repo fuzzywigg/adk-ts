@@ -157,4 +157,72 @@ describe("InMemoryArtifactService", () => {
 			service.loadArtifact({ ...base, filename: "bad-ref.txt" }),
 		).rejects.toThrow(/Invalid artifact reference URI/);
 	});
+
+	it("returns inlineData artifacts and no-ops delete for missing keys", async () => {
+		const service = new InMemoryArtifactService();
+		await service.saveArtifact({
+			...base,
+			filename: "blob.bin",
+			artifact: {
+				inlineData: { data: "AQID", mimeType: "application/octet-stream" },
+			},
+		});
+
+		expect(
+			await service.loadArtifact({ ...base, filename: "blob.bin" }),
+		).toEqual({
+			inlineData: { data: "AQID", mimeType: "application/octet-stream" },
+		});
+
+		await expect(
+			service.deleteArtifact({ ...base, filename: "never-saved.txt" }),
+		).resolves.toBeUndefined();
+		expect(await service.listArtifactKeys(base)).toEqual(["blob.bin"]);
+	});
+
+	it("lists keys sorted and resolves user-scoped artifact URIs", async () => {
+		const service = new InMemoryArtifactService();
+		await service.saveArtifact({
+			...base,
+			filename: "z.txt",
+			artifact: { text: "z" },
+		});
+		await service.saveArtifact({
+			...base,
+			filename: "a.txt",
+			artifact: { text: "a" },
+		});
+		await service.saveArtifact({
+			...base,
+			filename: "user:prefs.json",
+			artifact: { text: '{"theme":"dark"}' },
+		});
+
+		expect(await service.listArtifactKeys(base)).toEqual([
+			"a.txt",
+			"user:prefs.json",
+			"z.txt",
+		]);
+
+		const uri = getArtifactUri({
+			appName: base.appName,
+			userId: base.userId,
+			filename: "user:prefs.json",
+			version: 0,
+		});
+		await service.saveArtifact({
+			...base,
+			filename: "prefs-alias.txt",
+			artifact: {
+				fileData: {
+					fileUri: uri,
+					mimeType: "application/json",
+				},
+			},
+		});
+
+		expect(
+			await service.loadArtifact({ ...base, filename: "prefs-alias.txt" }),
+		).toEqual({ text: '{"theme":"dark"}' });
+	});
 });

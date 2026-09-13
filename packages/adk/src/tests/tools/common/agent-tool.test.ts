@@ -183,4 +183,60 @@ describe("AgentTool", () => {
 			"Agent tool execution failed: agent crashed",
 		);
 	});
+
+	it("returns empty string when no usable last event exists", async () => {
+		const agent = makeStubAgent({
+			name: "silent",
+			runAsync: async function* () {
+				yield new Event({
+					author: "other",
+					content: { role: "model", parts: [{ text: "ignored" }] },
+				});
+			},
+		});
+		const tool = new AgentTool({ name: "silent_tool", agent });
+		const { context } = makeToolContext(agent);
+
+		await expect(tool.runAsync({ input: "go" }, context)).resolves.toBe("");
+	});
+
+	it("parses JSON text results and falls back to first param without input", async () => {
+		const agent = makeStubAgent({
+			name: "json_agent",
+			runAsync: async function* () {
+				yield new Event({
+					author: "json_agent",
+					content: {
+						role: "model",
+						parts: [{ text: '{"answer":42}' }],
+					},
+				});
+			},
+		});
+		const tool = new AgentTool({
+			name: "json_tool",
+			agent,
+			outputKey: "parsed",
+		});
+		const { context } = makeToolContext(agent);
+
+		const result = await tool.runAsync({ topic: "numbers" }, context);
+		expect(result).toEqual({ answer: 42 });
+		expect(context.state.parsed).toEqual({ answer: 42 });
+	});
+
+	it("wraps non-Error throws from the agent", async () => {
+		const agent = makeStubAgent({
+			runAsync: async function* () {
+				await Promise.reject("string boom");
+				yield undefined as never;
+			},
+		});
+		const tool = new AgentTool({ name: "string_fail", agent });
+		const { context } = makeToolContext(agent);
+
+		await expect(tool.runAsync({ input: "go" }, context)).rejects.toThrow(
+			"Agent tool execution failed: string boom",
+		);
+	});
 });

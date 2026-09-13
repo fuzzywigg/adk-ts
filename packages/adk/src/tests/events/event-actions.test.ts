@@ -35,4 +35,23 @@ describe("EventActions", () => {
 			text: "summary",
 		});
 	});
+
+	it("stores requestedAuthConfigs when provided", () => {
+		const actions = new EventActions({
+			requestedAuthConfigs: {
+				oauth: { clientId: "cid" },
+			},
+		});
+		expect(actions.requestedAuthConfigs).toEqual({
+			oauth: { clientId: "cid" },
+		});
+	});
+
+	it("leaves optional fields undefined when omitted", () => {
+		const actions = new EventActions({});
+		expect(actions.escalate).toBeUndefined();
+		expect(actions.requestedAuthConfigs).toBeUndefined();
+		expect(actions.compaction).toBeUndefined();
+		expect(actions.rewindBeforeInvocationId).toBeUndefined();
+	});
 });

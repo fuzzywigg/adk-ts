@@ -119,4 +119,80 @@ describe("HttpRequestTool", () => {
 			error: "network down",
 		});
 	});
+
+	it("does not invent Content-Type for non-JSON bodies", async () => {
+		const tool = new HttpRequestTool();
+		const fetchMock = vi.fn().mockResolvedValue({
+			status: 200,
+			headers: new Headers(),
+			text: async () => "ok",
+		});
+		globalThis.fetch = fetchMock as typeof fetch;
+
+		await tool.runAsync(
+			{
+				url: "https://example.com/plain",
+				method: "POST",
+				body: "not-json",
+			},
+			makeContext(),
+		);
+
+		expect(fetchMock).toHaveBeenCalledWith(
+			"https://example.com/plain",
+			expect.objectContaining({
+				headers: {},
+				body: "not-json",
+			}),
+		);
+	});
+
+	it("preserves an existing Content-Type header", async () => {
+		const tool = new HttpRequestTool();
+		const fetchMock = vi.fn().mockResolvedValue({
+			status: 200,
+			headers: new Headers(),
+			text: async () => "",
+		});
+		globalThis.fetch = fetchMock as typeof fetch;
+
+		await tool.runAsync(
+			{
+				url: "https://example.com/items",
+				method: "POST",
+				headers: { "Content-Type": "text/plain" },
+				body: JSON.stringify({ a: 1 }),
+			},
+			makeContext(),
+		);
+
+		expect(fetchMock).toHaveBeenCalledWith(
+			"https://example.com/items",
+			expect.objectContaining({
+				headers: { "Content-Type": "text/plain" },
+			}),
+		);
+	});
+
+	it("returns structured errors for invalid URLs and non-Error rejects", async () => {
+		const tool = new HttpRequestTool();
+
+		await expect(
+			tool.runAsync({ url: "not-a-url" }, makeContext()),
+		).resolves.toMatchObject({
+			statusCode: 0,
+			body: "",
+			error: expect.stringMatching(/Invalid URL|Failed to construct/i),
+		});
+
+		globalThis.fetch = vi.fn().mockRejectedValue("boom") as typeof fetch;
+		await expect(
+			tool.runAsync({ url: "https://example.com/x" }, makeContext()),
+		).resolves.toEqual({
+			statusCode: 0,
+			headers: {},
+			body: "",
+			error: "boom",
+		});
+	});
 });

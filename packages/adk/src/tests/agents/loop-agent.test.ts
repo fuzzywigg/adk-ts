@@ -121,6 +121,36 @@ describe("LoopAgent", () => {
 			expect(yieldedEvents.pop()).toBe(escalateEvent);
 		});
 
+		it("skips later subagents in the same iteration when escalate fires first", async () => {
+			const agent = new LoopAgent({
+				name: "testloop",
+				description: "desc",
+				subAgents: [subAgent1, subAgent2],
+				maxIterations: 5,
+			});
+
+			const escalateEvent = new Event({
+				author: "subAgent1",
+				actions: { escalate: true, stateDelta: {}, artifactDelta: {} },
+			});
+
+			subAgent1.runAsync.mockImplementation(async function* () {
+				yield escalateEvent;
+			});
+			subAgent2.runAsync.mockImplementation(async function* () {
+				yield new Event({ author: "subAgent2" });
+			});
+
+			const yielded: Event[] = [];
+			for await (const event of agent["runAsyncImpl"](mockContext)) {
+				yielded.push(event);
+			}
+
+			expect(yielded).toEqual([escalateEvent]);
+			expect(subAgent1.runAsync).toHaveBeenCalledTimes(1);
+			expect(subAgent2.runAsync).not.toHaveBeenCalled();
+		});
+
 		it("should run indefinitely if maxIterations is not set (tested with a limit)", async () => {
 			const agent = new LoopAgent({
 				name: "testloop",

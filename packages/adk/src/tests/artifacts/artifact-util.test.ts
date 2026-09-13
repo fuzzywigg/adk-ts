@@ -36,11 +36,21 @@ describe("parseArtifactUri", () => {
 			"artifact://app1/user1/sessions/session1/artifacts/file1",
 			"artifact://apps/app1/users/user1/sessions/session1/artifacts/file1",
 			"artifact://apps/app1/users/user1/artifacts/file1",
+			"",
+			"artifact://",
 		];
 
 		for (const uri of invalidUris) {
 			expect(parseArtifactUri(uri)).toBeNull();
 		}
+	});
+
+	it("rejects non-numeric version segments", () => {
+		expect(
+			parseArtifactUri(
+				"artifact://apps/app1/users/user1/artifacts/file1/versions/abc",
+			),
+		).toBeNull();
 	});
 });
 
@@ -91,6 +101,12 @@ describe("isArtifactRef", () => {
 			{
 				fileData: {
 					fileUri: "http://example.com",
+					mimeType: "text/plain",
+				},
+			},
+			{
+				fileData: {
+					fileUri: "",
 					mimeType: "text/plain",
 				},
 			},

@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { AgentLoader } from "../../../http/providers/agent-loader.service";
+import { CacheUtils } from "../../../http/providers/agent-loader/cache-utils";
 
 vi.mock("@nestjs/common", async () => {
 	const actual =
@@ -97,5 +98,44 @@ describe("AgentLoader", () => {
 		await expect(
 			loader.importTypeScriptFile(agentFile, root, true),
 		).rejects.toThrow(/Failed to import TS agent via esbuild/);
+	});
+
+	it("reuses cached build output on a second import", async () => {
+		const root = mkdtempSync(join(tmpdir(), "adk-loader-cache-"));
+		dirs.push(root);
+		writeFileSync(
+			join(root, "package.json"),
+			JSON.stringify({ name: "loader-cache" }),
+		);
+		writeFileSync(join(root, "tsconfig.json"), JSON.stringify({}));
+		const agentDir = join(root, "agents", "cached");
+		mkdirSync(agentDir, { recursive: true });
+		const agentFile = join(agentDir, "agent.ts");
+		writeFileSync(agentFile, `export const agent = { name: "cached_demo" };`);
+
+		const loader = new AgentLoader(true);
+		const first = await loader.importTypeScriptFile(agentFile, root, true);
+		expect((first as any).agent?.name || (first as any).default?.name).toBe(
+			"cached_demo",
+		);
+
+		const esbuild = await import("esbuild");
+		const buildSpy = vi.spyOn(esbuild, "build");
+
+		const second = await loader.importTypeScriptFile(agentFile, root, false);
+		expect((second as any).agent?.name || (second as any).default?.name).toBe(
+			"cached_demo",
+		);
+		expect(buildSpy).not.toHaveBeenCalled();
+		buildSpy.mockRestore();
+	});
+
+	it("cleanupAllCacheFiles delegates to CacheUtils", () => {
+		const spy = vi
+			.spyOn(CacheUtils, "cleanupAllCacheFiles")
+			.mockImplementation(() => undefined);
+		AgentLoader.cleanupAllCacheFiles(undefined, true);
+		expect(spy).toHaveBeenCalledWith(undefined, true);
+		spy.mockRestore();
 	});
 });

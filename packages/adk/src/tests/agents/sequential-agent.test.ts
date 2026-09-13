@@ -161,5 +161,27 @@ describe("SequentialAgent", () => {
 			expect(llmAgent.tools).toHaveLength(1);
 			expect(llmAgent.instruction).toBe("Already set.");
 		});
+
+		it("forwards non-LlmAgent subagents without injecting taskCompleted", async () => {
+			const plain = new MockSubAgent("plain");
+			const liveEvent = new Event({ author: "plain" });
+			plain.runLive.mockImplementation(async function* () {
+				yield liveEvent;
+			});
+
+			const agent = new SequentialAgent({
+				name: "seq",
+				description: "desc",
+				subAgents: [plain],
+			});
+
+			const yielded: Event[] = [];
+			for await (const event of agent["runLiveImpl"](mockContext)) {
+				yielded.push(event);
+			}
+
+			expect(plain.runLive).toHaveBeenCalledWith(mockContext);
+			expect(yielded).toEqual([liveEvent]);
+		});
 	});
 });

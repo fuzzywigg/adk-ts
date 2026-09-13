@@ -39,4 +39,31 @@ describe("LoadMemoryTool", () => {
 			message: "offline",
 		});
 	});
+
+	it("treats missing memories as empty list", async () => {
+		const tool = new LoadMemoryTool();
+		const context = {
+			actions: {},
+			searchMemory: vi.fn().mockResolvedValue({ memories: undefined }),
+		} as unknown as ToolContext;
+
+		await expect(tool.runAsync({ query: "none" }, context)).resolves.toEqual({
+			memories: [],
+			count: 0,
+		});
+	});
+
+	it("stringifies non-Error rejection reasons", async () => {
+		const tool = new LoadMemoryTool();
+		const context = {
+			actions: {},
+			searchMemory: vi.fn().mockRejectedValue("backend down"),
+		} as unknown as ToolContext;
+		vi.spyOn(console, "error").mockImplementation(() => {});
+
+		await expect(tool.runAsync({ query: "x" }, context)).resolves.toEqual({
+			error: "Memory search failed",
+			message: "backend down",
+		});
+	});
 });

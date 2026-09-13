@@ -70,4 +70,53 @@ describe("createTool", () => {
 		const result = await tool.runAsync({}, makeContext());
 		expect(result).toEqual({ error: "Error executing boom_tool: nope" });
 	});
+
+	it("awaits async fn and coalesces null/undefined to empty object", async () => {
+		const asyncTool = createTool({
+			name: "async_echo",
+			description: "Async echo",
+			schema: z.object({ value: z.string() }),
+			fn: async ({ value }) => {
+				await Promise.resolve();
+				return { value };
+			},
+		});
+		await expect(
+			asyncTool.runAsync({ value: "ok" }, makeContext()),
+		).resolves.toEqual({ value: "ok" });
+
+		const nullTool = createTool({
+			name: "null_tool",
+			description: "Returns null",
+			fn: () => null,
+		});
+		await expect(nullTool.runAsync({}, makeContext())).resolves.toEqual({});
+
+		const undefTool = createTool({
+			name: "undef_tool",
+			description: "Returns undefined",
+			fn: () => undefined,
+		});
+		await expect(undefTool.runAsync({}, makeContext())).resolves.toEqual({});
+	});
+
+	it("stringifies non-Error throws and passes retry/long-running flags", async () => {
+		const tool = createTool({
+			name: "throw_string",
+			description: "Throws a string",
+			isLongRunning: true,
+			shouldRetryOnFailure: true,
+			maxRetryAttempts: 7,
+			fn: () => {
+				throw "plain failure";
+			},
+		});
+
+		expect(tool.isLongRunning).toBe(true);
+		expect(tool.shouldRetryOnFailure).toBe(true);
+		expect(tool.maxRetryAttempts).toBe(7);
+		await expect(tool.runAsync({}, makeContext())).resolves.toEqual({
+			error: "Error executing throw_string: plain failure",
+		});
+	});
 });

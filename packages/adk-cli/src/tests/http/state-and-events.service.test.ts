@@ -54,6 +54,28 @@ describe("StateService", () => {
 			2,
 		);
 	});
+
+	it("propagates getState results including nested metadata", async () => {
+		const loaded = { sessionId: "s2" } as LoadedAgent;
+		const payload = {
+			agentState: { a: 1 },
+			userState: { u: 2 },
+			sessionState: { nested: { k: "v" } },
+			metadata: {
+				lastUpdated: 99,
+				changeCount: 3,
+				totalKeys: 2,
+				sizeBytes: 40,
+			},
+		};
+		const sessionsService = {
+			ensureAgentLoaded: vi.fn().mockResolvedValue(loaded),
+			getSessionState: vi.fn().mockResolvedValue(payload),
+			updateSessionState: vi.fn(),
+		};
+		const service = new StateService(sessionsService as never);
+		await expect(service.getState("demo", "s2")).resolves.toEqual(payload);
+	});
 });
 
 describe("EventsService", () => {
@@ -67,6 +89,7 @@ describe("EventsService", () => {
 			events: [],
 			totalCount: 0,
 		});
+		expect(sessionsService.getSessionEvents).not.toHaveBeenCalled();
 	});
 
 	it("delegates to SessionsService.getSessionEvents", async () => {
@@ -84,5 +107,21 @@ describe("EventsService", () => {
 			totalCount: 1,
 		});
 		expect(sessionsService.getSessionEvents).toHaveBeenCalledWith(loaded, "s1");
+	});
+
+	it("forwards empty event lists from SessionsService", async () => {
+		const loaded = { sessionId: "empty" } as LoadedAgent;
+		const sessionsService = {
+			ensureAgentLoaded: vi.fn().mockResolvedValue(loaded),
+			getSessionEvents: vi.fn().mockResolvedValue({
+				events: [],
+				totalCount: 0,
+			}),
+		};
+		const service = new EventsService(sessionsService as never);
+		await expect(service.getEvents("demo", "empty")).resolves.toEqual({
+			events: [],
+			totalCount: 0,
+		});
 	});
 });
