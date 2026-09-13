@@ -22,3 +22,9 @@ A robust multi-provider TypeScript framework for building AI agents, supporting 
 - Breaking changes to provider integrations
 - Secrets handling or credential configuration
 - New provider integrations
+
+## Local verification
+- Install: `pnpm install --frozen-lockfile` (see `.cursor/environment.json`)
+- Lint: `pnpm exec biome lint .`
+- Build: `pnpm build`
+- Test: `pnpm test`

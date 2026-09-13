@@ -78,10 +78,10 @@ export class LoopAgent extends BaseAgent {
 	/**
 	 * Core logic to run this agent via video/audio-based conversation
 	 */
+	// biome-ignore lint/correctness/useYield: not supported yet; AsyncGenerator kept for base class parity
 	protected async *runLiveImpl(
 		_ctx: InvocationContext,
 	): AsyncGenerator<Event, void, unknown> {
 		throw new Error("This is not supported yet for LoopAgent.");
-		// biome-ignore lint/correctness/useYield: AsyncGenerator requires having at least one yield statement
 	}
 }

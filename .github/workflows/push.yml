@@ -26,7 +26,6 @@ jobs:
           cd packages/adk
           pnpm add @rollup/rollup-linux-x64-gnu --save-optional || true
       - name: Biome Lint Check
-        run: pnpm lint-staged
+        run: pnpm lint
       - name: ADK tests
         run: pnpm test
-        working-directory: ./packages/adk
