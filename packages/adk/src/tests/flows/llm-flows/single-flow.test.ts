@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
-import { SingleFlow } from "../../../flows/llm-flows/single-flow";
+import { SingleFlow } from "@adk/flows";
 
-vi.mock("../../../logger", () => ({
+vi.mock("@adk/logger", () => ({
 	Logger: vi.fn(() => ({
 		debug: vi.fn(),
 		error: vi.fn(),

@@ -1,9 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
-import { AutoFlow } from "../../../flows/llm-flows/auto-flow";
-import { SingleFlow } from "../../../flows/llm-flows/single-flow";
+import { AutoFlow, SingleFlow } from "@adk/flows";
 import { requestProcessor as agentTransferRequestProcessor } from "../../../flows/llm-flows/agent-transfer";
 
-vi.mock("../../../logger", () => ({
+vi.mock("@adk/logger", () => ({
 	Logger: vi.fn(() => ({
 		debug: vi.fn(),
 		error: vi.fn(),

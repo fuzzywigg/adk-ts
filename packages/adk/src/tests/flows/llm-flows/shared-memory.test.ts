@@ -63,7 +63,7 @@ describe("sharedMemoryRequestProcessor", () => {
 		});
 
 		await drain(sharedMemoryRequestProcessor.runAsync(context, llmRequest));
-		expect(llmRequest.contents).toBeUndefined();
+		expect(llmRequest.contents).toEqual([]);
 	});
 
 	it("is a no-op without last user event", async () => {
@@ -80,7 +80,7 @@ describe("sharedMemoryRequestProcessor", () => {
 
 		await drain(sharedMemoryRequestProcessor.runAsync(context, llmRequest));
 		expect(searchMemory).not.toHaveBeenCalled();
-		expect(llmRequest.contents).toBeUndefined();
+		expect(llmRequest.contents).toEqual([]);
 	});
 
 	it("injects memory contents not already in llmRequest.contents", async () => {

@@ -74,7 +74,7 @@ describe("contents requestProcessor", () => {
 		await drain(
 			requestProcessor.runAsync(makeContext({ name: "plain" }), llmRequest),
 		);
-		expect(llmRequest.contents).toBeUndefined();
+		expect(llmRequest.contents).toEqual([]);
 	});
 
 	it('includeContents "default" builds contents from session events', async () => {
@@ -117,7 +117,7 @@ describe("contents requestProcessor", () => {
 			),
 		);
 
-		expect(llmRequest.contents).toBeUndefined();
+		expect(llmRequest.contents).toEqual([]);
 	});
 
 	it("other includeContents uses current turn contents only", async () => {
