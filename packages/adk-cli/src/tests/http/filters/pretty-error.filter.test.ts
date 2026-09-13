@@ -103,7 +103,7 @@ describe("PrettyErrorFilter", () => {
 
 	it("categorizes session errors", () => {
 		const filter = new PrettyErrorFilter(false);
-		const { host, status, json } = createHost();
+		const { host, json } = createHost();
 		filter.catch(new Error("Session expired"), host);
 
 		expect(json).toHaveBeenCalledWith(
@@ -113,7 +113,7 @@ describe("PrettyErrorFilter", () => {
 
 	it("categorizes runtime / execution errors", () => {
 		const filter = new PrettyErrorFilter(false);
-		const { host, status, json } = createHost();
+		const { host, json } = createHost();
 		filter.catch(new Error("Failed executing agent runtime step"), host);
 
 		expect(json).toHaveBeenCalledWith(
