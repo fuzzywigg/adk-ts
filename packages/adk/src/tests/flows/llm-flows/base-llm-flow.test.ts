@@ -1,9 +1,16 @@
 import type { BaseAgent, InvocationContext } from "@adk/agents";
+import { StreamingMode } from "@adk/agents/run-config";
 import { Event } from "@adk/events";
+import { EventActions } from "@adk/events/event-actions";
 import { SingleFlow } from "@adk/flows";
 import type { LlmResponse } from "@adk/models";
 import { LlmRequest } from "@adk/models";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+
+const handleFunctionCallsAsyncMock = vi.hoisted(() => vi.fn());
+const generateAuthEventMock = vi.hoisted(() => vi.fn());
+const populateClientFunctionCallIdMock = vi.hoisted(() => vi.fn());
+const getLongRunningFunctionCallsMock = vi.hoisted(() => vi.fn());
 
 vi.mock("@adk/helpers/logger", () => ({
 	Logger: vi.fn(() => ({
@@ -26,6 +33,18 @@ vi.mock("@adk/logger", () => ({
 		debugStructured: vi.fn(),
 	})),
 }));
+
+vi.mock("@adk/flows/llm-flows/functions", async (importOriginal) => {
+	const actual =
+		await importOriginal<typeof import("@adk/flows/llm-flows/functions")>();
+	return {
+		...actual,
+		handleFunctionCallsAsync: handleFunctionCallsAsyncMock,
+		generateAuthEvent: generateAuthEventMock,
+		populateClientFunctionCallId: populateClientFunctionCallIdMock,
+		getLongRunningFunctionCalls: getLongRunningFunctionCallsMock,
+	};
+});
 
 class TestLlmFlow extends SingleFlow {
 	public _runOneStepAsync = vi.fn();
@@ -51,11 +70,24 @@ async function collect<T>(gen: AsyncGenerator<T>): Promise<T[]> {
 	return items;
 }
 
+beforeEach(() => {
+	handleFunctionCallsAsyncMock.mockReset();
+	generateAuthEventMock.mockReset();
+	populateClientFunctionCallIdMock.mockReset();
+	getLongRunningFunctionCallsMock.mockReset();
+	getLongRunningFunctionCallsMock.mockReturnValue(new Set());
+});
+
 describe("BaseLlmFlow.runAsync", () => {
 	let flow: TestLlmFlow;
 
 	beforeEach(() => {
 		vi.clearAllMocks();
+		handleFunctionCallsAsyncMock.mockReset();
+		generateAuthEventMock.mockReset();
+		populateClientFunctionCallIdMock.mockReset();
+		getLongRunningFunctionCallsMock.mockReset();
+		getLongRunningFunctionCallsMock.mockReturnValue(new Set());
 		flow = new TestLlmFlow();
 	});
 
@@ -471,5 +503,588 @@ describe("BaseLlmFlow._callLlmAsync", () => {
 		const tools = llmRequest.config?.tools as any[];
 		expect(tools.some((t) => t?.functionDeclarations?.length === 2)).toBe(true);
 		expect(tools.some((t) => t?.name === "gamma")).toBe(true);
+	});
+
+	it("passes isStreaming=true for SSE and yields after-callback alterations across chunks", async () => {
+		const flow = new InspectableFlow();
+		const chunk1 = {
+			content: { parts: [{ text: "a" }] },
+			partial: true,
+		};
+		const chunk2 = {
+			content: { parts: [{ text: "b" }] },
+			finishReason: "STOP",
+		};
+		const altered = { content: { parts: [{ text: "altered-b" }] } };
+		const generateContentAsync = vi.fn(async function* (
+			_req: unknown,
+			streaming?: boolean,
+		) {
+			expect(streaming).toBe(true);
+			yield chunk1;
+			yield chunk2;
+		});
+		const agent = {
+			name: "sse-agent",
+			canonicalModel: { model: "m", generateContentAsync },
+			canonicalAfterModelCallbacks: [
+				({ llmResponse }: { llmResponse: LlmResponse }) =>
+					llmResponse === chunk2 ? altered : undefined,
+			],
+		};
+		const ctx = makeCtx({
+			agent,
+			runConfig: { streamingMode: StreamingMode.SSE },
+		});
+
+		const responses = await collect(
+			flow._callLlmAsync(
+				ctx,
+				new LlmRequest(),
+				new Event({ id: "sse-1", author: "sse-agent" }),
+			),
+		);
+
+		expect(responses).toEqual([chunk1, altered]);
+		expect(generateContentAsync).toHaveBeenCalledWith(expect.anything(), true);
+	});
+
+	it("formats nested tool names and empty contents as none", async () => {
+		const flow = new InspectableFlow();
+		const llmResponse = { content: { parts: [{ text: "ok" }] } };
+		const agent = {
+			name: "tool-shape-agent",
+			canonicalModel: {
+				model: "m",
+				generateContentAsync: vi.fn(async function* () {
+					yield llmResponse;
+				}),
+			},
+		};
+		const ctx = makeCtx({ agent });
+		const llmRequest = new LlmRequest();
+		llmRequest.config = {
+			labels: { adk_agent_name: "prelabeled" },
+			tools: [
+				{ function: { name: "nestedFn" } },
+				{ function: { function: { name: "doubleNested" } } },
+				{ other: true },
+			],
+		} as any;
+
+		const responses = await collect(
+			flow._callLlmAsync(
+				ctx,
+				llmRequest,
+				new Event({ id: "t1", author: "tool-shape-agent" }),
+			),
+		);
+
+		expect(responses).toEqual([llmResponse]);
+		expect(llmRequest.config?.labels?.adk_agent_name).toBe("prelabeled");
+	});
+
+	it("returns early when before/after callback lists are nullish", async () => {
+		const flow = new InspectableFlow();
+		const agent = {
+			name: "null-cb-agent",
+			canonicalBeforeModelCallbacks: null,
+			canonicalAfterModelCallbacks: null,
+			canonicalModel: {
+				model: "m",
+				generateContentAsync: vi.fn(async function* () {
+					yield { content: { parts: [{ text: "raw" }] } };
+				}),
+			},
+		};
+		const ctx = makeCtx({ agent });
+		const responses = await collect(
+			flow._callLlmAsync(
+				ctx,
+				new LlmRequest(),
+				new Event({ author: "null-cb-agent" }),
+			),
+		);
+		expect(responses).toHaveLength(1);
+		expect((responses[0] as LlmResponse).content?.parts?.[0]).toEqual({
+			text: "raw",
+		});
+	});
+
+	it("awaits async before-model callbacks before short-circuiting", async () => {
+		const flow = new InspectableFlow();
+		const cached = { content: { parts: [{ text: "async-cached" }] } };
+		const agent = {
+			name: "async-before",
+			canonicalBeforeModelCallbacks: [async () => cached],
+			canonicalModel: {
+				model: "m",
+				generateContentAsync: vi.fn(async function* () {
+					yield { content: { parts: [{ text: "model" }] } };
+				}),
+			},
+		};
+		const ctx = makeCtx({ agent });
+		const responses = await collect(
+			flow._callLlmAsync(
+				ctx,
+				new LlmRequest(),
+				new Event({ author: "async-before" }),
+			),
+		);
+		expect(responses).toEqual([cached]);
+		expect(agent.canonicalModel.generateContentAsync).not.toHaveBeenCalled();
+	});
+});
+
+describe("BaseLlmFlow._runOneStepAsync model + postprocess", () => {
+	it("yields model text through postprocess end-to-end", async () => {
+		const flow = new InspectableFlow();
+		flow.requestProcessors = [];
+		flow.responseProcessors = [];
+		const agent = {
+			name: "one-step",
+			canonicalTools: async () => [],
+			canonicalModel: {
+				model: "fake",
+				generateContentAsync: vi.fn(async function* () {
+					yield {
+						content: { role: "model", parts: [{ text: "hello world" }] },
+						finishReason: "STOP",
+					};
+				}),
+			},
+		};
+		const ctx = makeCtx({ agent });
+
+		const events = await collect(flow._runOneStepAsync(ctx));
+		expect(events).toHaveLength(1);
+		expect(events[0].content?.parts?.[0]).toEqual({ text: "hello world" });
+		expect(events[0].author).toBe("one-step");
+		expect(ctx.incrementLlmCallCount).toHaveBeenCalledTimes(1);
+	});
+
+	it("yields response-processor events before the finalized model event", async () => {
+		const flow = new InspectableFlow();
+		flow.requestProcessors = [];
+		const processorEvent = new Event({ author: "resp-processor" });
+		flow.responseProcessors = [
+			{
+				runAsync: async function* () {
+					yield processorEvent;
+				},
+			},
+		];
+		const agent = {
+			name: "proc-agent",
+			canonicalTools: async () => [],
+			canonicalModel: {
+				model: "fake",
+				generateContentAsync: vi.fn(async function* () {
+					yield { content: { role: "model", parts: [{ text: "x" }] } };
+				}),
+			},
+		};
+
+		const events = await collect(flow._runOneStepAsync(makeCtx({ agent })));
+		expect(events[0]).toBe(processorEvent);
+		expect(events[1].content?.parts?.[0]).toEqual({ text: "x" });
+	});
+
+	it("handles function-call responses via handleFunctionCallsAsync", async () => {
+		const flow = new InspectableFlow();
+		flow.requestProcessors = [];
+		flow.responseProcessors = [];
+		const functionResponse = new Event({
+			author: "one-step",
+			content: {
+				role: "user",
+				parts: [
+					{ functionResponse: { name: "search", response: { ok: true } } },
+				],
+			},
+		});
+		handleFunctionCallsAsyncMock.mockResolvedValue(functionResponse);
+		generateAuthEventMock.mockReturnValue(null);
+
+		const agent = {
+			name: "one-step",
+			canonicalTools: async () => [],
+			canonicalModel: {
+				model: "fake",
+				generateContentAsync: vi.fn(async function* () {
+					yield {
+						content: {
+							role: "model",
+							parts: [
+								{
+									functionCall: {
+										name: "search",
+										args: { q: "adk" },
+										id: "call-1",
+									},
+								},
+							],
+						},
+					};
+				}),
+			},
+		};
+
+		const events = await collect(flow._runOneStepAsync(makeCtx({ agent })));
+		expect(events.length).toBeGreaterThanOrEqual(2);
+		expect(events[0].getFunctionCalls()?.[0]?.name).toBe("search");
+		expect(events).toContain(functionResponse);
+		expect(handleFunctionCallsAsyncMock).toHaveBeenCalled();
+		expect(populateClientFunctionCallIdMock).toHaveBeenCalled();
+	});
+});
+
+describe("BaseLlmFlow._postprocessHandleFunctionCallsAsync", () => {
+	it("yields nothing when handleFunctionCallsAsync returns null", async () => {
+		const flow = new InspectableFlow();
+		handleFunctionCallsAsyncMock.mockResolvedValue(null);
+		const callEvent = new Event({
+			author: "agent",
+			content: {
+				parts: [{ functionCall: { name: "noop", args: {}, id: "c1" } }],
+			},
+		});
+
+		const events = await collect(
+			flow._postprocessHandleFunctionCallsAsync(
+				mockContext,
+				callEvent,
+				new LlmRequest(),
+			),
+		);
+		expect(events).toEqual([]);
+	});
+
+	it("yields auth event before the function response when present", async () => {
+		const flow = new InspectableFlow();
+		const functionResponse = new Event({
+			author: "agent",
+			content: {
+				parts: [{ functionResponse: { name: "tool", response: {} } }],
+			},
+		});
+		const authEvent = new Event({ author: "user", id: "auth-1" });
+		handleFunctionCallsAsyncMock.mockResolvedValue(functionResponse);
+		generateAuthEventMock.mockReturnValue(authEvent);
+
+		const events = await collect(
+			flow._postprocessHandleFunctionCallsAsync(
+				mockContext,
+				new Event({ author: "agent" }),
+				new LlmRequest(),
+			),
+		);
+
+		expect(events).toEqual([authEvent, functionResponse]);
+	});
+
+	it("transfers to another agent when actions.transferToAgent is set", async () => {
+		const flow = new InspectableFlow();
+		const transferEvent = new Event({ author: "child", id: "child-evt" });
+		const child = {
+			name: "child",
+			runAsync: vi.fn(async function* () {
+				yield transferEvent;
+			}),
+		};
+		const root = {
+			name: "root",
+			findAgent: vi.fn((name: string) =>
+				name === "child" ? child : undefined,
+			),
+		};
+		const functionResponse = new Event({
+			author: "root",
+			actions: new EventActions({ transferToAgent: "child" }),
+			content: {
+				parts: [{ functionResponse: { name: "transfer", response: {} } }],
+			},
+		});
+		handleFunctionCallsAsyncMock.mockResolvedValue(functionResponse);
+		generateAuthEventMock.mockReturnValue(null);
+
+		const ctx = makeCtx({
+			agent: { name: "root", rootAgent: root },
+		});
+
+		const events = await collect(
+			flow._postprocessHandleFunctionCallsAsync(
+				ctx,
+				new Event({ author: "root" }),
+				new LlmRequest(),
+			),
+		);
+
+		expect(events).toEqual([functionResponse, transferEvent]);
+		expect(child.runAsync).toHaveBeenCalledWith(ctx);
+	});
+
+	it("stops after function response when there is no transfer", async () => {
+		const flow = new InspectableFlow();
+		const functionResponse = new Event({
+			author: "agent",
+			actions: new EventActions({}),
+			content: {
+				parts: [{ functionResponse: { name: "tool", response: { v: 1 } } }],
+			},
+		});
+		handleFunctionCallsAsyncMock.mockResolvedValue(functionResponse);
+		generateAuthEventMock.mockReturnValue(null);
+
+		const events = await collect(
+			flow._postprocessHandleFunctionCallsAsync(
+				mockContext,
+				new Event({ author: "agent" }),
+				new LlmRequest(),
+			),
+		);
+		expect(events).toEqual([functionResponse]);
+	});
+});
+
+describe("BaseLlmFlow._postprocessLive", () => {
+	it("skips when response has no content, error, interrupt, or turnComplete", async () => {
+		const flow = new InspectableFlow();
+		flow.responseProcessors = [];
+		const events = await collect(
+			flow._postprocessLive(
+				mockContext,
+				new LlmRequest(),
+				{} as LlmResponse,
+				new Event({ author: "agent" }),
+			),
+		);
+		expect(events).toEqual([]);
+	});
+
+	it("finalizes and yields when only turnComplete is set", async () => {
+		const flow = new InspectableFlow();
+		flow.responseProcessors = [];
+		const events = await collect(
+			flow._postprocessLive(
+				mockContext,
+				new LlmRequest(),
+				{ turnComplete: true } as any,
+				new Event({ id: "live-1", author: "agent", invocationId: "inv" }),
+			),
+		);
+		expect(events).toHaveLength(1);
+		expect(events[0].author).toBe("agent");
+	});
+
+	it("handles live function calls and prefers agentToRun.runLive", async () => {
+		const flow = new InspectableFlow();
+		flow.responseProcessors = [];
+		const liveChildEvent = new Event({ author: "child", id: "live-child" });
+		const child = {
+			name: "child",
+			runLive: vi.fn(async function* () {
+				yield liveChildEvent;
+			}),
+			runAsync: vi.fn(async function* () {
+				yield new Event({ author: "child-async" });
+			}),
+		};
+		const root = {
+			name: "root",
+			findAgent: vi.fn(() => child),
+		};
+		const functionResponse = new Event({
+			author: "root",
+			actions: new EventActions({ transferToAgent: "child" }),
+			content: {
+				parts: [{ functionResponse: { name: "transfer", response: {} } }],
+			},
+		});
+		handleFunctionCallsAsyncMock.mockResolvedValue(functionResponse);
+
+		const ctx = makeCtx({ agent: { name: "root", rootAgent: root } });
+		const llmResponse = {
+			content: {
+				role: "model",
+				parts: [
+					{ functionCall: { name: "transfer", args: {}, id: "fc-live" } },
+				],
+			},
+		} as LlmResponse;
+
+		const events = await collect(
+			flow._postprocessLive(
+				ctx,
+				new LlmRequest(),
+				llmResponse,
+				new Event({ id: "m", author: "root" }),
+			),
+		);
+
+		expect(events[0].getFunctionCalls()?.[0]?.name).toBe("transfer");
+		expect(events).toContain(functionResponse);
+		expect(events).toContain(liveChildEvent);
+		expect(child.runLive).toHaveBeenCalled();
+		expect(child.runAsync).not.toHaveBeenCalled();
+	});
+
+	it("falls back to runAsync when runLive is unavailable", async () => {
+		const flow = new InspectableFlow();
+		flow.responseProcessors = [];
+		const asyncChildEvent = new Event({ author: "child", id: "async-child" });
+		const child = {
+			name: "child",
+			runAsync: vi.fn(async function* () {
+				yield asyncChildEvent;
+			}),
+		};
+		const root = {
+			name: "root",
+			findAgent: vi.fn(() => child),
+		};
+		const functionResponse = new Event({
+			author: "root",
+			actions: new EventActions({ transferToAgent: "child" }),
+			content: {
+				parts: [{ functionResponse: { name: "transfer", response: {} } }],
+			},
+		});
+		handleFunctionCallsAsyncMock.mockResolvedValue(functionResponse);
+
+		const ctx = makeCtx({ agent: { name: "root", rootAgent: root } });
+		const events = await collect(
+			flow._postprocessLive(
+				ctx,
+				new LlmRequest(),
+				{
+					content: {
+						parts: [{ functionCall: { name: "transfer", args: {}, id: "x" } }],
+					},
+				} as LlmResponse,
+				new Event({ id: "m", author: "root" }),
+			),
+		);
+
+		expect(events).toContain(asyncChildEvent);
+		expect(child.runAsync).toHaveBeenCalled();
+	});
+
+	it("does not transfer when function response is null", async () => {
+		const flow = new InspectableFlow();
+		flow.responseProcessors = [];
+		handleFunctionCallsAsyncMock.mockResolvedValue(null);
+
+		const events = await collect(
+			flow._postprocessLive(
+				mockContext,
+				new LlmRequest(),
+				{
+					content: {
+						parts: [{ functionCall: { name: "tool", args: {}, id: "y" } }],
+					},
+				} as LlmResponse,
+				new Event({ id: "m", author: "agent" }),
+			),
+		);
+
+		expect(events).toHaveLength(1);
+		expect(events[0].getFunctionCalls()?.[0]?.name).toBe("tool");
+	});
+});
+
+describe("BaseLlmFlow._finalizeModelResponseEvent long-running tools", () => {
+	it("populates client call ids and longRunningToolIds for function calls", () => {
+		const flow = new InspectableFlow();
+		const longRunningIds = new Set(["call-lr"]);
+		getLongRunningFunctionCallsMock.mockReturnValue(longRunningIds);
+
+		const llmRequest = new LlmRequest();
+		llmRequest.toolsDict = {
+			slow: { name: "slow", isLongRunning: true },
+		} as any;
+
+		const modelEvent = new Event({ id: "me", author: "agent" });
+		const llmResponse = {
+			content: {
+				role: "model",
+				parts: [{ functionCall: { name: "slow", args: {}, id: "call-lr" } }],
+			},
+		} as LlmResponse;
+
+		const finalized = flow._finalizeModelResponseEvent(
+			llmRequest,
+			llmResponse,
+			modelEvent,
+		);
+
+		expect(populateClientFunctionCallIdMock).toHaveBeenCalledWith(finalized);
+		expect(getLongRunningFunctionCallsMock).toHaveBeenCalled();
+		expect(finalized.longRunningToolIds).toBe(longRunningIds);
+	});
+
+	it("still finalizes when content has no function calls (empty getFunctionCalls is truthy)", () => {
+		const flow = new InspectableFlow();
+		const emptyIds = new Set<string>();
+		getLongRunningFunctionCallsMock.mockReturnValue(emptyIds);
+
+		const finalized = flow._finalizeModelResponseEvent(
+			new LlmRequest(),
+			{ content: { role: "model", parts: [{ text: "plain" }] } } as LlmResponse,
+			new Event({ id: "me", author: "agent" }),
+		);
+
+		expect(populateClientFunctionCallIdMock).toHaveBeenCalledWith(finalized);
+		expect(getLongRunningFunctionCallsMock).toHaveBeenCalledWith([], {});
+		expect(finalized.longRunningToolIds).toBe(emptyIds);
+		expect(finalized.content?.parts?.[0]).toEqual({ text: "plain" });
+	});
+});
+
+describe("BaseLlmFlow._postprocessAsync function-call path", () => {
+	it("yields processor events, finalized call, and handler results", async () => {
+		const flow = new InspectableFlow();
+		const processorEvent = new Event({ author: "rp" });
+		flow.responseProcessors = [
+			{
+				runAsync: async function* () {
+					yield processorEvent;
+				},
+			},
+		];
+		const functionResponse = new Event({
+			author: "agent",
+			content: {
+				parts: [{ functionResponse: { name: "f", response: {} } }],
+			},
+		});
+		handleFunctionCallsAsyncMock.mockResolvedValue(functionResponse);
+		generateAuthEventMock.mockReturnValue(null);
+
+		const events = await collect(
+			flow._postprocessAsync(
+				mockContext,
+				new LlmRequest(),
+				{
+					content: {
+						parts: [
+							{
+								functionCall: {
+									name: "f",
+									args: { a: "1".repeat(120) },
+									id: "fc",
+								},
+							},
+						],
+					},
+				} as LlmResponse,
+				new Event({ id: "m", author: "agent" }),
+			),
+		);
+
+		expect(events[0]).toBe(processorEvent);
+		expect(events[1].getFunctionCalls()?.[0]?.name).toBe("f");
+		expect(events[2]).toBe(functionResponse);
 	});
 });
