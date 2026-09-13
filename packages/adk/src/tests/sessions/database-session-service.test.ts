@@ -271,4 +271,149 @@ describe("DatabaseSessionService (sqlite :memory:)", () => {
 			(await service.listSessions("app", "bob")).sessions.map((s) => s.id),
 		).toEqual(["b1"]);
 	});
+
+	it("round-trips grounding metadata and error string fields", async () => {
+		const session = await service.createSession("app", "user", {}, "s-meta");
+		const event = new Event({
+			author: "agent",
+			invocationId: "inv-meta",
+			content: { role: "model", parts: [{ text: "meta" }] },
+		});
+		event.groundingMetadata = {
+			searchEntryPoint: { renderedContent: "src" },
+		} as any;
+		event.errorCode = "E_TEST";
+		event.errorMessage = "boom";
+
+		await service.appendEvent(session, event);
+		const fetched = await service.getSession("app", "user", "s-meta");
+		expect(fetched?.events).toHaveLength(1);
+		const stored = fetched!.events[0];
+		expect(stored.groundingMetadata).toEqual({
+			searchEntryPoint: { renderedContent: "src" },
+		});
+		expect(stored.errorCode).toBe("E_TEST");
+		expect(stored.errorMessage).toBe("boom");
+	});
+
+	it("merges existing app and user state across sessions", async () => {
+		await service.createSession(
+			"app",
+			"user",
+			{
+				[`${State.APP_PREFIX}theme`]: "dark",
+				[`${State.USER_PREFIX}locale`]: "en",
+				local: 1,
+			},
+			"s-first",
+		);
+
+		const second = await service.createSession(
+			"app",
+			"user",
+			{
+				[`${State.APP_PREFIX}theme`]: "light",
+				local: 2,
+			},
+			"s-second",
+		);
+
+		expect(second.state[`${State.APP_PREFIX}theme`]).toBe("light");
+		expect(second.state[`${State.USER_PREFIX}locale`]).toBe("en");
+		expect(second.state.local).toBe(2);
+
+		const first = await service.getSession("app", "user", "s-first");
+		expect(first?.state[`${State.APP_PREFIX}theme`]).toBe("light");
+		expect(first?.state[`${State.USER_PREFIX}locale`]).toBe("en");
+		expect(first?.state.local).toBe(1);
+	});
+
+	it("persists event actions and empty content without crashing", async () => {
+		const session = await service.createSession("app", "user", {}, "s-actions");
+		await service.appendEvent(
+			session,
+			new Event({
+				author: "agent",
+				actions: new EventActions({
+					stateDelta: { flagged: true },
+					transferToAgent: "other",
+				}),
+			}),
+		);
+
+		const fetched = await service.getSession("app", "user", "s-actions");
+		expect(fetched?.events).toHaveLength(1);
+		expect(fetched?.events[0].actions?.transferToAgent).toBe("other");
+		expect(fetched?.state.flagged).toBe(true);
+	});
+
+	it("trims custom session ids and scopes getSession by app and user", async () => {
+		const created = await service.createSession(
+			"app",
+			"user",
+			{ scoped: true },
+			"  padded-id  ",
+		);
+		expect(created.id).toBe("padded-id");
+
+		expect(
+			await service.getSession("other-app", "user", "padded-id"),
+		).toBeUndefined();
+		expect(
+			await service.getSession("app", "other-user", "padded-id"),
+		).toBeUndefined();
+		expect(
+			(await service.getSession("app", "user", "padded-id"))?.state.scoped,
+		).toBe(true);
+	});
+
+	it("deletes empty sessions without affecting siblings", async () => {
+		await service.createSession("app", "user", {}, "keep");
+		await service.createSession("app", "user", {}, "drop");
+
+		await service.deleteSession("app", "user", "drop");
+		expect(await service.getSession("app", "user", "drop")).toBeUndefined();
+		expect(await service.getSession("app", "user", "keep")).toBeTruthy();
+		expect(
+			(await service.listSessions("app", "user")).sessions.map((s) => s.id),
+		).toEqual(["keep"]);
+	});
+
+	it("rejects deleting sessions that still have events (sqlite FK)", async () => {
+		const session = await service.createSession(
+			"app",
+			"user",
+			{},
+			"with-events",
+		);
+		await service.appendEvent(
+			session,
+			new Event({
+				author: "agent",
+				content: { parts: [{ text: "keep-me" }] },
+			}),
+		);
+
+		await expect(
+			service.deleteSession("app", "user", "with-events"),
+		).rejects.toThrow(/FOREIGN KEY/i);
+		expect(await service.getSession("app", "user", "with-events")).toBeTruthy();
+	});
+
+	it("surfaces sqlite binding errors when afterTimestamp is used", async () => {
+		const session = await service.createSession("app", "user", {}, "s-after");
+		await service.appendEvent(
+			session,
+			new Event({
+				author: "user",
+				content: { parts: [{ text: "x" }] },
+			}),
+		);
+
+		await expect(
+			service.getSession("app", "user", "s-after", {
+				afterTimestamp: Date.now() / 1000 - 60,
+			}),
+		).rejects.toThrow(/bind/i);
+	});
 });

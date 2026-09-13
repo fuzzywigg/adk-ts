@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { LlmAgent } from "../agents/llm-agent";
 import { InMemoryArtifactService } from "../artifacts/in-memory-artifact-service";
 import { Event } from "../events/event";
@@ -390,5 +390,156 @@ describe("Runner.rewind", () => {
 		);
 		expect(updated?.state.k).toBe("v1");
 		expect(updated?.events.at(-1)?.actions?.artifactDelta).toEqual({});
+	});
+
+	it("treats null stateDelta values as deletions when computing rewind point", async () => {
+		const session = await runner.sessionService.createSession(
+			runner.appName,
+			userId,
+			{},
+			sessionId,
+		);
+
+		await runner.sessionService.appendEvent(
+			session,
+			new Event({
+				invocationId: "invocation1",
+				author: "agent",
+				content: { role: "model", parts: [{ text: "one" }] },
+				actions: new EventActions({
+					stateDelta: { keep: "a", gone: "b" },
+				}),
+			}),
+		);
+		await runner.sessionService.appendEvent(
+			session,
+			new Event({
+				invocationId: "invocation2",
+				author: "agent",
+				content: { role: "model", parts: [{ text: "two" }] },
+				actions: new EventActions({
+					stateDelta: { gone: null, keep: "a2" },
+				}),
+			}),
+		);
+		await runner.sessionService.appendEvent(
+			session,
+			new Event({
+				invocationId: "invocation3",
+				author: "agent",
+				content: { role: "model", parts: [{ text: "three" }] },
+				actions: new EventActions({
+					stateDelta: { keep: "a3", extra: "x" },
+				}),
+			}),
+		);
+
+		await runner.rewind({
+			userId,
+			sessionId,
+			rewindBeforeInvocationId: "invocation3",
+		});
+
+		const updated = await runner.sessionService.getSession(
+			runner.appName,
+			userId,
+			sessionId,
+		);
+		expect(updated?.state.keep).toBe("a2");
+		expect(updated?.state.gone).toBeUndefined();
+		expect(updated?.state.extra).toBeUndefined();
+	});
+
+	it("skips user: prefixed artifacts and restores missing pre-rewind files as empty blobs", async () => {
+		const session = await runner.sessionService.createSession(
+			runner.appName,
+			userId,
+			{},
+			sessionId,
+		);
+
+		await runner.artifactService?.saveArtifact({
+			appName: runner.appName,
+			userId,
+			sessionId,
+			filename: "session-file",
+			artifact: { text: "v0" },
+		});
+		await runner.artifactService?.saveArtifact({
+			appName: runner.appName,
+			userId,
+			sessionId,
+			filename: "user:profile",
+			artifact: { text: "user-v0" },
+		});
+
+		await runner.sessionService.appendEvent(
+			session,
+			new Event({
+				invocationId: "invocation1",
+				author: "agent",
+				content: { role: "model", parts: [{ text: "one" }] },
+				actions: new EventActions({
+					artifactDelta: { "user:profile": 0 },
+				}),
+			}),
+		);
+
+		await runner.artifactService?.saveArtifact({
+			appName: runner.appName,
+			userId,
+			sessionId,
+			filename: "session-file",
+			artifact: { text: "v1" },
+		});
+		await runner.artifactService?.saveArtifact({
+			appName: runner.appName,
+			userId,
+			sessionId,
+			filename: "user:profile",
+			artifact: { text: "user-v1" },
+		});
+
+		await runner.sessionService.appendEvent(
+			session,
+			new Event({
+				invocationId: "invocation2",
+				author: "agent",
+				content: { role: "model", parts: [{ text: "two" }] },
+				actions: new EventActions({
+					artifactDelta: {
+						"session-file": 1,
+						"user:profile": 1,
+					},
+				}),
+			}),
+		);
+
+		const saveSpy = vi.spyOn(runner.artifactService!, "saveArtifact");
+
+		await runner.rewind({
+			userId,
+			sessionId,
+			rewindBeforeInvocationId: "invocation2",
+		});
+
+		const rewindDelta =
+			(
+				await runner.sessionService.getSession(
+					runner.appName,
+					userId,
+					sessionId,
+				)
+			)?.events.at(-1)?.actions?.artifactDelta ?? {};
+
+		expect(Object.keys(rewindDelta)).not.toContain("user:profile");
+		expect(rewindDelta["session-file"]).toBeDefined();
+
+		const emptyBlobCall = saveSpy.mock.calls.find(
+			([args]) =>
+				args.filename === "session-file" &&
+				args.artifact?.inlineData?.mimeType === "application/octet-stream",
+		);
+		expect(emptyBlobCall).toBeTruthy();
 	});
 });
