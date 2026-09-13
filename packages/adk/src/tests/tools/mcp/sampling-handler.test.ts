@@ -189,4 +189,113 @@ describe("McpSamplingHandler", () => {
 		const fn = async () => "x";
 		expect(createSamplingHandler(fn)).toBe(fn);
 	});
+
+	it("uses modelPreferences hints and converts LlmResponse parts", async () => {
+		const { LlmResponse } = await import("../../../models/llm-response");
+		const samplingHandler = vi.fn(
+			async () =>
+				new LlmResponse({
+					content: {
+						role: "model",
+						parts: [
+							{ text: "part-a" },
+							{ text: "part-b" },
+							{ inlineData: {} as any },
+						],
+					},
+				}),
+		) as SamplingHandler;
+
+		const handler = new McpSamplingHandler(samplingHandler);
+		const response = await handler.handleSamplingRequest(
+			textRequest({
+				modelPreferences: { hints: [{ name: "gpt-test" }, {}] },
+			}),
+		);
+
+		expect(response.model).toBe("gpt-test");
+		expect(response.content).toEqual({ type: "text", text: "part-apart-b" });
+	});
+
+	it("converts string LlmResponse.content and updateHandler swaps behavior", async () => {
+		const { LlmResponse } = await import("../../../models/llm-response");
+		const handler = new McpSamplingHandler(
+			async () => new LlmResponse({ content: "plain-string" as any }),
+		);
+		await expect(handler.handleSamplingRequest(textRequest())).resolves.toEqual(
+			{
+				model: "gemini-2.0-flash",
+				role: "assistant",
+				content: { type: "text", text: "plain-string" },
+			},
+		);
+
+		handler.updateHandler(async () => "swapped");
+		await expect(handler.handleSamplingRequest(textRequest())).resolves.toEqual(
+			{
+				model: "gemini-2.0-flash",
+				role: "assistant",
+				content: { type: "text", text: "swapped" },
+			},
+		);
+	});
+
+	it("handles array content and missing media data placeholders", async () => {
+		const samplingHandler = vi.fn(async (request) => {
+			const parts = request.contents.flatMap((c) => c.parts ?? []);
+			expect(parts).toEqual(
+				expect.arrayContaining([
+					{ text: "chunk-a" },
+					{ text: "chunk-b" },
+					{ text: "[IMAGE CONTENT MISSING DATA]" },
+					{ text: "caption" },
+					{ text: "[AUDIO CONTENT MISSING DATA]" },
+				]),
+			);
+			return "ok";
+		}) as SamplingHandler;
+
+		const handler = new McpSamplingHandler(samplingHandler);
+		await handler.handleSamplingRequest({
+			method: "sampling/createMessage",
+			params: {
+				maxTokens: 16,
+				messages: [
+					{
+						role: "user",
+						content: [
+							{ type: "text", text: "chunk-a" },
+							{ type: "text", text: "chunk-b" },
+						],
+					},
+					{
+						role: "user",
+						content: { type: "image", data: "", mimeType: "image/png" },
+					},
+					{
+						role: "user",
+						content: {
+							type: "audio",
+							text: "caption",
+							data: "",
+							mimeType: "audio/wav",
+						},
+					},
+				],
+			},
+		});
+		expect(samplingHandler).toHaveBeenCalledOnce();
+	});
+
+	it("rethrows McpError from the ADK handler unchanged", async () => {
+		const handler = new McpSamplingHandler(async () => {
+			throw new McpError("typed", McpErrorType.INVALID_REQUEST_ERROR);
+		});
+		await expect(
+			handler.handleSamplingRequest(textRequest()),
+		).rejects.toMatchObject({
+			type: McpErrorType.INVALID_REQUEST_ERROR,
+			message: "typed",
+		});
+	});
 });

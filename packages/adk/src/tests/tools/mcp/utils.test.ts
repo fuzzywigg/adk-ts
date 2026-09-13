@@ -108,4 +108,50 @@ describe("retryOnClosedResource", () => {
 		expect(reinit).toHaveBeenCalledTimes(1);
 		expect(attempts).toBe(2);
 	});
+
+	it("rethrows non-closed errors and reinit failures from the decorator", async () => {
+		const reinit = vi.fn(async () => {
+			throw new Error("reinit failed");
+		});
+
+		class Sample {
+			async boom(): Promise<string> {
+				throw new Error("permission denied");
+			}
+			async closed(): Promise<string> {
+				throw new Error("closed");
+			}
+		}
+
+		for (const key of ["boom", "closed"] as const) {
+			const descriptor = Object.getOwnPropertyDescriptor(
+				Sample.prototype,
+				key,
+			)!;
+			retryOnClosedResource(() => reinit(), 1)(
+				Sample.prototype,
+				key,
+				descriptor,
+			);
+			Object.defineProperty(Sample.prototype, key, descriptor);
+		}
+
+		const sample = new Sample();
+		await expect(sample.boom()).rejects.toThrow("permission denied");
+		expect(reinit).not.toHaveBeenCalled();
+		await expect(sample.closed()).rejects.toThrow(
+			"Failed to reinitialize resources",
+		);
+		expect(reinit).toHaveBeenCalledTimes(1);
+	});
+
+	it("returns the descriptor unchanged when value is missing", () => {
+		const descriptor: TypedPropertyDescriptor<() => Promise<string>> = {};
+		const result = retryOnClosedResource(async () => undefined)(
+			{},
+			"missing",
+			descriptor,
+		);
+		expect(result).toBe(descriptor);
+	});
 });

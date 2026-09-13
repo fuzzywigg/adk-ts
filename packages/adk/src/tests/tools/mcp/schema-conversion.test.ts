@@ -191,4 +191,118 @@ describe("schema-conversion", () => {
 			properties: {},
 		});
 	});
+
+	it("infers schema types from structural hints", () => {
+		expect(
+			normalizeJsonSchema({
+				additionalProperties: false,
+				required: ["id"],
+			}),
+		).toMatchObject({ type: Type.OBJECT, required: ["id"] });
+
+		expect(normalizeJsonSchema({ pattern: "^[a-z]+$" })).toEqual({
+			type: Type.STRING,
+			pattern: "^[a-z]+$",
+		});
+
+		expect(normalizeJsonSchema({ minimum: 1, maximum: 3 })).toEqual({
+			type: Type.INTEGER,
+			minimum: 1,
+			maximum: 3,
+		});
+
+		expect(
+			normalizeJsonSchema({
+				minimum: 0,
+				maximum: 1,
+				multipleOf: 0.5,
+			}),
+		).toEqual({
+			type: Type.NUMBER,
+			minimum: 0,
+			maximum: 1,
+			multipleOf: 0.5,
+		});
+
+		expect(normalizeJsonSchema({ enum: [] })).toEqual({
+			type: Type.STRING,
+			enum: [],
+		});
+		expect(normalizeJsonSchema({ enum: [true, false] })).toEqual({
+			type: Type.BOOLEAN,
+			enum: [true, false],
+		});
+		expect(normalizeJsonSchema({ enum: [{ a: 1 }] })).toEqual({
+			type: Type.STRING,
+			enum: [{ a: 1 }],
+		});
+	});
+
+	it("preserves string/array metadata during normalize", () => {
+		expect(
+			normalizeJsonSchema({
+				type: "string",
+				minLength: 1,
+				maxLength: 4,
+				pattern: "x+",
+				format: "email",
+				enum: ["a"],
+				title: "t",
+				description: "d",
+			}),
+		).toEqual({
+			type: Type.STRING,
+			minLength: 1,
+			maxLength: 4,
+			pattern: "x+",
+			format: "email",
+			enum: ["a"],
+			title: "t",
+			description: "d",
+		});
+
+		expect(
+			normalizeJsonSchema({
+				type: "array",
+				items: { type: "string" },
+				minItems: 1,
+				maxItems: 3,
+				title: "list",
+				description: "items",
+			}),
+		).toEqual({
+			type: Type.ARRAY,
+			items: { type: Type.STRING },
+			minItems: 1,
+			maxItems: 3,
+			title: "list",
+			description: "items",
+		});
+
+		expect(
+			normalizeJsonSchema({
+				type: "object",
+				properties: {
+					nested: {
+						type: "object",
+						properties: { n: { type: "number" } },
+					},
+				},
+				title: "obj",
+				description: "desc",
+			}),
+		).toEqual({
+			type: Type.OBJECT,
+			title: "obj",
+			description: "desc",
+			properties: {
+				nested: {
+					type: Type.OBJECT,
+					properties: {
+						n: { type: "number" },
+					},
+				},
+			},
+		});
+	});
 });
