@@ -106,10 +106,12 @@ describe("MCP package server factories", () => {
 			expect(bamm.transport.env?.WALLET_PRIVATE_KEY).toBe("k");
 		}
 
-		const upbit = getConfig(McpUpbit({ env: { UPBIT_ACCESS_KEY: "ak" } }));
-		if (upbit.transport.mode === "stdio") {
-			expect(upbit.transport.args).toEqual(["-y", "@iqai/mcp-upbit"]);
-			expect(upbit.transport.env?.UPBIT_ACCESS_KEY).toBe("ak");
+		const polymarket = getConfig(
+			McpPolymarket({ env: { FUNDER_ADDRESS: "0xabc" } }),
+		);
+		if (polymarket.transport.mode === "stdio") {
+			expect(polymarket.transport.args).toEqual(["-y", "@iqai/mcp-polymarket"]);
+			expect(polymarket.transport.env?.FUNDER_ADDRESS).toBe("0xabc");
 		}
 	});
 });
