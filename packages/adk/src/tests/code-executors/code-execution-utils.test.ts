@@ -86,4 +86,36 @@ describe("CodeExecutionUtils", () => {
 		);
 		expect(withResult.parts?.[0]?.text).toBe("<result>done</result>");
 	});
+
+	it("encodes file content from strings and ArrayBuffers", () => {
+		expect(CodeExecutionUtils.getEncodedFileContent("hello")).toBe(
+			btoa("hello"),
+		);
+		const already = btoa("already");
+		expect(CodeExecutionUtils.getEncodedFileContent(already)).toBe(already);
+
+		const buffer = new TextEncoder().encode("buf").buffer;
+		expect(CodeExecutionUtils.getEncodedFileContent(buffer)).toBe(btoa("buf"));
+	});
+
+	it("returns null when content has no extractable code", () => {
+		expect(
+			CodeExecutionUtils.extractCodeAndTruncateContent(
+				{ parts: [{ text: "no fences here" }] },
+				[["```", "```"]],
+			),
+		).toBeNull();
+		expect(
+			CodeExecutionUtils.extractCodeAndTruncateContent({ parts: [] }, [
+				["```", "```"],
+			]),
+		).toBeNull();
+		expect(
+			CodeExecutionUtils.convertCodeExecutionParts(
+				{ parts: [{ text: "leave me" }] },
+				["```", "```"],
+				["<", ">"],
+			),
+		).toBeUndefined();
+	});
 });

@@ -89,4 +89,34 @@ function lookup(id, toolContext) { return id; }`,
 		const declaration = buildFunctionDeclaration(cast);
 		expect(declaration.parameters?.properties?.value?.type).toBe("string");
 	});
+
+	it("parses optional parameters with defaults as non-required", () => {
+		const maybe = withSource(
+			(_id: string | undefined = undefined) => _id,
+			"function maybe(id: string = undefined) { return id; }",
+		);
+		Object.defineProperty(maybe, "name", { value: "maybe" });
+
+		const declaration = buildFunctionDeclaration(maybe);
+		expect(declaration.parameters?.properties?.id?.type).toBe("string");
+		expect(declaration.parameters?.required || []).not.toContain("id");
+	});
+
+	it("supports arrow functions and empty properties on bad signatures", () => {
+		const arrow = withSource(
+			(count: number) => count,
+			"function arrow(count: number) { return count; }",
+		);
+		Object.defineProperty(arrow, "name", { value: "arrow" });
+		expect(
+			buildFunctionDeclaration(arrow).parameters?.properties?.count?.type,
+		).toBe("number");
+
+		const broken = withSource(() => 1, "not a function signature");
+		Object.defineProperty(broken, "name", { value: "broken" });
+		expect(buildFunctionDeclaration(broken).parameters).toEqual({
+			type: Type.OBJECT,
+			properties: {},
+		});
+	});
 });
