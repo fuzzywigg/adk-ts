@@ -7,7 +7,7 @@ describe("extractInitialState", () => {
 		const agent = { name: "root" } as BaseAgent;
 		const builtAgent = {
 			session: { state: { theme: "dark", count: 1 } },
-		} as BuiltAgent;
+		} as unknown as BuiltAgent;
 
 		expect(extractInitialState({ agent, builtAgent })).toEqual({
 			theme: "dark",
@@ -29,7 +29,7 @@ describe("extractInitialState", () => {
 				]),
 			},
 		} as unknown as BaseAgent;
-		const builtAgent = { session: { state: {} } } as BuiltAgent;
+		const builtAgent = { session: { state: {} } } as unknown as BuiltAgent;
 
 		expect(extractInitialState({ agent, builtAgent })).toEqual({
 			fromSession: true,
