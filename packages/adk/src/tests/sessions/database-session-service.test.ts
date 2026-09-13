@@ -256,4 +256,19 @@ describe("DatabaseSessionService (sqlite :memory:)", () => {
 		).resolves.toBeUndefined();
 		expect(await service.getSession("app", "user", "ghost")).toBeUndefined();
 	});
+
+	it("lists sessions across users independently", async () => {
+		await service.createSession("app", "alice", {}, "a1");
+		await service.createSession("app", "alice", {}, "a2");
+		await service.createSession("app", "bob", {}, "b1");
+
+		expect(
+			(await service.listSessions("app", "alice")).sessions
+				.map((s) => s.id)
+				.sort(),
+		).toEqual(["a1", "a2"]);
+		expect(
+			(await service.listSessions("app", "bob")).sessions.map((s) => s.id),
+		).toEqual(["b1"]);
+	});
 });

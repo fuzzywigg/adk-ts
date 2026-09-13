@@ -274,4 +274,121 @@ describe("Runner.rewind", () => {
 			}),
 		).rejects.toThrow("Session not found: non_existent_session");
 	});
+
+	it("ignores app: and user: keys when computing rewind state delta", async () => {
+		const session = await runner.sessionService.createSession(
+			runner.appName,
+			userId,
+			{},
+			sessionId,
+		);
+
+		await runner.sessionService.appendEvent(
+			session,
+			new Event({
+				invocationId: "invocation1",
+				author: "agent",
+				content: { role: "model", parts: [{ text: "one" }] },
+				actions: new EventActions({
+					stateDelta: {
+						local: "v1",
+						"app:theme": "dark",
+						"user:locale": "en",
+					},
+				}),
+			}),
+		);
+		await runner.sessionService.appendEvent(
+			session,
+			new Event({
+				invocationId: "invocation2",
+				author: "agent",
+				content: { role: "model", parts: [{ text: "two" }] },
+				actions: new EventActions({
+					stateDelta: {
+						local: "v2",
+						extra: "later",
+						"app:theme": "light",
+					},
+				}),
+			}),
+		);
+
+		await runner.rewind({
+			userId,
+			sessionId,
+			rewindBeforeInvocationId: "invocation2",
+		});
+
+		const updated = await runner.sessionService.getSession(
+			runner.appName,
+			userId,
+			sessionId,
+		);
+		expect(updated?.state.local).toBe("v1");
+		expect(updated?.state.extra).toBeUndefined();
+		expect(updated?.state["app:theme"]).toBe("light");
+		expect(updated?.state["user:locale"]).toBe("en");
+		expect(updated?.events.at(-1)?.actions?.rewindBeforeInvocationId).toBe(
+			"invocation2",
+		);
+	});
+
+	it("returns empty artifact delta when artifactService is missing", async () => {
+		const rootAgent = new LlmAgent({
+			name: "test_agent",
+			model: "gemini-2.0-flash-exp",
+			description: "",
+		});
+		const sessionService = new InMemorySessionService();
+		const bareRunner = new Runner({
+			appName: "test_app",
+			agent: rootAgent,
+			sessionService,
+		});
+		const session = await bareRunner.sessionService.createSession(
+			bareRunner.appName,
+			userId,
+			{},
+			sessionId,
+		);
+		await bareRunner.sessionService.appendEvent(
+			session,
+			new Event({
+				invocationId: "invocation1",
+				author: "agent",
+				content: { role: "model", parts: [{ text: "one" }] },
+				actions: new EventActions({
+					stateDelta: { k: "v1" },
+					artifactDelta: { f1: 0 },
+				}),
+			}),
+		);
+		await bareRunner.sessionService.appendEvent(
+			session,
+			new Event({
+				invocationId: "invocation2",
+				author: "agent",
+				content: { role: "model", parts: [{ text: "two" }] },
+				actions: new EventActions({
+					stateDelta: { k: "v2" },
+					artifactDelta: { f1: 1 },
+				}),
+			}),
+		);
+
+		await bareRunner.rewind({
+			userId,
+			sessionId,
+			rewindBeforeInvocationId: "invocation2",
+		});
+
+		const updated = await bareRunner.sessionService.getSession(
+			bareRunner.appName,
+			userId,
+			sessionId,
+		);
+		expect(updated?.state.k).toBe("v1");
+		expect(updated?.events.at(-1)?.actions?.artifactDelta).toEqual({});
+	});
 });

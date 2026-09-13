@@ -72,4 +72,26 @@ describe("PlanReActPlanner", () => {
 			"summarize",
 		]);
 	});
+
+	it("keeps planning text without FINAL_ANSWER as thought-only", () => {
+		const parts = planner.processPlanningResponse({} as any, [
+			{
+				text: "/*PLANNING*/ outline the steps /*REASONING*/ check assumptions",
+			},
+		]);
+
+		expect(parts).toHaveLength(1);
+		expect(parts?.[0].thought).toBe(true);
+		expect(parts?.[0].text).toContain("/*PLANNING*/");
+		expect(parts?.[0].text).toContain("/*REASONING*/");
+	});
+
+	it("returns empty preserved list when only empty-name function calls exist", () => {
+		const parts = planner.processPlanningResponse({} as any, [
+			{ functionCall: { name: "", args: {} } },
+			{ functionCall: { name: undefined as any, args: {} } },
+		]);
+
+		expect(parts ?? []).toEqual([]);
+	});
 });

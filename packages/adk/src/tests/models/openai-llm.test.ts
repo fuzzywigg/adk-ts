@@ -250,4 +250,136 @@ describe("OpenAiLlm", () => {
 			);
 		});
 	});
+
+	describe("schema and response helpers", () => {
+		it("transformSchemaForOpenAi lowercases nested types and keywords", () => {
+			const transformed = (llm as any).transformSchemaForOpenAi({
+				type: "OBJECT",
+				properties: {
+					name: { type: "STRING" },
+					tags: { type: "ARRAY", items: { type: "STRING" } },
+				},
+				anyOf: [{ type: "NULL" }, { type: "STRING" }],
+			});
+
+			expect(transformed.type).toBe("object");
+			expect(transformed.properties.name.type).toBe("string");
+			expect(transformed.properties.tags.type).toBe("array");
+			expect(transformed.properties.tags.items.type).toBe("string");
+			expect(transformed.anyOf.map((s: any) => s.type)).toEqual([
+				"null",
+				"string",
+			]);
+			expect((llm as any).transformSchemaForOpenAi(["x", 1])).toEqual(["x", 1]);
+			expect((llm as any).transformSchemaForOpenAi(null)).toBeNull();
+		});
+
+		it("functionDeclarationToOpenAiTool maps name description and params", () => {
+			const tool = (llm as any).functionDeclarationToOpenAiTool({
+				name: "lookup",
+				description: "Find things",
+				parameters: {
+					type: "OBJECT",
+					properties: { q: { type: "STRING" } },
+				},
+			});
+
+			expect(tool).toEqual({
+				type: "function",
+				function: {
+					name: "lookup",
+					description: "Find things",
+					parameters: {
+						type: "object",
+						properties: { q: { type: "string" } },
+					},
+				},
+			});
+		});
+
+		it("openAiMessageToLlmResponse maps text, tool_calls, and usage", () => {
+			const response = (llm as any).openAiMessageToLlmResponse(
+				{
+					message: {
+						content: "hello",
+						tool_calls: [
+							{
+								id: "tc1",
+								type: "function",
+								function: {
+									name: "lookup",
+									arguments: JSON.stringify({ q: "adk" }),
+								},
+							},
+						],
+					},
+					finish_reason: "tool_calls",
+				},
+				{ prompt_tokens: 3, completion_tokens: 5, total_tokens: 8 },
+			);
+
+			expect(response.content?.parts?.[0]).toEqual({ text: "hello" });
+			expect(response.content?.parts?.[1]?.functionCall).toEqual({
+				id: "tc1",
+				name: "lookup",
+				args: { q: "adk" },
+			});
+			expect(response.usageMetadata).toEqual({
+				promptTokenCount: 3,
+				candidatesTokenCount: 5,
+				totalTokenCount: 8,
+			});
+			expect(response.finishReason).toBe("STOP");
+		});
+
+		it("createChunkResponse handles thought text and tool call deltas", () => {
+			const thought = (llm as any).createChunkResponse({
+				content: "[thinking] draft",
+			});
+			expect(thought.content?.parts?.[0]).toEqual({
+				text: "[thinking] draft",
+				thought: true,
+			});
+
+			const tools = (llm as any).createChunkResponse(
+				{
+					tool_calls: [
+						{
+							id: "d1",
+							type: "function",
+							function: { name: "search", arguments: '{"q":1}' },
+						},
+					],
+				},
+				{ prompt_tokens: 1, completion_tokens: 2, total_tokens: 3 },
+			);
+			expect(tools.content?.parts?.[0]?.functionCall).toEqual({
+				id: "d1",
+				name: "search",
+				args: { q: 1 },
+			});
+			expect(tools.usageMetadata?.totalTokenCount).toBe(3);
+
+			const empty = (llm as any).createChunkResponse({});
+			expect(empty.content).toBeUndefined();
+		});
+
+		it("preprocessRequest clears labels and walks contents", () => {
+			const req = {
+				config: { labels: { env: "test" } },
+				contents: [
+					{
+						parts: [
+							{ inline_data: { mime_type: "image/png" } },
+							{ text: "keep" },
+						],
+					},
+				],
+			};
+			(llm as any).preprocessRequest(req);
+			expect(req.config.labels).toBeUndefined();
+			expect(req.contents[0].parts[0].inline_data).toBeUndefined();
+			expect(req.contents[0].parts[1]).toEqual({ text: "keep" });
+		});
+	});
 });

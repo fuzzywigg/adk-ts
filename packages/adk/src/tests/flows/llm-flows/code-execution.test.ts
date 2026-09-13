@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { LlmAgent } from "../../../agents/llm-agent";
 import type { InvocationContext } from "../../../agents/invocation-context";
+import { BaseCodeExecutor } from "../../../code-executors/base-code-executor";
 import { BuiltInCodeExecutor } from "../../../code-executors/built-in-code-executor";
 import { CodeExecutorContext } from "../../../code-executors/code-executor-context";
 import {
@@ -156,6 +157,163 @@ describe("code-execution processors", () => {
 			),
 		);
 		expect(events).toEqual([]);
+	});
+
+	it("responseProcessor executes extracted code via custom BaseCodeExecutor", async () => {
+		class StubExecutor extends BaseCodeExecutor {
+			executeCode = vi.fn(async () => ({
+				stdout: "42\n",
+				stderr: "",
+				outputFiles: [],
+			}));
+		}
+		const executor = new StubExecutor({
+			codeBlockDelimiters: [["```python\n", "\n```"]],
+			executionResultDelimiters: ["```tool_outputs\n", "\n```"],
+		});
+		const agent = new LlmAgent({
+			name: "coder",
+			model: "gemini-2.0-flash",
+			codeExecutor: executor,
+		});
+		const saveArtifact = vi.fn(async () => 1);
+		const llmResponse = {
+			partial: false,
+			content: {
+				role: "model",
+				parts: [{ text: "```python\nprint(42)\n```" }],
+			},
+		} as LlmResponse;
+
+		const events = await collect(
+			responseProcessor.runAsync(
+				{
+					agent,
+					branch: "root",
+					invocationId: "inv-code",
+					appName: "app",
+					userId: "u",
+					session: {
+						id: "s1",
+						appName: "app",
+						userId: "u",
+						state: {},
+						events: [],
+					},
+					artifactService: { saveArtifact },
+				} as unknown as InvocationContext,
+				llmResponse,
+			),
+		);
+
+		expect(executor.executeCode).toHaveBeenCalledOnce();
+		expect(events).toHaveLength(2);
+		expect(
+			(events[0] as any).content?.parts?.some(
+				(p: any) =>
+					p.executableCode?.code?.includes("print(42)") ||
+					p.text?.includes("print(42)"),
+			),
+		).toBe(true);
+		expect((events[1] as any).author).toBe("coder");
+		expect(llmResponse.content).toBeUndefined();
+	});
+
+	it("responseProcessor skips when errorRetryAttempts are exhausted", async () => {
+		class StubExecutor extends BaseCodeExecutor {
+			executeCode = vi.fn(async () => ({
+				stdout: "",
+				stderr: "",
+				outputFiles: [],
+			}));
+		}
+		const executor = new StubExecutor({ errorRetryAttempts: 0 });
+		const state = State.create({}, {});
+		const ctx = new CodeExecutorContext(state);
+		ctx.incrementErrorCount("inv-max");
+
+		const events = await collect(
+			responseProcessor.runAsync(
+				{
+					agent: new LlmAgent({
+						name: "coder",
+						codeExecutor: executor,
+					}),
+					invocationId: "inv-max",
+					session: { state, events: [] },
+				} as unknown as InvocationContext,
+				{
+					partial: false,
+					content: {
+						role: "model",
+						parts: [{ text: "`python\nprint(1)\n`" }],
+					},
+				} as LlmResponse,
+			),
+		);
+
+		expect(events).toEqual([]);
+		expect(executor.executeCode).not.toHaveBeenCalled();
+	});
+
+	it("requestProcessor yields preprocessing events for unprocessed csv inputs", async () => {
+		class StubExecutor extends BaseCodeExecutor {
+			executeCode = vi.fn(async () => ({
+				stdout: "loaded",
+				stderr: "",
+				outputFiles: [],
+			}));
+		}
+		const executor = new StubExecutor({
+			optimizeDataFile: true,
+			codeBlockDelimiters: [["```python\n", "\n```"]],
+			executionResultDelimiters: ["```tool_outputs\n", "\n```"],
+		});
+		const agent = new LlmAgent({
+			name: "coder",
+			model: "gpt-4o",
+			codeExecutor: executor,
+		});
+		const llmRequest = new LlmRequest({
+			model: "gpt-4o",
+			contents: [
+				{
+					role: "user",
+					parts: [
+						{ text: "analyze" },
+						{ inlineData: { mimeType: "text/csv", data: "a,b\n1,2" } },
+					],
+				},
+			],
+		});
+		const saveArtifact = vi.fn(async () => 1);
+
+		const events = await collect(
+			requestProcessor.runAsync(
+				{
+					agent,
+					invocationId: "inv-csv",
+					appName: "app",
+					userId: "u",
+					branch: "root",
+					session: {
+						id: "s1",
+						appName: "app",
+						userId: "u",
+						state: {},
+						events: [],
+					},
+					artifactService: { saveArtifact },
+				} as unknown as InvocationContext,
+				llmRequest,
+			),
+		);
+
+		expect(executor.executeCode).toHaveBeenCalled();
+		expect(events.length).toBeGreaterThanOrEqual(2);
+		expect((events[0] as any).content?.parts?.[0]?.text).toContain(
+			"Processing input file",
+		);
 	});
 });
 

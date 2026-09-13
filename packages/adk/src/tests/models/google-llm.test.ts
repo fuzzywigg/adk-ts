@@ -166,4 +166,78 @@ describe("GoogleLlm", () => {
 			);
 		});
 	});
+
+	describe("content helpers", () => {
+		it("convertContents maps assistant roles and missing parts", () => {
+			process.env.GOOGLE_API_KEY = "abc";
+			const llm = new GoogleLlm();
+			const converted = (llm as any).convertContents([
+				{ role: "assistant", parts: [{ text: "hi" }] },
+				{ role: "user", content: "plain" },
+			]);
+			expect(converted).toEqual([
+				{ role: "model", parts: [{ text: "hi" }] },
+				{ role: "user", parts: [{ text: "plain" }] },
+			]);
+		});
+
+		it("removeDisplayNameIfPresent nulls displayName", () => {
+			process.env.GOOGLE_API_KEY = "abc";
+			const llm = new GoogleLlm();
+			const data = { displayName: "photo.png", mimeType: "image/png" };
+			(llm as any).removeDisplayNameIfPresent(data);
+			expect(data.displayName).toBeNull();
+			expect(() =>
+				(llm as any).removeDisplayNameIfPresent(undefined),
+			).not.toThrow();
+		});
+
+		it("preprocessRequest clears labels and displayNames for Gemini API", () => {
+			process.env.GOOGLE_API_KEY = "abc";
+			process.env.GOOGLE_GENAI_USE_VERTEXAI = "false";
+			const llm = new GoogleLlm();
+			const req = {
+				config: { labels: { team: "adk" } },
+				contents: [
+					{
+						parts: [
+							{
+								inlineData: {
+									displayName: "a.png",
+									mimeType: "image/png",
+									data: "x",
+								},
+							},
+							{
+								fileData: {
+									displayName: "b.txt",
+									fileUri: "gs://bucket/b",
+								},
+							},
+						],
+					},
+				],
+			};
+			(llm as any).preprocessRequest(req);
+			expect(req.config.labels).toBeUndefined();
+			expect(req.contents[0].parts[0].inlineData.displayName).toBeNull();
+			expect(req.contents[0].parts[1].fileData.displayName).toBeNull();
+		});
+
+		it("hasInlineData detects GenAI response shapes", () => {
+			process.env.GOOGLE_API_KEY = "abc";
+			const llm = new GoogleLlm();
+			expect(
+				(llm as any).hasInlineData({
+					candidates: [{ content: { parts: [{ inlineData: { data: "x" } }] } }],
+				}),
+			).toBe(true);
+			expect(
+				(llm as any).hasInlineData({
+					candidates: [{ content: { parts: [{ text: "hi" }] } }],
+				}),
+			).toBe(false);
+			expect((llm as any).hasInlineData({})).toBe(false);
+		});
+	});
 });

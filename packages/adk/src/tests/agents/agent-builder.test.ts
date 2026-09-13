@@ -1,14 +1,31 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { z } from "zod";
 import { AgentBuilder } from "../../agents/agent-builder.js";
 import { LangGraphAgent } from "../../agents/lang-graph-agent.js";
 import { LlmAgent } from "../../agents/llm-agent.js";
 import { LoopAgent } from "../../agents/loop-agent.js";
 import { ParallelAgent } from "../../agents/parallel-agent.js";
+import { RunConfig, StreamingMode } from "../../agents/run-config.js";
 import { SequentialAgent } from "../../agents/sequential-agent.js";
 import { InMemoryArtifactService } from "../../artifacts/in-memory-artifact-service.js";
+import { BaseCodeExecutor } from "../../code-executors/base-code-executor.js";
 import { InMemoryMemoryService } from "../../memory/in-memory-memory-service.js";
+import { BuiltInPlanner } from "../../planners/built-in-planner.js";
+import { BasePlugin } from "../../plugins/base-plugin.js";
 import { InMemorySessionService } from "../../sessions/in-memory-session-service.js";
 import { createTool } from "../../tools/base/create-tool.js";
+
+class StubCodeExecutor extends BaseCodeExecutor {
+	async executeCode() {
+		return { stdout: "ok", stderr: "", outputFiles: [] };
+	}
+}
+
+class StubPlugin extends BasePlugin {
+	constructor() {
+		super("stub-plugin");
+	}
+}
 
 describe("AgentBuilder", () => {
 	let sessionService: InMemorySessionService;
@@ -458,6 +475,116 @@ describe("AgentBuilder", () => {
 
 			expect(session.appName).toBeDefined();
 			expect(session.appName).toBe("app-default_app_test");
+		});
+	});
+
+	describe("Advanced configuration applied on build", () => {
+		it("applies planner, codeExecutor, outputKey, subAgents, and callbacks", async () => {
+			const planner = new BuiltInPlanner({
+				thinkingConfig: { includeThoughts: true },
+			});
+			const codeExecutor = new StubCodeExecutor();
+			const sub = new LlmAgent({
+				name: "child_agent",
+				model: "gemini-2.5-flash",
+			});
+			const beforeAgent = vi.fn(() => undefined);
+			const afterAgent = vi.fn(() => undefined);
+			const beforeModel = vi.fn(() => undefined);
+			const afterModel = vi.fn(() => undefined);
+			const beforeTool = vi.fn(() => undefined);
+			const afterTool = vi.fn(() => undefined);
+
+			const { agent } = await AgentBuilder.create("advanced_cfg")
+				.withModel("gemini-2.5-flash")
+				.withInputSchema(z.object({ q: z.string() }))
+				.withPlanner(planner)
+				.withCodeExecutor(codeExecutor)
+				.withOutputKey("answer")
+				.withSubAgents([sub])
+				.withBeforeAgentCallback(beforeAgent)
+				.withAfterAgentCallback(afterAgent)
+				.withBeforeModelCallback(beforeModel)
+				.withAfterModelCallback(afterModel)
+				.withBeforeToolCallback(beforeTool)
+				.withAfterToolCallback(afterTool)
+				.build();
+
+			expect(agent).toBeInstanceOf(LlmAgent);
+			const llm = agent as LlmAgent;
+			expect(llm.planner).toBe(planner);
+			expect(llm.codeExecutor).toBe(codeExecutor);
+			expect(llm.outputKey).toBe("answer");
+			expect(llm.subAgents).toEqual([sub]);
+			expect(llm.beforeAgentCallback).toBe(beforeAgent);
+			expect(llm.afterAgentCallback).toBe(afterAgent);
+			expect(llm.beforeModelCallback).toBe(beforeModel);
+			expect(llm.afterModelCallback).toBe(afterModel);
+			expect(llm.beforeToolCallback).toBe(beforeTool);
+			expect(llm.afterToolCallback).toBe(afterTool);
+		});
+
+		it("applies plugins, runConfig, and eventsCompaction configuration", async () => {
+			const plugin = new StubPlugin();
+			const builder = AgentBuilder.create("plugin_cfg")
+				.withModel("gemini-2.5-flash")
+				.withPlugins(plugin)
+				.withRunConfig(new RunConfig({ streamingMode: StreamingMode.SSE }))
+				.withEventsCompaction({
+					compactionInterval: 5,
+					overlapSize: 1,
+				});
+
+			const { agent, runner } = await builder.build();
+			expect((agent as LlmAgent).plugins).toEqual([plugin]);
+			expect(runner.ask).toBeInstanceOf(Function);
+			expect((builder as any).eventsCompactionConfig).toEqual({
+				compactionInterval: 5,
+				overlapSize: 1,
+			});
+			expect((builder as any).runConfig).toBeInstanceOf(RunConfig);
+			expect((builder as any).runConfig.streamingMode).toBe(StreamingMode.SSE);
+		});
+
+		it("throws when outputSchema is set on sequential aggregators", () => {
+			const sub = new LlmAgent({
+				name: "seq_child",
+				model: "gemini-2.5-flash",
+			});
+			expect(() =>
+				AgentBuilder.create("seq_schema")
+					.asSequential([sub])
+					.withOutputSchema(z.object({ ok: z.boolean() })),
+			).toThrow(/cannot be applied to sequential or parallel/);
+		});
+
+		it("ignores outputKey on parallel aggregators", async () => {
+			const sub = new LlmAgent({
+				name: "par_child",
+				model: "gemini-2.5-flash",
+			});
+			const { agent } = await AgentBuilder.create("par_out")
+				.asParallel([sub])
+				.withOutputKey("ignored")
+				.build();
+
+			expect(agent).toBeInstanceOf(ParallelAgent);
+			expect((agent as any).outputKey).toBeUndefined();
+		});
+
+		it("locks definition after withAgent and ignores later mutations", async () => {
+			const existing = new LlmAgent({
+				name: "locked_agent",
+				model: "gemini-2.5-flash",
+			});
+			const { agent } = await AgentBuilder.withAgent(existing)
+				.withModel("gpt-4o")
+				.withDescription("ignored")
+				.asSequential([])
+				.build();
+
+			expect(agent).toBe(existing);
+			expect((agent as LlmAgent).model).toBe("gemini-2.5-flash");
 		});
 	});
 });

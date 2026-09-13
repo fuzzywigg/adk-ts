@@ -157,4 +157,82 @@ describe("auth requestProcessor", () => {
 		expect(events).toEqual([]);
 		warn.mockRestore();
 	});
+
+	it("warns on invalid auth response JSON and continues without yielding", async () => {
+		const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+		const eucResponse = new Event({
+			author: "user",
+			content: {
+				role: "user",
+				parts: [
+					{
+						functionResponse: {
+							id: "euc-bad",
+							name: REQUEST_EUC_FUNCTION_CALL_NAME,
+							response: "{not-json",
+						},
+					},
+				],
+			},
+		});
+
+		const events = await collect(
+			requestProcessor.runAsync(
+				baseCtx({ events: [eucResponse] }),
+				new LlmRequest(),
+			),
+		);
+
+		expect(events).toEqual([]);
+		expect(warn).toHaveBeenCalled();
+		warn.mockRestore();
+	});
+
+	it("warns when EUC functionCall args are not JSON and finds no tools to resume", async () => {
+		const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+		const eucCall = new Event({
+			author: "auth-agent",
+			content: {
+				role: "model",
+				parts: [
+					{
+						functionCall: {
+							id: "euc-1",
+							name: REQUEST_EUC_FUNCTION_CALL_NAME,
+							args: "not-json" as any,
+						},
+					},
+				],
+			},
+		});
+		const eucResponse = new Event({
+			author: "user",
+			content: {
+				role: "user",
+				parts: [
+					{
+						functionResponse: {
+							id: "euc-1",
+							name: REQUEST_EUC_FUNCTION_CALL_NAME,
+							response: JSON.stringify({
+								authScheme: { type: "apiKey" },
+								rawAuthCredential: { apiKey: "k" },
+							}),
+						},
+					},
+				],
+			},
+		});
+
+		const events = await collect(
+			requestProcessor.runAsync(
+				baseCtx({ events: [eucCall, eucResponse] }),
+				new LlmRequest(),
+			),
+		);
+
+		expect(events).toEqual([]);
+		expect(warn).toHaveBeenCalled();
+		warn.mockRestore();
+	});
 });
