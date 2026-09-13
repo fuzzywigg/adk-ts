@@ -1,12 +1,12 @@
 import { describe, expect, it, vi } from "vitest";
+import type { EvalMetric } from "../../evaluation/eval-metrics";
+import { PrebuiltMetrics } from "../../evaluation/eval-metrics";
 import {
 	DEFAULT_METRIC_EVALUATOR_REGISTRY,
+	type EvaluatorConstructor,
 	MetricEvaluatorRegistry,
 } from "../../evaluation/metric-evaluator-registry";
-import { PrebuiltMetrics } from "../../evaluation/eval-metrics";
 import { TrajectoryEvaluator } from "../../evaluation/trajectory-evaluator";
-import type { EvalMetric } from "../../evaluation/eval-metrics";
-import type { Evaluator } from "../../evaluation/evaluator";
 
 class StubEvaluator {
 	constructor(public metric: EvalMetric) {}
@@ -28,14 +28,14 @@ class StubEvaluator {
 	}
 }
 
+const StubEvaluatorClass = StubEvaluator as unknown as EvaluatorConstructor;
+
 describe("MetricEvaluatorRegistry", () => {
 	it("registers evaluators and creates instances", () => {
 		const registry = new MetricEvaluatorRegistry();
 		registry.registerEvaluator(
 			StubEvaluator.getMetricInfo(),
-			StubEvaluator as unknown as new (
-				metric: EvalMetric,
-			) => Evaluator,
+			StubEvaluatorClass,
 		);
 
 		const evaluator = registry.getEvaluator({
@@ -43,7 +43,7 @@ describe("MetricEvaluatorRegistry", () => {
 			threshold: 0.8,
 		});
 		expect(evaluator).toBeInstanceOf(StubEvaluator);
-		expect((evaluator as StubEvaluator).metric.threshold).toBe(0.8);
+		expect((evaluator as unknown as StubEvaluator).metric.threshold).toBe(0.8);
 		expect(registry.getRegisteredMetrics()).toEqual([
 			StubEvaluator.getMetricInfo(),
 		]);
@@ -59,15 +59,11 @@ describe("MetricEvaluatorRegistry", () => {
 
 		registry.registerEvaluator(
 			StubEvaluator.getMetricInfo(),
-			StubEvaluator as unknown as new (
-				metric: EvalMetric,
-			) => Evaluator,
+			StubEvaluatorClass,
 		);
 		registry.registerEvaluator(
 			StubEvaluator.getMetricInfo(),
-			StubEvaluator as unknown as new (
-				metric: EvalMetric,
-			) => Evaluator,
+			StubEvaluatorClass,
 		);
 		expect(info).toHaveBeenCalled();
 	});
