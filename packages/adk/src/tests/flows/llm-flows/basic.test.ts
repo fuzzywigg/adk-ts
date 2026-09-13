@@ -158,4 +158,95 @@ describe("basic requestProcessor", () => {
 			proactiveAudio: true,
 		});
 	});
+
+	it("sets output schema when subAgents exist but transfers are fully disallowed", async () => {
+		const schema = { type: "object", properties: { ok: { type: "boolean" } } };
+		const llmRequest = new LlmRequest();
+		const invocationContext = {
+			agent: {
+				name: "locked-agent",
+				canonicalModel: "gpt-4o",
+				outputSchema: schema,
+				canonicalTools: async () => [],
+				subAgents: [{ name: "child" }],
+				disallowTransferToParent: true,
+				disallowTransferToPeers: true,
+			},
+			runConfig: {},
+		} as unknown as InvocationContext;
+
+		await drain(requestProcessor.runAsync(invocationContext, llmRequest));
+
+		expect(llmRequest.config?.responseSchema).toBe(schema);
+		expect(llmRequest.config?.responseMimeType).toBe("application/json");
+	});
+
+	it("reuses a pre-existing liveConnectConfig object instead of replacing it", async () => {
+		const llmRequest = new LlmRequest();
+		const existing = { marker: "keep-me" } as Record<string, unknown>;
+		(llmRequest as any).liveConnectConfig = existing;
+		const speechConfig = { voiceConfig: { prebuiltVoiceConfig: {} } };
+		const invocationContext = {
+			agent: {
+				name: "live-agent",
+				canonicalModel: "gpt-4o",
+			},
+			runConfig: {
+				speechConfig,
+				enableAffectiveDialog: false,
+			},
+		} as unknown as InvocationContext;
+
+		await drain(requestProcessor.runAsync(invocationContext, llmRequest));
+
+		expect(llmRequest.liveConnectConfig).toBe(existing);
+		expect(llmRequest.liveConnectConfig.speechConfig).toBe(speechConfig);
+		expect(llmRequest.liveConnectConfig.enableAffectiveDialog).toBe(false);
+		expect((llmRequest.liveConnectConfig as any).marker).toBe("keep-me");
+	});
+
+	it("leaves responseModalities unset when runConfig omits them", async () => {
+		const llmRequest = new LlmRequest();
+		const invocationContext = {
+			agent: {
+				name: "live-agent",
+				canonicalModel: "gpt-4o",
+			},
+			runConfig: {
+				speechConfig: { voiceConfig: {} },
+			},
+		} as unknown as InvocationContext;
+
+		await drain(requestProcessor.runAsync(invocationContext, llmRequest));
+
+		expect(llmRequest.liveConnectConfig.responseModalities).toBeUndefined();
+		expect(llmRequest.liveConnectConfig.speechConfig).toEqual({
+			voiceConfig: {},
+		});
+	});
+
+	it("swallows Logger construction errors while skipping output schema", async () => {
+		const { Logger } = await import("../../../logger");
+		vi.mocked(Logger).mockImplementationOnce(() => {
+			throw new Error("logger boom");
+		});
+
+		const schema = { type: "object" };
+		const llmRequest = new LlmRequest();
+		const invocationContext = {
+			agent: {
+				name: "tool-agent",
+				canonicalModel: "gpt-4o",
+				outputSchema: schema,
+				canonicalTools: async () => [{ name: "search" }],
+				subAgents: [],
+			},
+			runConfig: {},
+		} as unknown as InvocationContext;
+
+		await expect(
+			drain(requestProcessor.runAsync(invocationContext, llmRequest)),
+		).resolves.toBeUndefined();
+		expect(llmRequest.config?.responseSchema).toBeUndefined();
+	});
 });

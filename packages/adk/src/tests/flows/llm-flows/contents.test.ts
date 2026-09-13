@@ -830,4 +830,436 @@ describe("contents requestProcessor", () => {
 		);
 		expect(llmRequest.contents).toEqual([]);
 	});
+
+	it("leaves history unchanged when latest functionResponse has no matching functionCall", async () => {
+		const llmRequest = new LlmRequest();
+		const events = [
+			userEvent("before"),
+			agentEvent("assistant", "chatter"),
+			new Event({
+				author: "user",
+				content: {
+					role: "user",
+					parts: [
+						{
+							functionResponse: {
+								id: "orphan-fr",
+								name: "missing_tool",
+								response: { ok: false },
+							},
+						},
+					],
+				},
+			}),
+		];
+
+		await drain(
+			requestProcessor.runAsync(
+				ctx(duckAgent("assistant", "default"), events),
+				llmRequest,
+			),
+		);
+
+		// Orphan FR takes the functionCallEventIdx === -1 path, then async
+		// history rearrange drops FR events that were never paired to a call.
+		expect(llmRequest.contents.map((c) => c.parts?.[0])).toEqual([
+			{ text: "before" },
+			{ text: "chatter" },
+		]);
+		expect(
+			llmRequest.contents.some((c) =>
+				c.parts?.some((p) => p.functionResponse?.id === "orphan-fr"),
+			),
+		).toBe(false);
+	});
+
+	it("merges intermediate functionResponses into the latest async response", async () => {
+		const llmRequest = new LlmRequest();
+		const events = [
+			new Event({
+				author: "assistant",
+				content: {
+					role: "model",
+					parts: [
+						{ functionCall: { id: "c1", name: "tool_a", args: {} } },
+						{ functionCall: { id: "c2", name: "tool_b", args: {} } },
+					],
+				},
+			}),
+			new Event({
+				author: "user",
+				content: {
+					role: "user",
+					parts: [
+						{
+							functionResponse: {
+								id: "c1",
+								name: "tool_a",
+								response: { a: 1 },
+							},
+						},
+					],
+				},
+			}),
+			agentEvent("assistant", "should-drop"),
+			new Event({
+				author: "user",
+				content: {
+					role: "user",
+					parts: [
+						{
+							functionResponse: {
+								id: "c2",
+								name: "tool_b",
+								response: { b: 2 },
+							},
+						},
+					],
+				},
+			}),
+		];
+
+		await drain(
+			requestProcessor.runAsync(
+				ctx(duckAgent("assistant", "default"), events),
+				llmRequest,
+			),
+		);
+
+		const texts = llmRequest.contents.flatMap(
+			(c) => c.parts?.map((p) => p.text).filter(Boolean) ?? [],
+		);
+		expect(texts).not.toContain("should-drop");
+		const merged = llmRequest.contents.find((c) =>
+			c.parts?.some((p) => p.functionResponse),
+		);
+		expect(merged?.parts?.map((p) => p.functionResponse?.id).sort()).toEqual([
+			"c1",
+			"c2",
+		]);
+	});
+
+	it("handles overlapping compaction events by keeping the later synthesized summary", async () => {
+		const llmRequest = new LlmRequest();
+		const events = [
+			userEvent("hist-1", { timestamp: 1 }),
+			agentEvent("assistant", "hist-2", { timestamp: 2 }),
+			userEvent("hist-3", { timestamp: 3 }),
+			new Event({
+				author: "assistant",
+				timestamp: 4,
+				content: { role: "model", parts: [{ text: "compaction-a" }] },
+				actions: new EventActions({
+					compaction: {
+						startTimestamp: 1,
+						endTimestamp: 2.5,
+						compactedContent: {
+							role: "model",
+							parts: [{ text: "summary-early" }],
+						},
+					},
+				}),
+			}),
+			userEvent("mid", { timestamp: 5 }),
+			new Event({
+				author: "assistant",
+				timestamp: 6,
+				content: { role: "model", parts: [{ text: "compaction-b" }] },
+				actions: new EventActions({
+					compaction: {
+						startTimestamp: 3,
+						endTimestamp: 5.5,
+						compactedContent: {
+							role: "model",
+							parts: [{ text: "summary-late" }],
+						},
+					},
+				}),
+			}),
+			userEvent("tail", { timestamp: 7 }),
+		];
+
+		await drain(
+			requestProcessor.runAsync(
+				ctx(duckAgent("assistant", "default"), events),
+				llmRequest,
+			),
+		);
+
+		const texts = llmRequest.contents.map((c) => c.parts?.[0]?.text);
+		expect(texts).toContain("summary-late");
+		expect(texts).toContain("tail");
+		expect(texts).not.toContain("hist-1");
+		expect(texts).not.toContain("hist-3");
+		expect(texts).not.toContain("mid");
+		expect(texts).not.toContain("compaction-a");
+		expect(texts).not.toContain("compaction-b");
+	});
+
+	it("drops rewind marker without jumping when rewindBeforeInvocationId is unknown", async () => {
+		const llmRequest = new LlmRequest();
+		const events = [
+			userEvent("keep", { invocationId: "inv-a", timestamp: 1 }),
+			new Event({
+				author: "user",
+				invocationId: "inv-rewind",
+				timestamp: 2,
+				content: { role: "user", parts: [{ text: "rewind-marker" }] },
+				actions: new EventActions({
+					rewindBeforeInvocationId: "missing-inv",
+				}),
+			}),
+			userEvent("after", { invocationId: "inv-c", timestamp: 3 }),
+		];
+
+		await drain(
+			requestProcessor.runAsync(
+				ctx(duckAgent("assistant", "default"), events),
+				llmRequest,
+			),
+		);
+
+		expect(llmRequest.contents.map((c) => c.parts?.[0]?.text)).toEqual([
+			"keep",
+			"after",
+		]);
+	});
+
+	it("starts current_turn from a foreign-agent reply", async () => {
+		const llmRequest = new LlmRequest();
+		const events = [
+			userEvent("old-user", { timestamp: 1 }),
+			agentEvent("assistant", "old-self", { timestamp: 2 }),
+			agentEvent("other-agent", "handoff context", { timestamp: 3 }),
+			agentEvent("assistant", "after-handoff", { timestamp: 4 }),
+		];
+
+		await drain(
+			requestProcessor.runAsync(
+				ctx(
+					{
+						name: "assistant",
+						canonicalModel: "gpt-4o",
+						includeContents: "current_turn",
+					},
+					events,
+				),
+				llmRequest,
+			),
+		);
+
+		const texts = llmRequest.contents.flatMap(
+			(c) => c.parts?.map((p) => p.text).filter(Boolean) ?? [],
+		);
+		expect(texts.some((t) => t?.includes("handoff context"))).toBe(true);
+		expect(texts).toContain("after-handoff");
+		expect(texts).not.toContain("old-user");
+		expect(texts).not.toContain("old-self");
+	});
+
+	it("includes events with undefined branch when invocation branch is set", async () => {
+		const llmRequest = new LlmRequest();
+		const events = [
+			userEvent("unbranched"),
+			userEvent("other-branch", { branch: "root.other" }),
+			userEvent("matching", { branch: "root" }),
+		];
+
+		await drain(
+			requestProcessor.runAsync(
+				ctx(duckAgent("assistant", "default"), events, "root.child"),
+				llmRequest,
+			),
+		);
+
+		expect(llmRequest.contents.map((c) => c.parts?.[0]?.text)).toEqual([
+			"unbranched",
+			"matching",
+		]);
+	});
+
+	it("skips parts whose only text is an empty string", async () => {
+		const llmRequest = new LlmRequest();
+		const emptyText = new Event({
+			author: "user",
+			content: { role: "user", parts: [{ text: "" }] },
+		});
+
+		await drain(
+			requestProcessor.runAsync(
+				ctx(duckAgent("assistant", "default"), [emptyText, userEvent("kept")]),
+				llmRequest,
+			),
+		);
+
+		expect(llmRequest.contents).toHaveLength(1);
+		expect(llmRequest.contents[0].parts?.[0]).toEqual({ text: "kept" });
+	});
+
+	it("does not rearrange when latest functionResponse parts lack ids", async () => {
+		const llmRequest = new LlmRequest();
+		const events = [
+			new Event({
+				author: "assistant",
+				content: {
+					role: "model",
+					parts: [{ functionCall: { id: "c1", name: "tool", args: {} } }],
+				},
+			}),
+			agentEvent("assistant", "middle"),
+			new Event({
+				author: "user",
+				content: {
+					role: "user",
+					parts: [
+						{
+							functionResponse: {
+								name: "tool",
+								response: { ok: true },
+							},
+						},
+					],
+				},
+			}),
+		];
+
+		await drain(
+			requestProcessor.runAsync(
+				ctx(duckAgent("assistant", "default"), events),
+				llmRequest,
+			),
+		);
+
+		// FR parts without ids never populate functionResponseIds, so the -1 path
+		// runs; async history rearrange then drops unpaired FR events.
+		expect(
+			llmRequest.contents.map(
+				(c) =>
+					c.parts?.[0]?.text ??
+					c.parts?.[0]?.functionCall?.id ??
+					c.parts?.[0]?.functionResponse?.name,
+			),
+		).toEqual(["c1", "middle"]);
+	});
+
+	it("returns early when the event before latest functionResponse is malformed", async () => {
+		const llmRequest = new LlmRequest();
+		const malformed = new Event({
+			author: "assistant",
+			content: {
+				role: "model",
+				parts: [{ text: "broken-prev" }],
+			},
+		});
+		(malformed as any).getFunctionCalls = undefined;
+		(malformed as any).getFunctionResponses = undefined;
+		const events = [
+			userEvent("before"),
+			malformed,
+			new Event({
+				author: "user",
+				content: {
+					role: "user",
+					parts: [
+						{
+							functionResponse: {
+								id: "c1",
+								name: "tool",
+								response: { ok: true },
+							},
+						},
+					],
+				},
+			}),
+		];
+
+		await drain(
+			requestProcessor.runAsync(
+				ctx(duckAgent("assistant", "default"), events),
+				llmRequest,
+			),
+		);
+
+		// Latest-FR rearrange returns early on malformed prev; unpaired FR is
+		// then dropped by async history rearrange, while the malformed event is
+		// preserved via the safety pass-through.
+		expect(llmRequest.contents.map((c) => c.parts?.[0]?.text)).toEqual([
+			"before",
+			"broken-prev",
+		]);
+		expect(
+			llmRequest.contents.some((c) =>
+				c.parts?.some((p) => p.functionResponse?.id === "c1"),
+			),
+		).toBe(false);
+	});
+
+	it("keeps non-functionResponse trailing parts when merging async responses", async () => {
+		const llmRequest = new LlmRequest();
+		const events = [
+			new Event({
+				author: "assistant",
+				content: {
+					role: "model",
+					parts: [
+						{ functionCall: { id: "c1", name: "tool_a", args: {} } },
+						{ functionCall: { id: "c2", name: "tool_b", args: {} } },
+					],
+				},
+			}),
+			new Event({
+				author: "user",
+				content: {
+					role: "user",
+					parts: [
+						{
+							functionResponse: {
+								id: "c1",
+								name: "tool_a",
+								response: { a: 1 },
+							},
+						},
+						{ text: "note-from-first" },
+					],
+				},
+			}),
+			new Event({
+				author: "user",
+				content: {
+					role: "user",
+					parts: [
+						{
+							functionResponse: {
+								id: "c2",
+								name: "tool_b",
+								response: { b: 2 },
+							},
+						},
+						{ text: "note-from-second" },
+					],
+				},
+			}),
+		];
+
+		await drain(
+			requestProcessor.runAsync(
+				ctx(duckAgent("assistant", "default"), events),
+				llmRequest,
+			),
+		);
+
+		const merged = llmRequest.contents.find((c) =>
+			c.parts?.some((p) => p.functionResponse),
+		);
+		const texts = merged?.parts?.map((p) => p.text).filter(Boolean);
+		expect(texts).toEqual(
+			expect.arrayContaining(["note-from-first", "note-from-second"]),
+		);
+		expect(
+			merged?.parts
+				?.map((p) => p.functionResponse?.id)
+				.filter(Boolean)
+				.sort(),
+		).toEqual(["c1", "c2"]);
+	});
 });
