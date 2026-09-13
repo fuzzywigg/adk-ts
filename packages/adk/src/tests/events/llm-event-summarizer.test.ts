@@ -389,5 +389,115 @@ describe("LlmEventSummarizer", () => {
 			expect(result?.actions?.compaction?.endTimestamp).toBe(3000);
 			expect(result?.actions?.compaction?.compactedContent.role).toBe("model");
 		});
+
+		it("uses the default prompt template with {events} placeholder", async () => {
+			const events = [
+				new Event({
+					invocationId: "inv-1",
+					author: "user",
+					content: { parts: [{ text: "Alpha" }] },
+					timestamp: 1000,
+				}),
+			];
+
+			async function* mockGenerator() {
+				yield { content: { parts: [{ text: "Summary" }] } };
+			}
+			(mockLlm.generateContentAsync as any).mockReturnValue(mockGenerator());
+
+			await summarizer.maybeSummarizeEvents(events);
+
+			const promptText = (mockLlm.generateContentAsync as any).mock.calls[0][0]
+				.contents[0].parts[0].text as string;
+			expect(promptText).toContain("helpful assistant tasked with summarizing");
+			expect(promptText).toContain("Alpha");
+			expect(promptText).not.toContain("{events}");
+		});
+
+		it("skips non-text non-tool parts when formatting events", async () => {
+			const events = [
+				new Event({
+					invocationId: "inv-1",
+					author: "user",
+					content: {
+						parts: [
+							{ inlineData: { data: "abc", mimeType: "image/png" } } as any,
+							{ text: "" },
+							{ text: "visible" },
+						],
+					},
+					timestamp: 1000,
+				}),
+				new Event({
+					invocationId: "inv-2",
+					author: "agent",
+					content: { parts: [] },
+					timestamp: 1100,
+				}),
+				new Event({
+					invocationId: "inv-3",
+					author: "agent",
+					timestamp: 1200,
+				}),
+			];
+
+			async function* mockGenerator() {
+				yield { content: { parts: [{ text: "ok" }] } };
+			}
+			(mockLlm.generateContentAsync as any).mockReturnValue(mockGenerator());
+
+			await summarizer.maybeSummarizeEvents(events);
+
+			const promptText = (mockLlm.generateContentAsync as any).mock.calls[0][0]
+				.contents[0].parts[0].text as string;
+			expect(promptText).toContain("visible");
+			expect(promptText).not.toContain("inlineData");
+			expect(promptText).not.toContain("image/png");
+		});
+
+		it("tolerates stream chunks with missing content or parts", async () => {
+			const events = [
+				new Event({
+					invocationId: "inv-1",
+					author: "user",
+					content: { parts: [{ text: "Hello" }] },
+					timestamp: 1000,
+				}),
+			];
+
+			async function* mockGenerator() {
+				yield {};
+				yield { content: {} };
+				yield { content: { parts: undefined } };
+				yield { content: { parts: [] } };
+				yield { content: { parts: [{ text: undefined }] } };
+				yield { content: { parts: [{ text: "final" }] } };
+			}
+			(mockLlm.generateContentAsync as any).mockReturnValue(mockGenerator());
+
+			const result = await summarizer.maybeSummarizeEvents(events);
+			const text = result?.actions?.compaction?.compactedContent.parts[0]
+				.text as string;
+			expect(text.endsWith("final")).toBe(true);
+			expect(text).toContain("undefined");
+		});
+
+		it("returns undefined when the model yields no chunks", async () => {
+			const events = [
+				new Event({
+					invocationId: "inv-1",
+					author: "user",
+					content: { parts: [{ text: "Hello" }] },
+					timestamp: 1000,
+				}),
+			];
+
+			async function* mockGenerator() {
+				// no yields
+			}
+			(mockLlm.generateContentAsync as any).mockReturnValue(mockGenerator());
+
+			expect(await summarizer.maybeSummarizeEvents(events)).toBeUndefined();
+		});
 	});
 });

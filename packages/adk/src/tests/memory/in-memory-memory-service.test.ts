@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { InMemoryMemoryService } from "../../memory/in-memory-memory-service";
 import type { Session } from "../../sessions/session";
 
@@ -243,5 +243,220 @@ describe("InMemoryMemoryService", () => {
 			"2024-06-01T12:00:00.000Z",
 			"2024-06-02T12:00:00.000Z",
 		]);
+	});
+
+	it("joins multi-part text when matching keywords", async () => {
+		const service = new InMemoryMemoryService();
+		await service.addSessionToMemory(
+			makeSession({
+				events: [
+					{
+						author: "user",
+						timestamp: Date.parse("2024-07-01T00:00:00.000Z"),
+						content: {
+							parts: [
+								{ text: "The capital of" },
+								{ inlineData: { data: "x" } },
+								{ text: "France is Paris" },
+							],
+						},
+					} as any,
+				],
+			}),
+		);
+
+		const hits = await service.searchMemory({
+			appName: "app",
+			userId: "user",
+			query: "paris france",
+		});
+		expect(hits.memories).toHaveLength(1);
+		expect(hits.memories[0].content?.parts).toHaveLength(3);
+	});
+
+	it("skips punctuation-only and non-text parts during search", async () => {
+		const service = new InMemoryMemoryService();
+		await service.addSessionToMemory(
+			makeSession({
+				events: [
+					{
+						author: "user",
+						timestamp: 1,
+						content: { parts: [{ text: "!!! ??? ---" }] },
+					} as any,
+					{
+						author: "user",
+						timestamp: 2,
+						content: {
+							parts: [{ functionCall: { name: "x", args: {} } }],
+						},
+					} as any,
+					{
+						author: "user",
+						timestamp: 3,
+						content: { parts: [{ text: "Madrid is warm" }] },
+					} as any,
+				],
+			}),
+		);
+
+		const hits = await service.searchMemory({
+			appName: "app",
+			userId: "user",
+			query: "madrid",
+		});
+		expect(hits.memories).toHaveLength(1);
+		expect(hits.memories[0].content?.parts?.[0]?.text).toContain("Madrid");
+	});
+
+	it("does not match on empty or whitespace-only query tokens", async () => {
+		const service = new InMemoryMemoryService();
+		await service.addSessionToMemory(makeSession());
+
+		const blank = await service.searchMemory({
+			appName: "app",
+			userId: "user",
+			query: "   ",
+		});
+		expect(blank.memories).toEqual([]);
+	});
+
+	it("filters out events without content.parts when indexing", async () => {
+		const service = new InMemoryMemoryService();
+		await service.addSessionToMemory(
+			makeSession({
+				events: [
+					{ author: "user", timestamp: 1 } as any,
+					{
+						author: "user",
+						timestamp: 2,
+						content: {},
+					} as any,
+					{
+						author: "user",
+						timestamp: 3,
+						content: { parts: [{ text: "Keep Oslo cold" }] },
+					} as any,
+				],
+			}),
+		);
+
+		const hits = await service.searchMemory({
+			appName: "app",
+			userId: "user",
+			query: "oslo",
+		});
+		expect(hits.memories).toHaveLength(1);
+	});
+
+	it("matches any single query token against event words", async () => {
+		const service = new InMemoryMemoryService();
+		await service.addSessionToMemory(makeSession());
+
+		const hits = await service.searchMemory({
+			appName: "app",
+			userId: "user",
+			query: "tokyo sunny nowhere",
+		});
+		expect(hits.memories).toHaveLength(1);
+		expect(hits.memories[0].content?.parts?.[0]?.text).toContain("sunny");
+	});
+
+	it("warns and returns empty from deprecated getAllSessions/getSession", () => {
+		const service = new InMemoryMemoryService();
+		const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+
+		expect(service.getAllSessions()).toEqual([]);
+		expect(service.getSession("any")).toBeUndefined();
+		expect(warn).toHaveBeenCalledTimes(2);
+		expect(warn.mock.calls[0][0]).toMatch(/getAllSessions\(\) is deprecated/);
+		expect(warn.mock.calls[1][0]).toMatch(/getSession\(\) is deprecated/);
+
+		warn.mockRestore();
+	});
+
+	it("isolates users under the same app name", async () => {
+		const service = new InMemoryMemoryService();
+		await service.addSessionToMemory(makeSession({ userId: "alice" }));
+		await service.addSessionToMemory(
+			makeSession({
+				userId: "bob",
+				id: "session-bob",
+				events: [
+					{
+						author: "user",
+						timestamp: 1,
+						content: { parts: [{ text: "Bob likes Tokyo noodles" }] },
+					} as any,
+				],
+			}),
+		);
+
+		const alice = await service.searchMemory({
+			appName: "app",
+			userId: "alice",
+			query: "paris",
+		});
+		const bob = await service.searchMemory({
+			appName: "app",
+			userId: "bob",
+			query: "tokyo",
+		});
+		expect(alice.memories).toHaveLength(1);
+		expect(bob.memories).toHaveLength(1);
+		expect(bob.memories[0].content?.parts?.[0]?.text).toContain("Tokyo");
+
+		const aliceTokyo = await service.searchMemory({
+			appName: "app",
+			userId: "alice",
+			query: "tokyo",
+		});
+		expect(aliceTokyo.memories).toEqual([]);
+	});
+
+	it("returns multiple matching events from one session", async () => {
+		const service = new InMemoryMemoryService();
+		await service.addSessionToMemory(
+			makeSession({
+				events: [
+					{
+						author: "user",
+						timestamp: Date.parse("2024-08-01T00:00:00.000Z"),
+						content: { parts: [{ text: "Cats are playful" }] },
+					} as any,
+					{
+						author: "agent",
+						timestamp: Date.parse("2024-08-01T00:01:00.000Z"),
+						content: { parts: [{ text: "Dogs are loyal" }] },
+					} as any,
+					{
+						author: "user",
+						timestamp: Date.parse("2024-08-01T00:02:00.000Z"),
+						content: { parts: [{ text: "Cats and dogs coexist" }] },
+					} as any,
+				],
+			}),
+		);
+
+		const cats = await service.searchMemory({
+			appName: "app",
+			userId: "user",
+			query: "cats",
+		});
+		expect(cats.memories).toHaveLength(2);
+		expect(cats.memories.map((m) => m.author)).toEqual(["user", "user"]);
+	});
+
+	it("clear is idempotent and search stays empty afterward", async () => {
+		const service = new InMemoryMemoryService();
+		service.clear();
+		service.clear();
+		expect(
+			await service.searchMemory({
+				appName: "app",
+				userId: "user",
+				query: "anything",
+			}),
+		).toEqual({ memories: [] });
 	});
 });

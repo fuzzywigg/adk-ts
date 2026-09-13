@@ -147,4 +147,91 @@ describe("VertexAiRagMemoryService", () => {
 		);
 		expect(unlinkSync).toHaveBeenCalled();
 	});
+
+	it("uploads to every configured rag resource and joins multi-line text", async () => {
+		const service = new VertexAiRagMemoryService("corpus-primary");
+		(service as any)._vertexRagStore.rag_resources = [
+			{ rag_corpus: "corpus-a" },
+			{ rag_corpus: "corpus-b" },
+		];
+
+		const session: Session = {
+			id: "sess-multi",
+			appName: "demo",
+			userId: "alice",
+			state: {},
+			events: [
+				{
+					author: "user",
+					timestamp: 10,
+					content: {
+						parts: [{ text: "line\none" }, { text: "two\nthree" }],
+					},
+				} as Event,
+			],
+			lastUpdateTime: 10,
+		};
+
+		await expect(service.addSessionToMemory(session)).resolves.toBeUndefined();
+		expect(console.log).toHaveBeenCalledWith(
+			"Mock upload_file:",
+			expect.objectContaining({
+				corpus_name: "corpus-a",
+				display_name: "demo.alice.sess-multi",
+			}),
+		);
+		expect(console.log).toHaveBeenCalledWith(
+			"Mock upload_file:",
+			expect.objectContaining({ corpus_name: "corpus-b" }),
+		);
+	});
+
+	it("searchMemory passes rag_corpora when set on the store", async () => {
+		const service = new VertexAiRagMemoryService("corpus-1", 7, 1.5);
+		(service as any)._vertexRagStore.rag_corpora = ["legacy-corpus"];
+
+		await service.searchMemory({
+			appName: "demo",
+			userId: "alice",
+			query: "status",
+		});
+
+		expect(console.log).toHaveBeenCalledWith(
+			"Mock retrieval_query:",
+			expect.objectContaining({
+				text: "status",
+				rag_corpora: ["legacy-corpus"],
+				similarity_top_k: 7,
+				vector_distance_threshold: 1.5,
+			}),
+		);
+	});
+
+	it("addSessionToMemory with only non-text events still uploads empty payload", async () => {
+		const service = new VertexAiRagMemoryService("corpus-empty");
+		const session: Session = {
+			id: "sess-empty",
+			appName: "demo",
+			userId: "alice",
+			state: {},
+			events: [
+				{ author: "system", timestamp: 1 } as Event,
+				{
+					author: "user",
+					timestamp: 2,
+					content: { parts: [{ functionCall: { name: "x", args: {} } }] },
+				} as Event,
+			],
+			lastUpdateTime: 2,
+		};
+
+		await expect(service.addSessionToMemory(session)).resolves.toBeUndefined();
+		expect(console.log).toHaveBeenCalledWith(
+			"Mock upload_file:",
+			expect.objectContaining({
+				corpus_name: "corpus-empty",
+				display_name: "demo.alice.sess-empty",
+			}),
+		);
+	});
 });
