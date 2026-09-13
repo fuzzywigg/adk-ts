@@ -18,4 +18,24 @@ describe("findProjectRoot", () => {
 		const start = mkdtempSync(join(tmpdir(), "adk-cli-empty-"));
 		expect(findProjectRoot(start)).toBe(start.replace(/\\/g, "/"));
 	});
+
+	it("recognizes tsconfig.json, .env, and .git markers", () => {
+		const tsRoot = mkdtempSync(join(tmpdir(), "adk-cli-ts-"));
+		writeFileSync(join(tsRoot, "tsconfig.json"), "{}");
+		const nestedTs = join(tsRoot, "nested");
+		mkdirSync(nestedTs, { recursive: true });
+		expect(findProjectRoot(nestedTs)).toBe(tsRoot.replace(/\\/g, "/"));
+
+		const envRoot = mkdtempSync(join(tmpdir(), "adk-cli-env-"));
+		writeFileSync(join(envRoot, ".env"), "A=1\n");
+		const envChild = join(envRoot, "child");
+		mkdirSync(envChild, { recursive: true });
+		expect(findProjectRoot(envChild)).toBe(envRoot.replace(/\\/g, "/"));
+
+		const gitRoot = mkdtempSync(join(tmpdir(), "adk-cli-git-"));
+		mkdirSync(join(gitRoot, ".git"));
+		const deep = join(gitRoot, "a", "b");
+		mkdirSync(deep, { recursive: true });
+		expect(findProjectRoot(deep)).toBe(gitRoot.replace(/\\/g, "/"));
+	});
 });
