@@ -130,4 +130,50 @@ describe("BaseTool", () => {
 		expect(attempts).toBe(2);
 		vi.useRealTimers();
 	});
+
+	it("returns exhaustion envelope after retries fail", async () => {
+		vi.useFakeTimers();
+		const tool = new StubTool(
+			{
+				name: "always_fail",
+				description: "Never succeeds",
+				shouldRetryOnFailure: true,
+				maxRetryAttempts: 1,
+			},
+			async () => {
+				throw new Error("hard fail");
+			},
+		);
+		tool.baseRetryDelay = 1;
+		tool.maxRetryDelay = 1;
+		vi.spyOn(console, "error").mockImplementation(() => {});
+
+		const pending = tool.safeExecute({ query: "x" }, makeContext());
+		await vi.runAllTimersAsync();
+		await expect(pending).resolves.toEqual({
+			error: "Execution failed",
+			message: "hard fail",
+			tool: "always_fail",
+		});
+		vi.useRealTimers();
+	});
+
+	it("wraps successful runs without declaration validation", async () => {
+		class NoDeclTool extends BaseTool {
+			getDeclaration() {
+				return null;
+			}
+			async runAsync() {
+				return { ok: true };
+			}
+		}
+
+		const tool = new NoDeclTool({
+			name: "no_decl",
+			description: "Has no declaration",
+		});
+		await expect(tool.safeExecute({}, makeContext())).resolves.toEqual({
+			result: { ok: true },
+		});
+	});
 });

@@ -1,6 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
 import { BasePlugin } from "../../plugins/base-plugin";
-import { PluginManager } from "../../plugins/plugin-manager";
+import {
+	PluginManager,
+	pluginCallbackNameSchema,
+} from "../../plugins/plugin-manager";
 
 class TestPlugin extends BasePlugin {
 	beforeRunCalls = 0;
@@ -97,5 +100,160 @@ describe("PluginManager", () => {
 
 		await expect(manager.close()).resolves.toBeUndefined();
 		expect(close).toHaveBeenCalledOnce();
+	});
+
+	it("runs additional callback runners and short-circuits on first result", async () => {
+		class MultiPlugin extends BasePlugin {
+			calls: string[] = [];
+
+			constructor(
+				name: string,
+				private readonly results: Partial<Record<string, unknown>>,
+			) {
+				super(name);
+			}
+
+			async onUserMessageCallback(): Promise<any> {
+				this.calls.push("user");
+				return this.results.user;
+			}
+			async afterRunCallback(): Promise<any> {
+				this.calls.push("afterRun");
+				return this.results.afterRun;
+			}
+			async onEventCallback(): Promise<any> {
+				this.calls.push("event");
+				return this.results.event;
+			}
+			async beforeAgentCallback(): Promise<any> {
+				this.calls.push("beforeAgent");
+				return this.results.beforeAgent;
+			}
+			async afterAgentCallback(): Promise<any> {
+				this.calls.push("afterAgent");
+				return this.results.afterAgent;
+			}
+			async beforeToolCallback(): Promise<any> {
+				this.calls.push("beforeTool");
+				return this.results.beforeTool;
+			}
+			async afterToolCallback(): Promise<any> {
+				this.calls.push("afterTool");
+				return this.results.afterTool;
+			}
+			async beforeModelCallback(): Promise<any> {
+				this.calls.push("beforeModel");
+				return this.results.beforeModel;
+			}
+			async afterModelCallback(): Promise<any> {
+				this.calls.push("afterModel");
+				return this.results.afterModel;
+			}
+			async onToolErrorCallback(): Promise<any> {
+				this.calls.push("toolError");
+				return this.results.toolError;
+			}
+			async onModelErrorCallback(): Promise<any> {
+				this.calls.push("modelError");
+				return this.results.modelError;
+			}
+		}
+
+		const first = new MultiPlugin("first", {});
+		const second = new MultiPlugin("second", {
+			user: { rewritten: true },
+			afterRun: { done: true },
+			event: { patched: true },
+			beforeAgent: { skip: true },
+			afterAgent: { out: 1 },
+			beforeTool: { args: {} },
+			afterTool: { result: 2 },
+			beforeModel: { req: true },
+			afterModel: { res: true },
+			toolError: { recovered: true },
+			modelError: { fallback: true },
+		});
+		const third = new MultiPlugin("third", {
+			user: { ignored: true },
+		});
+		const manager = new PluginManager({ plugins: [first, second, third] });
+
+		await expect(
+			manager.runOnUserMessageCallback({
+				userMessage: { role: "user", parts: [] } as any,
+				invocationContext: {} as any,
+			}),
+		).resolves.toEqual({ rewritten: true });
+		await expect(
+			manager.runAfterRunCallback({ invocationContext: {} as any }),
+		).resolves.toEqual({ done: true });
+		await expect(
+			manager.runOnEventCallback({
+				invocationContext: {} as any,
+				event: {} as any,
+			}),
+		).resolves.toEqual({ patched: true });
+		await expect(
+			manager.runBeforeAgentCallback({
+				agent: {} as any,
+				callbackContext: {} as any,
+			}),
+		).resolves.toEqual({ skip: true });
+		await expect(
+			manager.runAfterAgentCallback({
+				agent: {} as any,
+				callbackContext: {} as any,
+			}),
+		).resolves.toEqual({ out: 1 });
+		await expect(
+			manager.runBeforeToolCallback({
+				tool: {} as any,
+				toolArgs: {},
+				toolContext: {} as any,
+			}),
+		).resolves.toEqual({ args: {} });
+		await expect(
+			manager.runAfterToolCallback({
+				tool: {} as any,
+				toolArgs: {},
+				toolContext: {} as any,
+				result: {},
+			}),
+		).resolves.toEqual({ result: 2 });
+		await expect(
+			manager.runBeforeModelCallback({
+				callbackContext: {} as any,
+				llmRequest: {} as any,
+			}),
+		).resolves.toEqual({ req: true });
+		await expect(
+			manager.runAfterModelCallback({
+				callbackContext: {} as any,
+				llmResponse: {} as any,
+			}),
+		).resolves.toEqual({ res: true });
+		await expect(
+			manager.runOnToolErrorCallback({
+				tool: {} as any,
+				toolArgs: {},
+				toolContext: {} as any,
+				error: new Error("tool"),
+			}),
+		).resolves.toEqual({ recovered: true });
+		await expect(
+			manager.runOnModelErrorCallback({
+				callbackContext: {} as any,
+				llmRequest: {} as any,
+				error: new Error("model"),
+			}),
+		).resolves.toEqual({ fallback: true });
+
+		expect(third.calls).toEqual([]);
+		expect(
+			pluginCallbackNameSchema.safeParse("beforeRunCallback").success,
+		).toBe(true);
+		expect(pluginCallbackNameSchema.safeParse("unknownCallback").success).toBe(
+			false,
+		);
 	});
 });

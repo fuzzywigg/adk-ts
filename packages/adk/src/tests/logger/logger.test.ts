@@ -69,4 +69,34 @@ describe("Logger", () => {
 		const logger = new Logger({ name: "forced" });
 		expect(() => logger.warn("still boxed")).not.toThrow();
 	});
+
+	it("exposes structured helpers and formatBox content", () => {
+		process.env.NODE_ENV = "development";
+		delete process.env.ADK_FORCE_BOXES;
+		const logger = new Logger({ name: "structured" });
+		logger.isDebugEnabled = true;
+
+		const box = logger.formatBox({
+			title: "Title",
+			description: "Description text",
+			lines: ["line-a", "line-b"],
+		});
+		expect(box).toContain("Title");
+		expect(box).toContain("line-a");
+
+		expect(() =>
+			logger.warnStructured({
+				code: "W42",
+				message: "warn-title",
+				suggestion: "retry",
+				context: { step: "run" },
+			}),
+		).not.toThrow();
+		expect(() =>
+			logger.debugStructured("debug-title", { step: "run" }),
+		).not.toThrow();
+		expect(() =>
+			logger.debugArray("items", [{ id: 1 }, { id: 2 }]),
+		).not.toThrow();
+	});
 });

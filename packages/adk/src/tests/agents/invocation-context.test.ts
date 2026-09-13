@@ -87,4 +87,30 @@ describe("InvocationContext", () => {
 		context.endInvocation = true;
 		expect(context.endInvocation).toBe(true);
 	});
+
+	it("treats non-positive maxLlmCalls as unlimited", () => {
+		const context = makeContext(new RunConfig({ maxLlmCalls: 0 }));
+		expect(() => {
+			context.incrementLlmCallCount();
+			context.incrementLlmCallCount();
+			context.incrementLlmCallCount();
+		}).not.toThrow();
+	});
+
+	it("propagates optional artifact and memory services to children", () => {
+		const artifactService = { saveArtifact: async () => 1 } as any;
+		const memoryService = { addMemory: async () => undefined } as any;
+		const parent = new InvocationContext({
+			sessionService: {} as BaseSessionService,
+			pluginManager: new PluginManager(),
+			agent: makeAgent("root"),
+			session: makeSession(),
+			artifactService,
+			memoryService,
+		});
+
+		const child = parent.createChildContext(makeAgent("child"));
+		expect(child.artifactService).toBe(artifactService);
+		expect(child.memoryService).toBe(memoryService);
+	});
 });
