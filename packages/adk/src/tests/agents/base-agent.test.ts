@@ -275,5 +275,58 @@ describe("BaseAgent", () => {
 			expect(events).toHaveLength(2);
 			expect(events[1].content).toEqual({ parts: [{ text: "plugin-after" }] });
 		});
+
+		it("yields a stateDelta-only before event and still runs the agent impl", async () => {
+			agent.beforeAgentCallback = (callbackContext) => {
+				callbackContext.state.before_flag = "set";
+				return undefined;
+			};
+
+			const events = [];
+			for await (const event of agent["runAsyncInternal"](mockContext)) {
+				events.push(event);
+			}
+
+			expect(agent.runAsyncImplMock).toHaveBeenCalledOnce();
+			expect(events.length).toBeGreaterThanOrEqual(2);
+			expect(events[0].content).toBeUndefined();
+			expect(events[0].actions?.stateDelta?.before_flag).toBe("set");
+			expect(mockContext.endInvocation).toBe(false);
+		});
+
+		it("yields a stateDelta-only after event without content", async () => {
+			agent.afterAgentCallback = (callbackContext) => {
+				callbackContext.state.after_flag = 1;
+				return undefined;
+			};
+
+			const events = [];
+			for await (const event of agent["runAsyncInternal"](mockContext)) {
+				events.push(event);
+			}
+
+			expect(agent.runAsyncImplMock).toHaveBeenCalledOnce();
+			expect(events).toHaveLength(2);
+			expect(events[1].content).toBeUndefined();
+			expect(events[1].actions?.stateDelta?.after_flag).toBe(1);
+		});
+
+		it("awaits Promise-returning before and after agent callbacks", async () => {
+			agent.beforeAgentCallback = async () => undefined;
+			agent.afterAgentCallback = async () => ({
+				parts: [{ text: "async-after" }],
+			});
+
+			const events = [];
+			for await (const event of agent["runAsyncInternal"](mockContext)) {
+				events.push(event);
+			}
+
+			expect(agent.runAsyncImplMock).toHaveBeenCalledOnce();
+			expect(events).toHaveLength(2);
+			expect(events[1].content).toEqual({
+				parts: [{ text: "async-after" }],
+			});
+		});
 	});
 });

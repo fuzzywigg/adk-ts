@@ -152,4 +152,30 @@ describe("instructions requestProcessor", () => {
 		expect(text).toContain("answer");
 		expect(text).toContain("IMPORTANT: After any tool calls");
 	});
+
+	it("skips schema guidance when toJSONSchema throws", async () => {
+		const agent = {
+			name: "bad-schema-agent",
+			canonicalModel: "gpt-4o",
+			rootAgent: { name: "root" },
+			outputSchema: new Proxy(
+				{},
+				{
+					get() {
+						throw new Error("unsupported schema");
+					},
+				},
+			),
+		};
+
+		const llmRequest = new LlmRequest();
+		await drain(
+			requestProcessor.runAsync(
+				{ agent } as unknown as InvocationContext,
+				llmRequest,
+			),
+		);
+
+		expect(llmRequest.getSystemInstructionText()).toBeUndefined();
+	});
 });

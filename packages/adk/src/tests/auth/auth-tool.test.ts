@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { AuthConfig } from "../../auth/auth-config";
 import {
 	AuthCredentialType,
@@ -97,6 +97,22 @@ describe("AuthTool", () => {
 		expect(result.status).toBe("auth_request_processed");
 		expect(result.authConfig).toBe(authConfig);
 		expect(result.credentialKey).toMatch(/^adk_http_\d+$/);
+	});
+
+	it("processAuthRequest returns auth_request_failed when key generation throws", async () => {
+		const authConfig = new EnhancedAuthConfig({
+			authScheme: new ApiKeyScheme({ in: "header", name: "x-api-key" }),
+		});
+		vi.spyOn(authConfig, "getCredentialKey").mockImplementation(() => {
+			throw new Error("key boom");
+		});
+
+		await expect(
+			AuthTool.processAuthRequest({
+				function_call_id: "fc-fail",
+				auth_config: authConfig,
+			}),
+		).resolves.toEqual({ status: "auth_request_failed" });
 	});
 });
 

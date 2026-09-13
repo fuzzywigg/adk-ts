@@ -699,4 +699,135 @@ describe("contents requestProcessor", () => {
 			"after",
 		]);
 	});
+
+	it("preserves non-text foreign parts via convertForeignEvent fallback", async () => {
+		const llmRequest = new LlmRequest();
+		const foreign = new Event({
+			author: "other-agent",
+			content: {
+				role: "model",
+				parts: [
+					{ text: "see image" },
+					{
+						inlineData: {
+							mimeType: "image/png",
+							data: "abc123",
+						},
+					},
+				],
+			},
+		});
+
+		await drain(
+			requestProcessor.runAsync(
+				ctx(duckAgent("assistant", "default"), [
+					foreign,
+					userEvent("describe"),
+				]),
+				llmRequest,
+			),
+		);
+
+		expect(llmRequest.contents[0].parts?.[0]).toEqual({ text: "For context:" });
+		expect(llmRequest.contents[0].parts?.[1]).toEqual({
+			text: "[other-agent] said: see image",
+		});
+		expect(llmRequest.contents[0].parts?.[2]).toEqual({
+			inlineData: { mimeType: "image/png", data: "abc123" },
+		});
+	});
+
+	it("overwrites earlier functionResponse parts when merging duplicate ids", async () => {
+		const llmRequest = new LlmRequest();
+		const events = [
+			new Event({
+				author: "assistant",
+				content: {
+					role: "model",
+					parts: [
+						{
+							functionCall: { id: "c1", name: "tool_a", args: {} },
+						},
+						{
+							functionCall: { id: "c2", name: "tool_b", args: {} },
+						},
+					],
+				},
+			}),
+			new Event({
+				author: "user",
+				content: {
+					role: "user",
+					parts: [
+						{
+							functionResponse: {
+								id: "c1",
+								name: "tool_a",
+								response: { a: 1 },
+							},
+						},
+						{
+							functionResponse: {
+								id: "c2",
+								name: "tool_b",
+								response: { b: "early" },
+							},
+						},
+					],
+				},
+			}),
+			new Event({
+				author: "user",
+				content: {
+					role: "user",
+					parts: [
+						{
+							functionResponse: {
+								id: "c2",
+								name: "tool_b",
+								response: { b: "late" },
+							},
+						},
+					],
+				},
+			}),
+			userEvent("after"),
+		];
+
+		await drain(
+			requestProcessor.runAsync(
+				ctx(duckAgent("assistant", "default"), events),
+				llmRequest,
+			),
+		);
+
+		const merged = llmRequest.contents.find((c) =>
+			c.parts?.some((p) => p.functionResponse),
+		);
+		const byId = Object.fromEntries(
+			(merged?.parts ?? [])
+				.filter((p) => p.functionResponse?.id)
+				.map((p) => [p.functionResponse!.id, p.functionResponse!.response]),
+		);
+		expect(byId.c1).toEqual({ a: 1 });
+		expect(byId.c2).toEqual({ b: "late" });
+	});
+
+	it("returns empty contents for current_turn when only current-agent events exist", async () => {
+		const llmRequest = new LlmRequest();
+		await drain(
+			requestProcessor.runAsync(
+				ctx(
+					{
+						name: "assistant",
+						canonicalModel: "gpt-4o",
+						includeContents: "current_turn",
+					},
+					[agentEvent("assistant", "solo")],
+				),
+				llmRequest,
+			),
+		);
+		expect(llmRequest.contents).toEqual([]);
+	});
 });

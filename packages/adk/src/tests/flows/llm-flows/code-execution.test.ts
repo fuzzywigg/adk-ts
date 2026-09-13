@@ -315,6 +315,139 @@ describe("code-execution processors", () => {
 			"Processing input file",
 		);
 	});
+
+	it("requestProcessor skips csv preprocess when optimizeDataFile is false", async () => {
+		class StubExecutor extends BaseCodeExecutor {
+			executeCode = vi.fn(async () => ({
+				stdout: "",
+				stderr: "",
+				outputFiles: [],
+			}));
+		}
+		const executor = new StubExecutor({ optimizeDataFile: false });
+		const agent = new LlmAgent({
+			name: "coder",
+			model: "gpt-4o",
+			codeExecutor: executor,
+		});
+		const llmRequest = new LlmRequest({
+			model: "gpt-4o",
+			contents: [
+				{
+					role: "user",
+					parts: [
+						{ text: "analyze" },
+						{ inlineData: { mimeType: "text/csv", data: "a,b\n1,2" } },
+					],
+				},
+			],
+		});
+
+		const events = await collect(
+			requestProcessor.runAsync(
+				{
+					agent,
+					invocationId: "inv-skip-opt",
+					session: { id: "s1", state: {}, events: [] },
+				} as unknown as InvocationContext,
+				llmRequest,
+			),
+		);
+
+		expect(events).toEqual([]);
+		expect(executor.executeCode).not.toHaveBeenCalled();
+	});
+
+	it("requestProcessor does not re-execute already processed csv files", async () => {
+		class StubExecutor extends BaseCodeExecutor {
+			executeCode = vi.fn(async () => ({
+				stdout: "loaded",
+				stderr: "",
+				outputFiles: [],
+			}));
+		}
+		const executor = new StubExecutor({
+			optimizeDataFile: true,
+			codeBlockDelimiters: [["```python\n", "\n```"]],
+			executionResultDelimiters: ["```tool_outputs\n", "\n```"],
+		});
+		const agent = new LlmAgent({
+			name: "coder",
+			model: "gpt-4o",
+			codeExecutor: executor,
+		});
+		const llmRequest = new LlmRequest({
+			model: "gpt-4o",
+			contents: [
+				{
+					role: "user",
+					parts: [
+						{ text: "analyze" },
+						{ inlineData: { mimeType: "text/csv", data: "a,b\n1,2" } },
+					],
+				},
+			],
+		});
+		const invocation = {
+			agent,
+			invocationId: "inv-csv-once",
+			appName: "app",
+			userId: "u",
+			branch: "root",
+			session: {
+				id: "s1",
+				appName: "app",
+				userId: "u",
+				state: {},
+				events: [],
+			},
+			artifactService: { saveArtifact: vi.fn(async () => 1) },
+		} as unknown as InvocationContext;
+
+		await collect(requestProcessor.runAsync(invocation, llmRequest));
+		const firstCalls = executor.executeCode.mock.calls.length;
+		expect(firstCalls).toBeGreaterThan(0);
+
+		await collect(requestProcessor.runAsync(invocation, llmRequest));
+		expect(executor.executeCode).toHaveBeenCalledTimes(firstCalls);
+	});
+
+	it("responseProcessor is a no-op when model response has no extractable code", async () => {
+		class StubExecutor extends BaseCodeExecutor {
+			executeCode = vi.fn(async () => ({
+				stdout: "",
+				stderr: "",
+				outputFiles: [],
+			}));
+		}
+		const executor = new StubExecutor({
+			codeBlockDelimiters: [["```python\n", "\n```"]],
+		});
+		const llmResponse = {
+			partial: false,
+			content: {
+				role: "model",
+				parts: [{ text: "no code here" }],
+			},
+		} as LlmResponse;
+
+		const events = await collect(
+			responseProcessor.runAsync(
+				{
+					agent: new LlmAgent({
+						name: "coder",
+						codeExecutor: executor,
+					}),
+					session: { state: {}, events: [] },
+				} as unknown as InvocationContext,
+				llmResponse,
+			),
+		);
+
+		expect(events).toEqual([]);
+		expect(executor.executeCode).not.toHaveBeenCalled();
+		expect(llmResponse.content).toBeDefined();
+	});
 });
 
 describe("code-execution helpers", () => {

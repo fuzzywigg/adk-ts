@@ -466,4 +466,91 @@ describe("auth requestProcessor", () => {
 		expect(handleFunctionCallsAsyncMock).not.toHaveBeenCalled();
 		warn.mockRestore();
 	});
+
+	it("ignores non-EUC function responses on the latest user event while still resuming", async () => {
+		const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+		handleFunctionCallsAsyncMock.mockResolvedValue(null);
+
+		const originalCall = new Event({
+			author: "auth-agent",
+			content: {
+				role: "model",
+				parts: [
+					{
+						functionCall: {
+							id: "tool-mix",
+							name: "secure_api",
+							args: {},
+						},
+					},
+				],
+			},
+		});
+		const eucCall = new Event({
+			author: "auth-agent",
+			content: {
+				role: "model",
+				parts: [
+					{
+						functionCall: {
+							id: "euc-mix",
+							name: REQUEST_EUC_FUNCTION_CALL_NAME,
+							args: JSON.stringify({
+								function_call_id: "tool-mix",
+								auth_config: { authScheme: { type: "apiKey" } },
+							}) as any,
+						},
+					},
+				],
+			},
+		});
+		const eucResponse = new Event({
+			author: "user",
+			content: {
+				role: "user",
+				parts: [
+					{
+						functionResponse: {
+							id: "other-fr",
+							name: "unrelated_tool",
+							response: { ignored: true },
+						},
+					},
+					{
+						functionResponse: {
+							id: "euc-mix",
+							name: REQUEST_EUC_FUNCTION_CALL_NAME,
+							response: JSON.stringify({
+								authScheme: { type: "apiKey" },
+								rawAuthCredential: { apiKey: "k" },
+							}),
+						},
+					},
+				],
+			},
+		});
+
+		const tool = { name: "secure_api" };
+		const events = await collect(
+			requestProcessor.runAsync(
+				baseCtx({
+					agent: {
+						name: "auth-agent",
+						canonicalTools: async () => [tool],
+					},
+					events: [originalCall, eucCall, eucResponse],
+				}),
+				new LlmRequest(),
+			),
+		);
+
+		expect(events).toEqual([]);
+		expect(handleFunctionCallsAsyncMock).toHaveBeenCalledWith(
+			expect.anything(),
+			originalCall,
+			{ secure_api: tool },
+			new Set(["tool-mix"]),
+		);
+		warn.mockRestore();
+	});
 });

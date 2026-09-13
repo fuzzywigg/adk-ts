@@ -114,4 +114,50 @@ describe("AgentTransferLlmRequestProcessor", () => {
 		);
 		expect(request.config?.systemInstruction).not.toContain("Peer agent");
 	});
+
+	it("registers transfer_to_agent in toolsDict and function declarations", async () => {
+		const request = new LlmRequest();
+		const child = new StubAgent("worker", "Does work");
+		const agent = new StubAgent("orchestrator", "Routes work");
+		agent.subAgents = [child];
+		child.parentAgent = agent;
+
+		for await (const _ of requestProcessor.runAsync(
+			makeContext(agent),
+			request,
+		)) {
+		}
+
+		expect(request.toolsDict.transfer_to_agent).toBeDefined();
+		expect(request.toolsDict.transfer_to_agent.name).toBe("transfer_to_agent");
+		const declarations = request.config?.tools?.flatMap(
+			(t) => t.functionDeclarations ?? [],
+		);
+		expect(declarations?.some((d) => d.name === "transfer_to_agent")).toBe(
+			true,
+		);
+	});
+
+	it("lists only children when parentAgent lacks subAgents", async () => {
+		const request = new LlmRequest();
+		const child = new StubAgent("worker", "Does work");
+		const agent = new StubAgent("orchestrator", "Routes work");
+		agent.subAgents = [child];
+		child.parentAgent = agent;
+		agent.parentAgent = { name: "bare_parent" } as any;
+
+		for await (const _ of requestProcessor.runAsync(
+			makeContext(agent),
+			request,
+		)) {
+		}
+
+		expect(request.config?.systemInstruction).toContain("worker");
+		expect(request.config?.systemInstruction).toContain(
+			"Your parent agent is bare_parent",
+		);
+		expect(request.config?.systemInstruction).not.toMatch(
+			/Agent name: bare_parent/,
+		);
+	});
 });

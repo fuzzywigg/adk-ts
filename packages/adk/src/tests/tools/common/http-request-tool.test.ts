@@ -210,4 +210,38 @@ describe("HttpRequestTool", () => {
 		]);
 		expect(method.default).toBe("GET");
 	});
+
+	it("returns statusCode 0 for invalid URLs without calling fetch", async () => {
+		const tool = new HttpRequestTool();
+		const fetchMock = vi.fn();
+		globalThis.fetch = fetchMock as typeof fetch;
+
+		const result = await tool.runAsync({ url: "not-a-url" }, makeContext());
+
+		expect(result.statusCode).toBe(0);
+		expect(result.error).toBeTruthy();
+		expect(fetchMock).not.toHaveBeenCalled();
+	});
+
+	it("passes AbortSignal.timeout with the configured timeout", async () => {
+		const tool = new HttpRequestTool();
+		const timeoutSpy = vi
+			.spyOn(AbortSignal, "timeout")
+			.mockReturnValue(AbortSignal.abort() as AbortSignal);
+		const fetchMock = vi.fn().mockResolvedValue({
+			status: 200,
+			headers: new Headers(),
+			text: async () => "ok",
+		});
+		globalThis.fetch = fetchMock as typeof fetch;
+
+		await tool.runAsync(
+			{ url: "https://example.com/slow", timeout: 2500 },
+			makeContext(),
+		);
+
+		expect(timeoutSpy).toHaveBeenCalledWith(2500);
+		expect(fetchMock.mock.calls[0][1].signal).toBeDefined();
+		timeoutSpy.mockRestore();
+	});
 });

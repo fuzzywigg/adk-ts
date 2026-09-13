@@ -238,4 +238,38 @@ describe("FileOperationsTool", () => {
 		expect(result.success).toBe(false);
 		expect(result.error).toMatch(/Failed to list directory/i);
 	});
+
+	it("returns failure when mkdir targets an existing file path", async () => {
+		await tool.runAsync(
+			{ operation: "write", filepath: "as-file.txt", content: "x" },
+			makeContext(),
+		);
+		const result = await tool.runAsync(
+			{ operation: "mkdir", filepath: "as-file.txt" },
+			makeContext(),
+		);
+		expect(result.success).toBe(false);
+		expect(result.error).toMatch(/Failed to create directory/i);
+	});
+
+	it("returns failure when writing or appending to a directory path", async () => {
+		await tool.runAsync(
+			{ operation: "mkdir", filepath: "dir-only" },
+			makeContext(),
+		);
+
+		const writeResult = await tool.runAsync(
+			{ operation: "write", filepath: "dir-only", content: "nope" },
+			makeContext(),
+		);
+		expect(writeResult.success).toBe(false);
+		expect(writeResult.error).toMatch(/Failed to write/i);
+
+		const appendResult = await tool.runAsync(
+			{ operation: "append", filepath: "dir-only", content: "nope" },
+			makeContext(),
+		);
+		expect(appendResult.success).toBe(false);
+		expect(appendResult.error).toMatch(/Failed to append/i);
+	});
 });
