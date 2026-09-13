@@ -91,7 +91,9 @@ function _mergeEventLists(eventLists: Event[][]): Event[][] {
 					// Overlap exists, so we merge and use the merged list to check again
 					const newEvents = other.filter((e) => !currentTs.has(e.timestamp));
 					current.push(...newEvents);
-					newEvents.forEach((e) => currentTs.add(e.timestamp));
+					for (const e of newEvents) {
+						currentTs.add(e.timestamp);
+					}
 					mergeFound = true;
 				} else {
 					remaining.push(other);

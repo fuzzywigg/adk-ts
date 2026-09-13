@@ -44,7 +44,7 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Lint (biome via lint-staged, matches Push checks)
+      - name: Lint
         run: pnpm lint
 
       - name: Build

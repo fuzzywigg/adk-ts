@@ -1,0 +1,4 @@
+{
+	"name": "adk-ts",
+	"install": "pnpm install --frozen-lockfile"
+}
