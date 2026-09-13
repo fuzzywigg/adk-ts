@@ -416,4 +416,165 @@ describe("DatabaseSessionService (sqlite :memory:)", () => {
 			}),
 		).rejects.toThrow(/bind/i);
 	});
+
+	it("parseJsonSafely and timestampToUnixSeconds cover edge inputs", () => {
+		expect((service as any).parseJsonSafely(null, { a: 1 })).toEqual({ a: 1 });
+		expect((service as any).parseJsonSafely("", { a: 1 })).toEqual({ a: 1 });
+		expect((service as any).parseJsonSafely("{bad", { a: 1 })).toEqual({
+			a: 1,
+		});
+		expect((service as any).parseJsonSafely('{"ok":true}', {})).toEqual({
+			ok: true,
+		});
+
+		const date = new Date("2024-01-01T00:00:00.000Z");
+		expect((service as any).timestampToUnixSeconds(date)).toBe(
+			date.getTime() / 1000,
+		);
+		expect(
+			(service as any).timestampToUnixSeconds("2024-01-01T00:00:00.000Z"),
+		).toBe(date.getTime() / 1000);
+		expect((service as any).timestampToUnixSeconds(1_700_000_000)).toBe(
+			1_700_000_000,
+		);
+		expect((service as any).timestampToUnixSeconds(1_700_000_000_000)).toBe(
+			1_700_000_000,
+		);
+		const fallback = (service as any).timestampToUnixSeconds({ weird: true });
+		expect(fallback).toBeGreaterThan(0);
+	});
+
+	it("skipTableCreation still initializes on first operation", async () => {
+		const Database = require("better-sqlite3");
+		const { Kysely, SqliteDialect } = await import("kysely");
+		const { DatabaseSessionService } = await import(
+			"../../sessions/database-session-service"
+		);
+
+		const db = new Kysely({
+			dialect: new SqliteDialect({
+				database: new Database(":memory:"),
+			}),
+		});
+		const deferred = new DatabaseSessionService({
+			db,
+			skipTableCreation: true,
+		});
+
+		const created = await deferred.createSession("app", "user", { x: 1 }, "s1");
+		expect(created.id).toBe("s1");
+		expect(await deferred.getSession("app", "user", "s1")).toBeDefined();
+
+		await (deferred as any).initializeDatabase();
+		await (deferred as any).initializeDatabase();
+	});
+
+	it("logs when initializeDatabase fails during construction", async () => {
+		const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+		const { DatabaseSessionService } = await import(
+			"../../sessions/database-session-service"
+		);
+		const db = {
+			schema: {
+				createTable: () => ({
+					ifNotExists: () => ({
+						addColumn: () => {
+							throw new Error("schema boom");
+						},
+					}),
+				}),
+			},
+		};
+
+		new DatabaseSessionService({ db: db as any });
+		await new Promise((r) => setTimeout(r, 20));
+		expect(errorSpy).toHaveBeenCalledWith(
+			"Failed to initialize database:",
+			expect.any(Error),
+		);
+	});
+
+	it("updateSessionState skips TEMP keys and no-ops without stateDelta", () => {
+		const session = {
+			id: "s",
+			appName: "app",
+			userId: "user",
+			state: { keep: 1 },
+			events: [],
+			lastUpdateTime: 0,
+		};
+		(service as any).updateSessionState(session, {
+			actions: undefined,
+		});
+		expect(session.state).toEqual({ keep: 1 });
+
+		(service as any).updateSessionState(session, {
+			actions: {
+				stateDelta: {
+					keep: 2,
+					[`${State.TEMP_PREFIX}tmp`]: "nope",
+				},
+			},
+		});
+		expect(session.state.keep).toBe(2);
+		expect(session.state[`${State.TEMP_PREFIX}tmp`]).toBeUndefined();
+	});
+
+	it("storageEventToEvent helpers cover action bags and empty defaults", () => {
+		const empty = (service as any).storageEventToEvent({
+			id: "e1",
+			app_name: "app",
+			user_id: "user",
+			session_id: "s1",
+			invocation_id: "inv",
+			author: "agent",
+			branch: null,
+			timestamp: new Date(),
+			content: null,
+			actions: null,
+			long_running_tool_ids_json: null,
+			grounding_metadata: null,
+			partial: null,
+			turn_complete: null,
+			error_code: null,
+			error_message: null,
+			interrupted: null,
+		});
+
+		expect(empty.isFinalResponse()).toBe(false);
+		expect(empty.getFunctionCalls()).toEqual([]);
+		expect(empty.getFunctionResponses()).toEqual([]);
+		expect(empty.hasTrailingCodeExecutionResult()).toBe(false);
+
+		const withActions = (service as any).storageEventToEvent({
+			id: "e-bool",
+			app_name: "app",
+			user_id: "user",
+			session_id: "s1",
+			invocation_id: "inv",
+			author: "agent",
+			branch: null,
+			timestamp: new Date(),
+			content: null,
+			actions: JSON.stringify({
+				functionCalls: [{ name: "x" }],
+				functionResponses: [{ name: "x", response: { ok: true } }],
+				hasTrailingCodeExecutionResult: true,
+			}),
+			long_running_tool_ids_json: null,
+			grounding_metadata: null,
+			partial: null,
+			turn_complete: true,
+			error_code: null,
+			error_message: null,
+			interrupted: true,
+		});
+		expect(withActions.isFinalResponse()).toBe(true);
+		expect(withActions.interrupted).toBe(true);
+		expect(withActions.getFunctionCalls()).toEqual([{ name: "x" }]);
+		expect(withActions.getFunctionResponses()).toEqual([
+			{ name: "x", response: { ok: true } },
+		]);
+		expect(withActions.hasTrailingCodeExecutionResult()).toBe(true);
+	});
 });

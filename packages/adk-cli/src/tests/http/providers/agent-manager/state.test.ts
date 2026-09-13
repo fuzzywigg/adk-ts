@@ -88,4 +88,70 @@ describe("extractInitialState", () => {
 		const agent = { name: "root" } as BaseAgent;
 		expect(extractInitialState({ agent })).toBeUndefined();
 	});
+
+	it("ignores empty Map/object states and sub-agents without usable state", () => {
+		const agent = {
+			name: "root",
+			sessionService: {
+				sessions: new Map([
+					["app", new Map([["user", new Map([["s1", { state: new Map() }]])]])],
+				]),
+			},
+			subAgents: [
+				{ name: "child-no-service" },
+				{
+					name: "child-empty",
+					sessionService: {
+						sessions: new Map([
+							["app", new Map([["user", new Map([["s1", { state: {} }]])]])],
+						]),
+					},
+				},
+			],
+		} as unknown as BaseAgent;
+
+		expect(extractInitialState({ agent })).toBeUndefined();
+	});
+
+	it("prefers builtAgent state over agent sessionService", () => {
+		const agent = {
+			name: "root",
+			sessionService: {
+				sessions: new Map([
+					[
+						"app",
+						new Map([["user", new Map([["s1", { state: { fromAgent: 1 } }]])]]),
+					],
+				]),
+			},
+		} as unknown as BaseAgent;
+		const builtAgent = {
+			session: { state: { fromBuilt: true } },
+		} as unknown as BuiltAgent;
+
+		expect(extractInitialState({ agent, builtAgent })).toEqual({
+			fromBuilt: true,
+		});
+	});
+
+	it("skips builtAgent when session is missing", () => {
+		const agent = {
+			name: "root",
+			sessionService: {
+				sessions: new Map([
+					[
+						"app",
+						new Map([["user", new Map([["s1", { state: { recovered: 1 } }]])]]),
+					],
+				]),
+			},
+		} as unknown as BaseAgent;
+
+		expect(
+			extractInitialState({
+				agent,
+				builtAgent: {} as BuiltAgent,
+			}),
+		).toEqual({ recovered: 1 });
+	});
 });
