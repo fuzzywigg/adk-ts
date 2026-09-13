@@ -1,20 +1,18 @@
 import { describe, expect, it } from "vitest";
 import { requestProcessor as authRequestProcessor } from "../../../auth/auth-preprocessor";
-import { requestProcessor as basicRequestProcessor } from "../../../flows/llm-flows/basic";
-import { requestProcessor as contentRequestProcessor } from "../../../flows/llm-flows/contents";
-import { requestProcessor as identityRequestProcessor } from "../../../flows/llm-flows/identity";
-import { requestProcessor as instructionsRequestProcessor } from "../../../flows/llm-flows/instructions";
 import {
-	requestProcessor as nlPlanningRequestProcessor,
-	responseProcessor as nlPlanningResponseProcessor,
-} from "../../../flows/llm-flows/nl-planning";
+	basicRequestProcessor,
+	codeExecutionRequestProcessor,
+	codeExecutionResponseProcessor,
+	contentRequestProcessor,
+	identityRequestProcessor,
+	instructionsRequestProcessor,
+	nlPlanningRequestProcessor,
+	nlPlanningResponseProcessor,
+	SingleFlow,
+} from "../../../flows/llm-flows";
 import { responseProcessor as outputSchemaResponseProcessor } from "../../../flows/llm-flows/output-schema";
 import { sharedMemoryRequestProcessor } from "../../../flows/llm-flows/shared-memory";
-import { SingleFlow } from "../../../flows/llm-flows/single-flow";
-import {
-	requestProcessor as codeExecutionRequestProcessor,
-	responseProcessor as codeExecutionResponseProcessor,
-} from "../../../flows/llm-flows/code-execution";
 
 describe("SingleFlow", () => {
 	it("registers the expected request and response processors", () => {
