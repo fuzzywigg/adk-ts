@@ -282,4 +282,222 @@ describe("ContainerCodeExecutor", () => {
 			"no docker",
 		);
 	});
+
+	it("collectOutput rejects on stream error and on inspect failure", async () => {
+		const executor = new ContainerCodeExecutor({ image: "python:3" });
+		const streamError = {
+			on(event: string, cb: (...args: any[]) => void) {
+				if (event === "error") {
+					queueMicrotask(() => cb(new Error("stream broke")));
+				}
+				return this;
+			},
+		};
+		await expect(
+			(executor as any).collectOutput(streamError, {
+				inspect: vi.fn(),
+			}),
+		).rejects.toThrow("stream broke");
+
+		const inspectFail = {
+			on(event: string, cb: (...args: any[]) => void) {
+				if (event === "end") {
+					queueMicrotask(() => cb());
+				}
+				return this;
+			},
+		};
+		await expect(
+			(executor as any).collectOutput(inspectFail, {
+				inspect: vi.fn().mockRejectedValue(new Error("inspect down")),
+			}),
+		).rejects.toThrow("inspect down");
+	});
+
+	it("ignores non-stdout/stderr demux stream types", async () => {
+		const container = makeContainer();
+		createContainer.mockResolvedValue(container);
+		const otherChunk = Buffer.concat([
+			Buffer.from([3, 0, 0, 0, 0, 0, 0, 0]),
+			Buffer.from("ignored"),
+		]);
+		const stdoutChunk = Buffer.concat([
+			Buffer.from([1, 0, 0, 0, 0, 0, 0, 0]),
+			Buffer.from("kept\n"),
+		]);
+		container.exec
+			.mockResolvedValueOnce({
+				start: vi.fn().mockResolvedValue(makeStream([])),
+				inspect: vi.fn().mockResolvedValue({ ExitCode: 0 }),
+			})
+			.mockResolvedValueOnce({
+				start: vi.fn().mockResolvedValue(makeStream([otherChunk, stdoutChunk])),
+				inspect: vi.fn().mockResolvedValue({ ExitCode: 0 }),
+			});
+
+		const executor = new ContainerCodeExecutor({ image: "python:3" });
+		const result = await executor.executeCode({} as any, {
+			code: "print(1)",
+			inputFiles: [],
+		});
+		expect(result.stdout).toBe("kept");
+		expect(result.stderr).toBe("");
+	});
+
+	it("maps non-Error execution failures to string stderr", async () => {
+		const container = makeContainer();
+		createContainer.mockResolvedValue(container);
+		container.exec
+			.mockResolvedValueOnce({
+				start: vi.fn().mockResolvedValue(makeStream([])),
+				inspect: vi.fn().mockResolvedValue({ ExitCode: 0 }),
+			})
+			.mockRejectedValueOnce("plain-string-failure");
+
+		const executor = new ContainerCodeExecutor({ image: "python:3" });
+		const result = await executor.executeCode({} as any, {
+			code: "x",
+			inputFiles: [],
+		});
+		expect(result.stderr).toContain(
+			"Container execution error: plain-string-failure",
+		);
+	});
+
+	it("buildDockerImage rejects missing dockerPath or client", async () => {
+		const executor = new ContainerCodeExecutor({ image: "python:3" });
+		await expect((executor as any).buildDockerImage()).rejects.toThrow(
+			/Docker path is not set/,
+		);
+
+		const withPath = new ContainerCodeExecutor({ dockerPath: "." });
+		(withPath as any).client = undefined;
+		await expect((withPath as any).buildDockerImage()).rejects.toThrow(
+			/Docker client is not initialized/,
+		);
+	});
+
+	it("buildDockerImage rejects followProgress errors and logs stream events", async () => {
+		existsSync.mockReturnValue(true);
+		const executor = new ContainerCodeExecutor({ dockerPath: "." });
+		buildImage.mockResolvedValue({});
+		followProgress.mockImplementation(
+			(
+				_s: any,
+				done: (err: Error | null) => void,
+				onProgress?: (event: any) => void,
+			) => {
+				onProgress?.({ stream: "Step 1/2\n" });
+				onProgress?.({ status: "silent" });
+				done(new Error("build failed"));
+			},
+		);
+		await expect((executor as any).buildDockerImage()).rejects.toThrow(
+			"build failed",
+		);
+	});
+
+	it("verifyPythonInstallation requires a container and wraps stream failures", async () => {
+		const executor = new ContainerCodeExecutor({ image: "python:3" });
+		await expect((executor as any).verifyPythonInstallation()).rejects.toThrow(
+			/Container is not initialized/,
+		);
+
+		const container = makeContainer();
+		(executor as any).container = container;
+		container.exec.mockResolvedValue({
+			start: vi.fn().mockResolvedValue({
+				on(event: string, cb: (...args: any[]) => void) {
+					if (event === "error") {
+						queueMicrotask(() => cb(new Error("pipe closed")));
+					}
+					return this;
+				},
+			}),
+			inspect: vi.fn(),
+		});
+		await expect((executor as any).verifyPythonInstallation()).rejects.toThrow(
+			/python3 is not installed/,
+		);
+
+		container.exec.mockResolvedValue({
+			start: vi.fn().mockResolvedValue(makeStream([])),
+			inspect: vi.fn().mockRejectedValue(new Error("inspect boom")),
+		});
+		await expect((executor as any).verifyPythonInstallation()).rejects.toThrow(
+			/python3 is not installed/,
+		);
+	});
+
+	it("initContainer builds from dockerPath then verifies python", async () => {
+		existsSync.mockReturnValue(true);
+		buildImage.mockResolvedValue({});
+		followProgress.mockImplementation(
+			(_s: any, done: (err: Error | null) => void) => done(null),
+		);
+		const container = makeContainer();
+		createContainer.mockResolvedValue(container);
+		container.exec.mockResolvedValue({
+			start: vi.fn().mockResolvedValue(makeStream([])),
+			inspect: vi.fn().mockResolvedValue({ ExitCode: 0 }),
+		});
+
+		const executor = new ContainerCodeExecutor({ dockerPath: "." });
+		await (executor as any).initContainer();
+		expect(buildImage).toHaveBeenCalled();
+		expect(createContainer).toHaveBeenCalledWith(
+			expect.objectContaining({ Image: "adk-code-executor:latest" }),
+		);
+		expect((executor as any).container).toBe(container);
+	});
+
+	it("initContainer rejects when Docker client is missing", async () => {
+		const executor = new ContainerCodeExecutor({ image: "python:3" });
+		(executor as any).client = undefined;
+		await expect((executor as any).initContainer()).rejects.toThrow(
+			/Docker client is not initialized/,
+		);
+	});
+
+	it("cleanupContainer no-ops without a container and process handlers trigger cleanup", async () => {
+		const executor = new ContainerCodeExecutor({ image: "python:3" });
+		await expect((executor as any).cleanupContainer()).resolves.toBeUndefined();
+
+		const container = makeContainer();
+		(executor as any).container = container;
+		(executor as any).isInitialized = true;
+
+		const exitHandler = listeners.find(([event]) => event === "exit")?.[1];
+		const sigintHandler = listeners.find(([event]) => event === "SIGINT")?.[1];
+		const sigtermHandler = listeners.find(
+			([event]) => event === "SIGTERM",
+		)?.[1];
+		const uncaughtHandler = listeners.find(
+			([event]) => event === "uncaughtException",
+		)?.[1];
+
+		expect(exitHandler).toBeTypeOf("function");
+		expect(sigintHandler).toBeTypeOf("function");
+		expect(sigtermHandler).toBeTypeOf("function");
+		expect(uncaughtHandler).toBeTypeOf("function");
+
+		exitHandler?.();
+		await vi.waitFor(() => {
+			expect(container.stop).toHaveBeenCalled();
+		});
+	});
+
+	it("executeCode surfaces missing container after a fake initialized flag", async () => {
+		const executor = new ContainerCodeExecutor({ image: "python:3" });
+		(executor as any).isInitialized = true;
+		(executor as any).container = undefined;
+		await expect(
+			executor.executeCode({} as any, { code: "x", inputFiles: [] }),
+		).rejects.toThrow(/Container is not initialized/);
+	});
+
+	it("uses custom executionTimeout default of 30000 when unset", () => {
+		const executor = new ContainerCodeExecutor({ image: "python:3" });
+		expect((executor as any).executionTimeout).toBe(30000);
+	});
 });
