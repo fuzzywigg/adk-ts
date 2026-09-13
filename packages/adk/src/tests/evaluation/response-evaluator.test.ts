@@ -125,6 +125,59 @@ describe("ResponseEvaluator", () => {
 					2,
 			);
 		});
+
+		it("scores asymmetric unigram overlap with exact Rouge-1 F1", async () => {
+			const result = await evaluator.evaluateInvocations(
+				[invocation("a b c")],
+				[invocation("a b")],
+			);
+
+			expect(result.perInvocationResults[0].score).toBeCloseTo(0.8);
+			expect(result.overallScore).toBeCloseTo(0.8);
+			expect(result.overallEvalStatus).toBe(EvalStatus.PASSED);
+		});
+
+		it("joins multi-part finalResponse text with spaces before scoring", async () => {
+			const multiPartActual: Invocation = {
+				userContent: { parts: [{ text: "hi" }] },
+				creationTimestamp: 1,
+				finalResponse: {
+					role: "model",
+					parts: [{ text: "hello" }, { text: "world" }],
+				},
+			};
+			const multiPartExpected: Invocation = {
+				userContent: { parts: [{ text: "hi" }] },
+				creationTimestamp: 1,
+				finalResponse: {
+					role: "model",
+					parts: [{ text: "hello world" }],
+				},
+			};
+
+			const result = await evaluator.evaluateInvocations(
+				[multiPartActual],
+				[multiPartExpected],
+			);
+			expect(result.overallScore).toBe(1);
+			expect(result.overallEvalStatus).toBe(EvalStatus.PASSED);
+		});
+
+		it("scores response that is a strict subset with lower precision than recall", async () => {
+			const result = await evaluator.evaluateInvocations(
+				[invocation("a b")],
+				[invocation("a b c")],
+			);
+			expect(result.perInvocationResults[0].score).toBeCloseTo(0.8);
+		});
+
+		it("treats punctuation-only differences as a perfect token match", async () => {
+			const result = await evaluator.evaluateInvocations(
+				[invocation("Hello, World!")],
+				[invocation("hello world")],
+			);
+			expect(result.overallScore).toBe(1);
+		});
 	});
 
 	describe("RESPONSE_EVALUATION_SCORE Vertex facade path", () => {

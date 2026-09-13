@@ -40,4 +40,21 @@ describe("BuiltInPlanner", () => {
 			planner.processPlanningResponse({} as any, [{ text: "plan" }]),
 		).toBeUndefined();
 	});
+
+	it("exposes the thinkingConfig passed to the constructor", () => {
+		const thinkingConfig = { includeThoughts: true, thinkingBudget: 64 };
+		const planner = new BuiltInPlanner({ thinkingConfig });
+		expect(planner.thinkingConfig).toEqual(thinkingConfig);
+	});
+
+	it("initializes llmRequest.config when it was previously undefined", () => {
+		const thinkingConfig = { includeThoughts: true };
+		const planner = new BuiltInPlanner({ thinkingConfig });
+		const request = new LlmRequest();
+		expect(request.config).toBeUndefined();
+
+		planner.applyThinkingConfig(request);
+
+		expect(request.config).toEqual({ thinkingConfig });
+	});
 });
