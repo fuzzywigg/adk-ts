@@ -105,6 +105,12 @@ describe("MCP package server factories", () => {
 			expect(bamm.transport.args).toEqual(["-y", "@iqai/mcp-bamm"]);
 			expect(bamm.transport.env?.WALLET_PRIVATE_KEY).toBe("k");
 		}
+
+		const upbit = getConfig(McpUpbit({ env: { UPBIT_ACCESS_KEY: "ak" } }));
+		if (upbit.transport.mode === "stdio") {
+			expect(upbit.transport.args).toEqual(["-y", "@iqai/mcp-upbit"]);
+			expect(upbit.transport.env?.UPBIT_ACCESS_KEY).toBe("ak");
+		}
 	});
 });
 
