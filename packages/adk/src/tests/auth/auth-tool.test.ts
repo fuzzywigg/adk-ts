@@ -79,11 +79,11 @@ describe("AuthTool", () => {
 			}),
 		).toBe(true);
 
-		expect(AuthTool.validateAuthArguments(undefined)).toBe(false);
-		expect(AuthTool.validateAuthArguments({ function_call_id: 1 })).toBe(false);
-		expect(AuthTool.validateAuthArguments({ function_call_id: "x" })).toBe(
-			false,
-		);
+		expect(AuthTool.validateAuthArguments(undefined)).toBeFalsy();
+		expect(AuthTool.validateAuthArguments({ function_call_id: 1 })).toBeFalsy();
+		expect(
+			AuthTool.validateAuthArguments({ function_call_id: "x" }),
+		).toBeFalsy();
 	});
 });
 
