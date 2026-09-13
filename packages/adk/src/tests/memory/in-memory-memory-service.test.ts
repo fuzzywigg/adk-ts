@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { InMemoryMemoryService } from "../../memory/in-memory-memory-service";
 import type { Session } from "../../sessions/session";
 
@@ -243,5 +243,79 @@ describe("InMemoryMemoryService", () => {
 			"2024-06-01T12:00:00.000Z",
 			"2024-06-02T12:00:00.000Z",
 		]);
+	});
+
+	it("warns and returns empty results from deprecated getAllSessions/getSession", () => {
+		const warnSpy = vi
+			.spyOn(console, "warn")
+			.mockImplementation(() => undefined);
+		const service = new InMemoryMemoryService();
+
+		expect(service.getAllSessions()).toEqual([]);
+		expect(service.getSession("session-1")).toBeUndefined();
+		expect(warnSpy).toHaveBeenCalledWith(
+			expect.stringContaining("getAllSessions() is deprecated"),
+		);
+		expect(warnSpy).toHaveBeenCalledWith(
+			expect.stringContaining("getSession() is deprecated"),
+		);
+		warnSpy.mockRestore();
+	});
+
+	it("joins multi-part text for keyword matching and skips punctuation-only queries", async () => {
+		const service = new InMemoryMemoryService();
+		await service.addSessionToMemory(
+			makeSession({
+				events: [
+					{
+						author: "user",
+						timestamp: Date.parse("2024-07-01T00:00:00.000Z"),
+						content: {
+							parts: [
+								{ text: "Alpha" },
+								{ inlineData: { data: "x", mimeType: "text/plain" } } as any,
+								{ text: "bravo charlie" },
+							],
+						},
+					} as any,
+					{
+						author: "user",
+						timestamp: Date.parse("2024-07-01T00:01:00.000Z"),
+						content: { parts: [{ text: "!!!" }] },
+					} as any,
+				],
+			}),
+		);
+
+		const hits = await service.searchMemory({
+			appName: "app",
+			userId: "user",
+			query: "bravo",
+		});
+		expect(hits.memories).toHaveLength(1);
+		expect(hits.memories[0].content?.parts?.map((p) => p.text)).toEqual([
+			"Alpha",
+			undefined,
+			"bravo charlie",
+		]);
+
+		const punctuationOnly = await service.searchMemory({
+			appName: "app",
+			userId: "user",
+			query: "!!! ???",
+		});
+		expect(punctuationOnly.memories).toEqual([]);
+	});
+
+	it("returns empty memories for whitespace-only queries against stored words", async () => {
+		const service = new InMemoryMemoryService();
+		await service.addSessionToMemory(makeSession());
+
+		const hits = await service.searchMemory({
+			appName: "app",
+			userId: "user",
+			query: "   ",
+		});
+		expect(hits.memories).toEqual([]);
 	});
 });

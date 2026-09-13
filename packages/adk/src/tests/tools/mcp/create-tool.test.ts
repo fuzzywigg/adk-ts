@@ -1,6 +1,7 @@
 import { Type } from "@google/genai";
 import { describe, expect, it, vi } from "vitest";
 import { convertMcpToolToBaseTool } from "../../../tools/mcp/create-tool";
+import * as schemaConversion from "../../../tools/mcp/schema-conversion";
 import { McpError, McpErrorType } from "../../../tools/mcp/types";
 import type { ToolContext } from "../../../tools/tool-context";
 
@@ -238,5 +239,83 @@ describe("convertMcpToolToBaseTool", () => {
 			type: McpErrorType.INVALID_SCHEMA_ERROR,
 			message: "typed",
 		});
+	});
+
+	it("wraps getDeclaration schema conversion failures as McpError", async () => {
+		vi.spyOn(schemaConversion, "mcpSchemaToParameters").mockImplementation(
+			() => {
+				throw new Error("bad schema");
+			},
+		);
+
+		const tool = await convertMcpToolToBaseTool({
+			mcpTool: {
+				name: "schema_broken",
+				description: "broken schema",
+				inputSchema: { type: "object", properties: {} },
+			} as any,
+			toolHandler: async () => ({ content: [] }),
+		});
+
+		expect(() => tool.getDeclaration()).toThrow(McpError);
+		try {
+			tool.getDeclaration();
+		} catch (error) {
+			expect(error).toMatchObject({
+				type: McpErrorType.INVALID_SCHEMA_ERROR,
+				message: expect.stringContaining(
+					"Failed to convert schema for tool schema_broken: bad schema",
+				),
+			});
+		}
+
+		vi.mocked(schemaConversion.mcpSchemaToParameters).mockRestore();
+	});
+
+	it("stringifies non-Error schema conversion failures", async () => {
+		vi.spyOn(schemaConversion, "mcpSchemaToParameters").mockImplementation(
+			() => {
+				throw "raw-schema-fail";
+			},
+		);
+
+		const tool = await convertMcpToolToBaseTool({
+			mcpTool: {
+				name: "schema_string",
+				description: "broken",
+				inputSchema: { type: "object", properties: {} },
+			} as any,
+			toolHandler: async () => ({ content: [] }),
+		});
+
+		expect(() => tool.getDeclaration()).toThrow(
+			/Failed to convert schema for tool schema_string: raw-schema-fail/,
+		);
+		vi.mocked(schemaConversion.mcpSchemaToParameters).mockRestore();
+	});
+
+	it("uses metadata over _meta when both shapes exist and defaults retry fields", async () => {
+		const tool = await convertMcpToolToBaseTool({
+			mcpTool: {
+				name: "meta_tool",
+				description: "meta",
+				inputSchema: { type: "object", properties: {} },
+				metadata: {
+					isLongRunning: true,
+					shouldRetryOnFailure: true,
+					maxRetryAttempts: 9,
+				},
+				_meta: {
+					isLongRunning: false,
+					shouldRetryOnFailure: false,
+					maxRetryAttempts: 1,
+				},
+			} as any,
+			toolHandler: async () => ({ content: [] }),
+		});
+
+		expect(tool.isLongRunning).toBe(true);
+		expect(tool.shouldRetryOnFailure).toBe(true);
+		expect(tool.maxRetryAttempts).toBe(9);
 	});
 });

@@ -85,4 +85,112 @@ describe("database-factories", () => {
 			/To use MySQL sessions/,
 		);
 	});
+
+	function stubPeer(packageName: string, exports: unknown): void {
+		Module.prototype.require = function (
+			this: NodeModule,
+			id: string,
+			...rest: unknown[]
+		) {
+			if (id === packageName) {
+				return exports;
+			}
+			return originalRequire.apply(this, [id, ...rest] as [string]);
+		} as typeof Module.prototype.require;
+	}
+
+	it("constructs a postgres session service when pg is available", () => {
+		const Pool = vi.fn(function MockPool(this: any, opts: any) {
+			this.options = opts;
+			this.on = vi.fn();
+			this.end = vi.fn();
+			this.connect = vi.fn();
+			this.query = vi.fn();
+		});
+		stubPeer("pg", { Pool });
+
+		const service = createPostgresSessionService(
+			"postgres://localhost:5432/adk",
+			{ max: 4 },
+		);
+		expect(service).toBeDefined();
+		expect(typeof service.createSession).toBe("function");
+		expect(Pool).toHaveBeenCalledWith({
+			connectionString: "postgres://localhost:5432/adk",
+			max: 4,
+		});
+	});
+
+	it("routes postgresql URLs through createDatabaseSessionService when pg is available", () => {
+		const Pool = vi.fn(function MockPool(this: any) {
+			this.on = vi.fn();
+			this.end = vi.fn();
+			this.connect = vi.fn();
+			this.query = vi.fn();
+		});
+		stubPeer("pg", { Pool });
+
+		const viaPostgres = createDatabaseSessionService(
+			"postgres://user:pass@localhost/db",
+			{ idleTimeoutMillis: 1000 },
+		);
+		const viaPostgresql = createDatabaseSessionService(
+			"postgresql://localhost/db",
+		);
+		expect(viaPostgres).toBeDefined();
+		expect(viaPostgresql).toBeDefined();
+		expect(Pool).toHaveBeenCalled();
+	});
+
+	it("constructs a mysql session service when mysql2 is available", () => {
+		const createPool = vi.fn((opts: any) => ({
+			options: opts,
+			on: vi.fn(),
+			end: vi.fn(),
+			query: vi.fn(),
+			getConnection: vi.fn(),
+		}));
+		stubPeer("mysql2", { createPool });
+
+		const service = createMysqlSessionService("mysql://localhost/adk", {
+			connectionLimit: 2,
+		});
+		expect(service).toBeDefined();
+		expect(typeof service.createSession).toBe("function");
+		expect(createPool).toHaveBeenCalledWith({
+			uri: "mysql://localhost/adk",
+			connectionLimit: 2,
+		});
+	});
+
+	it("routes mysql:// URLs through createDatabaseSessionService when mysql2 is available", () => {
+		const createPool = vi.fn(() => ({
+			on: vi.fn(),
+			end: vi.fn(),
+			query: vi.fn(),
+			getConnection: vi.fn(),
+		}));
+		stubPeer("mysql2", { createPool });
+
+		const service = createDatabaseSessionService("mysql://localhost/adk");
+		expect(service).toBeDefined();
+		expect(createPool).toHaveBeenCalled();
+	});
+
+	it("forwards sqlite options and .db path routing", () => {
+		const withOptions = createSqliteSessionService(":memory:", {
+			readonly: false,
+		});
+		expect(withOptions).toBeDefined();
+		expect(typeof withOptions.createSession).toBe("function");
+
+		const fromDbPath = createDatabaseSessionService("/tmp/adk-test-session.db");
+		expect(fromDbPath).toBeDefined();
+		expect(typeof fromDbPath.getSession).toBe("function");
+
+		const stripped = createDatabaseSessionService(
+			"sqlite:///tmp/adk-stripped.db",
+		);
+		expect(stripped).toBeDefined();
+	});
 });
