@@ -1,96 +1,219 @@
-import { describe, expect, it, vi } from "vitest";
-import { BasePlugin } from "../../plugins/base-plugin";
+import { describe, expect, it } from "vitest";
+import type { InvocationContext } from "../../agents/invocation-context";
 import {
-	ReflectAndRetryToolPlugin,
+	GLOBAL_SCOPE_KEY,
 	REFLECT_AND_RETRY_RESPONSE_TYPE,
+	ReflectAndRetryToolPlugin,
 	TrackingScope,
 } from "../../plugins/reflect-retry-tool-plugin";
 import type { BaseTool } from "../../tools/base/base-tool";
-import type { ToolContext } from "../../tools/tool-context";
+import { ToolContext } from "../../tools/tool-context";
 
-class DemoPlugin extends BasePlugin {}
+function makeTool(name = "flaky_tool"): BaseTool {
+	return { name } as BaseTool;
+}
 
-describe("BasePlugin", () => {
-	it("stores name and returns undefined defaults", async () => {
-		const plugin = new DemoPlugin("demo");
-		expect(plugin.name).toBe("demo");
-		await expect(
-			plugin.onUserMessageCallback?.({
-				invocationContext: {} as never,
-				userMessage: { role: "user", parts: [] },
-			}),
-		).resolves.toBeUndefined();
-		await expect(
-			plugin.beforeRunCallback?.({ invocationContext: {} as never }),
-		).resolves.toBeUndefined();
-		await expect(plugin.close?.()).resolves.toBeUndefined();
-	});
-});
+function makeToolContext(invocationId = "inv-1"): ToolContext {
+	return new ToolContext({
+		invocationId,
+		agent: { name: "agent" },
+		session: { id: "sess", state: {} },
+		appName: "app",
+		userId: "user",
+	} as unknown as InvocationContext);
+}
 
 describe("ReflectAndRetryToolPlugin", () => {
-	const tool = { name: "flaky" } as BaseTool;
-	const toolContext = {
-		invocationId: "inv-1",
-	} as ToolContext;
-
 	it("rejects negative maxRetries", () => {
 		expect(() => new ReflectAndRetryToolPlugin({ maxRetries: -1 })).toThrow(
 			/non-negative/,
 		);
 	});
 
-	it("ignores already handled reflection responses", async () => {
-		const plugin = new ReflectAndRetryToolPlugin({ maxRetries: 2 });
-		await expect(
-			plugin.afterToolCallback({
-				tool,
-				toolArgs: {},
-				toolContext,
-				result: { response_type: REFLECT_AND_RETRY_RESPONSE_TYPE },
-			}),
-		).resolves.toBeUndefined();
+	it("uses defaults for name and retry settings", () => {
+		const plugin = new ReflectAndRetryToolPlugin();
+		expect(plugin.name).toBe("reflect_retry_tool_plugin");
+		expect(plugin.maxRetries).toBe(3);
+		expect(plugin.throwExceptionIfRetryExceeded).toBe(true);
+		expect(plugin.scope).toBe(TrackingScope.INVOCATION);
 	});
 
-	it("creates reflection guidance on tool errors", async () => {
-		const plugin = new ReflectAndRetryToolPlugin({
-			maxRetries: 2,
-			throwExceptionIfRetryExceeded: false,
-			trackingScope: TrackingScope.INVOCATION,
+	it("ignores reflect-and-retry response types in afterToolCallback", async () => {
+		const plugin = new ReflectAndRetryToolPlugin();
+		const result = await plugin.afterToolCallback({
+			tool: makeTool(),
+			toolArgs: {},
+			toolContext: makeToolContext(),
+			result: { response_type: REFLECT_AND_RETRY_RESPONSE_TYPE },
 		});
+		expect(result).toBeUndefined();
+	});
 
-		const response = await plugin.onToolErrorCallback({
+	it("resets failure counters on successful afterToolCallback", async () => {
+		const plugin = new ReflectAndRetryToolPlugin({ maxRetries: 2 });
+		const tool = makeTool();
+		const toolContext = makeToolContext();
+
+		const first = await plugin.onToolErrorCallback({
 			tool,
-			toolArgs: { x: 1 },
+			toolArgs: { q: "a" },
 			toolContext,
 			error: new Error("boom"),
 		});
+		expect(first?.response_type).toBe(REFLECT_AND_RETRY_RESPONSE_TYPE);
+		expect(first?.retry_count).toBe(1);
 
-		expect(response?.response_type).toBe(REFLECT_AND_RETRY_RESPONSE_TYPE);
-		expect(response?.retry_count).toBe(1);
-		expect(response?.error_details).toContain("boom");
-		expect(response?.reflection_guidance).toBeTruthy();
+		await plugin.afterToolCallback({
+			tool,
+			toolArgs: { q: "a" },
+			toolContext,
+			result: { ok: true },
+		});
+
+		const afterReset = await plugin.onToolErrorCallback({
+			tool,
+			toolArgs: { q: "b" },
+			toolContext,
+			error: new Error("again"),
+		});
+		expect(afterReset?.retry_count).toBe(1);
 	});
 
-	it("resets failure counters after successful tool results", async () => {
+	it("returns reflection guidance while retries remain", async () => {
 		const plugin = new ReflectAndRetryToolPlugin({ maxRetries: 2 });
-		const extract = vi
-			.spyOn(plugin, "extractErrorFromResult")
-			.mockResolvedValue(undefined);
+		const response = await plugin.onToolErrorCallback({
+			tool: makeTool("search"),
+			toolArgs: { query: "adk" },
+			toolContext: makeToolContext(),
+			error: new TypeError("bad input"),
+		});
+
+		expect(response).toMatchObject({
+			response_type: REFLECT_AND_RETRY_RESPONSE_TYPE,
+			error_type: "TypeError",
+			retry_count: 1,
+		});
+		expect(response?.error_details).toContain("TypeError: bad input");
+		expect(response?.reflection_guidance).toContain("search");
+		expect(response?.reflection_guidance).toContain("query: adk");
+	});
+
+	it("throws when retry limit exceeded and configured to throw", async () => {
+		const plugin = new ReflectAndRetryToolPlugin({
+			maxRetries: 1,
+			throwExceptionIfRetryExceeded: true,
+		});
+		const tool = makeTool();
+		const toolContext = makeToolContext();
+		const error = new Error("final");
 
 		await plugin.onToolErrorCallback({
 			tool,
 			toolArgs: {},
 			toolContext,
-			error: new Error("first"),
+			error,
 		});
 
-		await plugin.afterToolCallback({
+		await expect(
+			plugin.onToolErrorCallback({
+				tool,
+				toolArgs: {},
+				toolContext,
+				error,
+			}),
+		).rejects.toThrow("final");
+	});
+
+	it("returns exceed message when throwExceptionIfRetryExceeded is false", async () => {
+		const plugin = new ReflectAndRetryToolPlugin({
+			maxRetries: 1,
+			throwExceptionIfRetryExceeded: false,
+		});
+		const tool = makeTool("writer");
+		const toolContext = makeToolContext();
+
+		await plugin.onToolErrorCallback({
 			tool,
 			toolArgs: {},
 			toolContext,
-			result: { ok: true },
+			error: new Error("one"),
 		});
 
-		expect(extract).toHaveBeenCalled();
+		const exceeded = await plugin.onToolErrorCallback({
+			tool,
+			toolArgs: {},
+			toolContext,
+			error: new Error("two"),
+		});
+
+		expect(exceeded?.retry_count).toBe(1);
+		expect(exceeded?.reflection_guidance).toContain("retry limit exceeded");
+		expect(exceeded?.reflection_guidance).toContain("writer");
+	});
+
+	it("rethrows immediately when maxRetries is 0 and throw is enabled", async () => {
+		const plugin = new ReflectAndRetryToolPlugin({
+			maxRetries: 0,
+			throwExceptionIfRetryExceeded: true,
+		});
+
+		await expect(
+			plugin.onToolErrorCallback({
+				tool: makeTool(),
+				toolArgs: {},
+				toolContext: makeToolContext(),
+				error: new Error("instant"),
+			}),
+		).rejects.toThrow("instant");
+	});
+
+	it("tracks failures globally when scope is GLOBAL", async () => {
+		const plugin = new ReflectAndRetryToolPlugin({
+			maxRetries: 2,
+			trackingScope: TrackingScope.GLOBAL,
+		});
+		const tool = makeTool();
+
+		await plugin.onToolErrorCallback({
+			tool,
+			toolArgs: {},
+			toolContext: makeToolContext("inv-a"),
+			error: new Error("a"),
+		});
+		const second = await plugin.onToolErrorCallback({
+			tool,
+			toolArgs: {},
+			toolContext: makeToolContext("inv-b"),
+			error: new Error("b"),
+		});
+
+		expect(second?.retry_count).toBe(2);
+		expect(GLOBAL_SCOPE_KEY).toBe("__global_reflect_and_retry_scope__");
+	});
+
+	it("extractErrorFromResult defaults to undefined", async () => {
+		const plugin = new ReflectAndRetryToolPlugin();
+		await expect(
+			plugin.extractErrorFromResult({
+				tool: makeTool(),
+				toolArgs: {},
+				toolContext: makeToolContext(),
+				result: { ok: true },
+			}),
+		).resolves.toBeUndefined();
+	});
+
+	it("formats empty args as no arguments in reflection", async () => {
+		const plugin = new ReflectAndRetryToolPlugin({ maxRetries: 1 });
+		const response = await plugin.onToolErrorCallback({
+			tool: makeTool(),
+			toolArgs: {},
+			toolContext: makeToolContext(),
+			error: "string-error",
+		});
+
+		expect(response?.error_type).toBe("ToolError");
+		expect(response?.reflection_guidance).toContain("(no arguments)");
+		expect(response?.error_details).toBe("string-error");
 	});
 });
