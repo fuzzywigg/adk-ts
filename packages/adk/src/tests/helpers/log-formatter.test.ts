@@ -9,6 +9,31 @@ describe("LogFormatter", () => {
 			expect(LogFormatter.formatFunctionCalls([])).toBe("none");
 		});
 
+		it("returns 'none' for null or undefined function calls", () => {
+			expect(LogFormatter.formatFunctionCalls(null as any)).toBe("none");
+			expect(LogFormatter.formatFunctionCalls(undefined as any)).toBe("none");
+		});
+
+		it("does not append ellipsis when args JSON is exactly 50 chars", () => {
+			const args = { x: "a".repeat(42) };
+			const encoded = JSON.stringify(args);
+			expect(encoded.length).toBe(50);
+			const result = LogFormatter.formatFunctionCalls([
+				{ functionCall: { name: "exact", args } as FunctionCall },
+			]);
+			expect(result).toBe(`exact(${encoded})`);
+			expect(result).not.toContain("...");
+		});
+
+		it("appends ellipsis when args JSON exceeds 50 chars", () => {
+			const args = { x: "a".repeat(43) };
+			expect(JSON.stringify(args).length).toBeGreaterThan(50);
+			const result = LogFormatter.formatFunctionCalls([
+				{ functionCall: { name: "over", args } as FunctionCall },
+			]);
+			expect(result).toContain("...");
+		});
+
 		it("should format function calls with arguments", () => {
 			const functionCalls: Part[] = [
 				{
@@ -165,6 +190,22 @@ describe("LogFormatter", () => {
 			const result = LogFormatter.formatContentPreview(content);
 			expect(result).toBe("no text content");
 		});
+
+		it("falls back to JSON stringify when content has no parts array", () => {
+			const content = { role: "user", custom: "payload" } as Content;
+			const result = LogFormatter.formatContentPreview(content);
+			expect(result).toBe(JSON.stringify(content));
+		});
+
+		it("truncates JSON fallback content longer than 80 chars", () => {
+			const content = {
+				role: "user",
+				blob: "a".repeat(100),
+			} as Content;
+			const result = LogFormatter.formatContentPreview(content);
+			expect(result.endsWith("...")).toBe(true);
+			expect(result.length).toBe(83);
+		});
 	});
 
 	describe("formatResponsePreview", () => {
@@ -312,6 +353,37 @@ describe("LogFormatter", () => {
 			expect(result[2]).toMatch(/code_execution_result: execution result:/);
 			expect(result[3]).toContain("...");
 			expect(result[4]).toMatch(/unknown: unknown content/);
+		});
+
+		it("uses unknown type/outcome fallbacks and truncates long executable code", () => {
+			const content: Content = {
+				role: "model",
+				parts: [
+					{ fileData: { fileUri: "gs://missing-mime" } as any },
+					{
+						executableCode: {
+							code: "c".repeat(60),
+							language: "PYTHON" as any,
+						},
+					},
+					{
+						codeExecutionResult: {
+							output: "ok",
+						} as any,
+					},
+					{
+						executableCode: {
+							language: "PYTHON" as any,
+						} as any,
+					},
+				],
+			};
+
+			const result = LogFormatter.formatContentParts(content);
+			expect(result[0]).toContain("file: unknown type");
+			expect(result[1]).toMatch(/executable_code: "c{50}\.\.\."/);
+			expect(result[2]).toContain("execution result: unknown");
+			expect(result[3]).toContain('executable_code: ""');
 		});
 	});
 

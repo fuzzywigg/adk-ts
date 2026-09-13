@@ -198,4 +198,162 @@ describe("InMemorySessionService", () => {
 		);
 		warn.mockRestore();
 	});
+
+	it("generates a UUID when sessionId is blank or whitespace", async () => {
+		const service = new InMemorySessionService();
+		const blank = await service.createSession("app", "user", {}, "   ");
+		expect(blank.id).toMatch(
+			/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i,
+		);
+
+		const empty = await service.createSession("app", "user", {}, "");
+		expect(empty.id).toBeTruthy();
+		expect(empty.id).not.toBe("   ");
+	});
+
+	it("deleteSession is a no-op for unknown sessions", async () => {
+		const service = new InMemorySessionService();
+		await service.createSession("app", "user", {}, "keep");
+		await expect(
+			service.deleteSession("app", "user", "missing"),
+		).resolves.toBeUndefined();
+		expect(await service.getSession("app", "user", "keep")).toBeTruthy();
+		expect(await service.listSessions("missing-app", "user")).toEqual({
+			sessions: [],
+		});
+	});
+
+	it("warns for missing userId and sessionId when appending", async () => {
+		const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+		const service = new InMemorySessionService();
+		await service.createSession("app", "user-a", {}, "s1");
+
+		await service.appendEvent(
+			{
+				appName: "app",
+				userId: "other-user",
+				id: "s1",
+				state: {},
+				events: [],
+				lastUpdateTime: 1,
+			} as any,
+			{
+				author: "user",
+				timestamp: 2,
+				content: { parts: [{ text: "no-user" }] },
+			} as any,
+		);
+		expect(warn).toHaveBeenCalledWith(
+			expect.stringContaining("userId other-user not in sessions[appName]"),
+		);
+
+		warn.mockClear();
+		await service.appendEvent(
+			{
+				appName: "app",
+				userId: "user-a",
+				id: "missing-session",
+				state: {},
+				events: [],
+				lastUpdateTime: 1,
+			} as any,
+			{
+				author: "user",
+				timestamp: 3,
+				content: { parts: [{ text: "no-session" }] },
+			} as any,
+		);
+		expect(warn).toHaveBeenCalledWith(
+			expect.stringContaining(
+				"sessionId missing-session not in sessions[appName][userId]",
+			),
+		);
+		warn.mockRestore();
+	});
+
+	it("merges app-state-only deltas without user state", async () => {
+		const service = new InMemorySessionService();
+		const session = await service.createSession("app", "user", {}, "s1");
+
+		await service.appendEvent(session, {
+			author: "agent",
+			timestamp: 10,
+			actions: {
+				stateDelta: {
+					[`${State.APP_PREFIX}feature`]: "on",
+					localOnly: "session",
+				},
+			},
+		} as any);
+
+		const fetched = await service.getSession("app", "user", "s1");
+		expect(fetched?.state[`${State.APP_PREFIX}feature`]).toBe("on");
+		expect(fetched?.state.localOnly).toBe("session");
+		expect(
+			Object.keys(fetched?.state || {}).some((k) =>
+				k.startsWith(State.USER_PREFIX),
+			),
+		).toBe(false);
+	});
+
+	it("applies numRecentEvents then afterTimestamp together", async () => {
+		const service = new InMemorySessionService();
+		const session = await service.createSession("app", "user", {}, "s1");
+		const stamps = [100, 200, 300, 400, 500];
+		for (const [i, ts] of stamps.entries()) {
+			await service.appendEvent(session, {
+				author: "user",
+				timestamp: ts,
+				content: { parts: [{ text: `e${i}` }] },
+			} as any);
+		}
+
+		const both = await service.getSession("app", "user", "s1", {
+			numRecentEvents: 3,
+			afterTimestamp: 250,
+		});
+		expect(both?.events.map((e) => e.content?.parts?.[0]?.text)).toEqual([
+			"e2",
+			"e3",
+			"e4",
+		]);
+	});
+
+	it("keeps all events when afterTimestamp is before every event", async () => {
+		const service = new InMemorySessionService();
+		const session = await service.createSession("app", "user", {}, "s1");
+		await service.appendEvent(session, {
+			author: "user",
+			timestamp: 100,
+			content: { parts: [{ text: "only" }] },
+		} as any);
+
+		const after = await service.getSession("app", "user", "s1", {
+			afterTimestamp: 50,
+		});
+		expect(after?.events).toHaveLength(1);
+		expect(after?.events[0].content?.parts?.[0]?.text).toBe("only");
+	});
+
+	it("returns empty events when afterTimestamp is after every event", async () => {
+		const service = new InMemorySessionService();
+		const session = await service.createSession("app", "user", {}, "s1");
+		await service.appendEvent(session, {
+			author: "user",
+			timestamp: 100,
+			content: { parts: [{ text: "old" }] },
+		} as any);
+
+		const after = await service.getSession("app", "user", "s1", {
+			afterTimestamp: 999,
+		});
+		expect(after?.events).toEqual([]);
+	});
+
+	it("returns undefined getSession for unknown app or user", async () => {
+		const service = new InMemorySessionService();
+		await service.createSession("app", "user", {}, "s1");
+		expect(await service.getSession("other", "user", "s1")).toBeUndefined();
+		expect(await service.getSession("app", "other", "s1")).toBeUndefined();
+	});
 });

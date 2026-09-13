@@ -68,4 +68,53 @@ describe("State", () => {
 		expect(state.hasDelta()).toBe(true);
 		expect(state.toDict()).toEqual({ keep: 2, added: 3 });
 	});
+
+	it("has is true for delta-only keys that are not yet in value", () => {
+		const state = State.create({}, { pending: "yes" });
+		expect(state.has("pending")).toBe(true);
+		expect(state.get("pending")).toBe("yes");
+		expect(state.toDict()).toEqual({ pending: "yes" });
+	});
+
+	it("returns undefined from get when key is missing and no default given", () => {
+		const state = State.create({}, {});
+		expect(state.get("missing")).toBeUndefined();
+	});
+
+	it("proxy in-operator and underscore props stay on the instance", () => {
+		const state = State.create({ visible: 1 }, {});
+		expect("visible" in state).toBe(true);
+		expect("absent" in state).toBe(false);
+		expect("hasDelta" in state).toBe(true);
+		expect(typeof state.hasDelta).toBe("function");
+	});
+
+	it("supports APP_PREFIX and USER_PREFIX keys via set and proxy", () => {
+		const state = State.create({}, {});
+		const appKey = `${State.APP_PREFIX}theme`;
+		const userKey = `${State.USER_PREFIX}locale`;
+		state.set(appKey, "dark");
+		state[userKey] = "en";
+		expect(state.get(appKey)).toBe("dark");
+		expect(state.get(userKey)).toBe("en");
+		expect(state.toDict()).toEqual({ [appKey]: "dark", [userKey]: "en" });
+	});
+
+	it("raw constructor supports has/hasDelta/toDict without proxy reads", () => {
+		const raw = new State({ a: 1 }, { b: 2 });
+		expect(raw.has("a")).toBe(true);
+		expect(raw.has("b")).toBe(true);
+		expect(raw.hasDelta()).toBe(true);
+		expect(raw.toDict()).toEqual({ a: 1, b: 2 });
+		raw.set("c", 3);
+		expect(raw.toDict()).toEqual({ a: 1, b: 2, c: 3 });
+		raw.update({ a: 9 });
+		expect(raw.toDict().a).toBe(9);
+	});
+
+	it("proxied create prefers delta for bracket access", () => {
+		const state = State.create({ a: "value" }, { a: "delta" });
+		expect(state["a"]).toBe("delta");
+		expect(state.get("a")).toBe("delta");
+	});
 });
