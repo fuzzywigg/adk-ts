@@ -388,5 +388,84 @@ describe("Event Compaction", () => {
 
 			expect(mockSummarizer.maybeSummarizeEvents).toHaveBeenCalled();
 		});
+
+		it("ignores events without invocationId and excludes compaction carriers from the map", async () => {
+			const config: EventsCompactionConfig = {
+				compactionInterval: 3,
+				overlapSize: 0,
+			};
+
+			await sessionService.appendEvent(
+				session,
+				new Event({
+					invocationId: "",
+					author: "agent",
+					content: { parts: [{ text: "no-id" }] },
+					timestamp: 900,
+				}),
+			);
+
+			for (let i = 0; i < 3; i++) {
+				await sessionService.appendEvent(
+					session,
+					new Event({
+						invocationId: `inv-${i}`,
+						author: "agent",
+						content: { parts: [{ text: `Message ${i}` }] },
+						timestamp: 1000 + i * 100,
+					}),
+				);
+			}
+
+			session = await refreshSession(session);
+			await runCompactionForSlidingWindow(
+				config,
+				session,
+				sessionService,
+				mockSummarizer,
+			);
+
+			expect(mockSummarizer.maybeSummarizeEvents).toHaveBeenCalled();
+			const summarizedEvents = (mockSummarizer.maybeSummarizeEvents as any).mock
+				.calls[0][0] as Event[];
+			expect(summarizedEvents.every((e) => !e.actions?.compaction)).toBe(true);
+			expect(summarizedEvents.some((e) => !e.invocationId)).toBe(false);
+		});
+
+		it("uses overlapSize 0 starting at the first new invocation", async () => {
+			const config: EventsCompactionConfig = {
+				compactionInterval: 2,
+				overlapSize: 0,
+			};
+
+			for (let i = 0; i < 4; i++) {
+				await sessionService.appendEvent(
+					session,
+					new Event({
+						invocationId: `inv-${i}`,
+						author: "agent",
+						content: { parts: [{ text: `Message ${i}` }] },
+						timestamp: 1000 + i * 100,
+					}),
+				);
+			}
+
+			session = await refreshSession(session);
+			await runCompactionForSlidingWindow(
+				config,
+				session,
+				sessionService,
+				mockSummarizer,
+			);
+
+			const summarizedEvents = (mockSummarizer.maybeSummarizeEvents as any).mock
+				.calls[0][0] as Event[];
+			expect(summarizedEvents.map((e) => e.invocationId)).toEqual([
+				"inv-0",
+				"inv-1",
+				"inv-2",
+				"inv-3",
+			]);
+		});
 	});
 });

@@ -118,4 +118,110 @@ describe("CodeExecutionUtils", () => {
 			),
 		).toBeUndefined();
 	});
+
+	it("skips executableCode followed by codeExecutionResult and falls through to text", () => {
+		const content: Content = {
+			parts: [
+				{ executableCode: { code: "skip-me", language: Language.PYTHON } },
+				{
+					codeExecutionResult: {
+						outcome: Outcome.OUTCOME_OK,
+						output: "already ran",
+					},
+				},
+				{ text: "prefix\n```python\nprint(9)\n```\n" },
+			],
+		};
+		const code = CodeExecutionUtils.extractCodeAndTruncateContent(content, [
+			["```python", "```"],
+		]);
+		expect(code).toBe("\nprint(9)\n");
+		expect(content.parts?.some((p) => p.executableCode)).toBe(true);
+	});
+
+	it("returns null for empty content, empty match groups, and missing text parts", () => {
+		expect(
+			CodeExecutionUtils.extractCodeAndTruncateContent(undefined as any, [
+				["```", "```"],
+			]),
+		).toBeNull();
+		expect(
+			CodeExecutionUtils.extractCodeAndTruncateContent(
+				{ parts: [{ inlineData: { data: "x", mimeType: "text/plain" } }] },
+				[["```", "```"]],
+			),
+		).toBeNull();
+		expect(
+			CodeExecutionUtils.extractCodeAndTruncateContent(
+				{ parts: [{ text: "``````" }] },
+				[["```", "```"]],
+			),
+		).toBeNull();
+	});
+
+	it("escapes regex-special delimiters and keeps prefix-only rewrite", () => {
+		const content: Content = {
+			parts: [{ text: "intro [[code]] body [[/code]]" }],
+		};
+		const code = CodeExecutionUtils.extractCodeAndTruncateContent(content, [
+			["[[code]]", "[[/code]]"],
+		]);
+		expect(code).toBe(" body ");
+		expect(content.parts?.[0]?.text).toBe("intro ");
+		expect(content.parts?.[1]?.executableCode?.code).toBe(" body ");
+	});
+
+	it("builds ok result with only output files and no stdout banner when stdout empty", () => {
+		const part = CodeExecutionUtils.buildCodeExecutionResultPart({
+			stdout: "",
+			stderr: "",
+			outputFiles: [
+				{
+					name: "out.bin",
+					content: "YQ==",
+					mimeType: "application/octet-stream",
+				},
+			],
+		});
+		expect(part.codeExecutionResult?.outcome).toBe(Outcome.OUTCOME_OK);
+		expect(part.codeExecutionResult?.output).not.toContain(
+			"Code execution result",
+		);
+		expect(part.codeExecutionResult?.output).toContain("`out.bin`");
+	});
+
+	it("convertCodeExecutionParts no-ops on empty parts and multi-part trailing results", () => {
+		const empty: Content = { parts: [] };
+		expect(
+			CodeExecutionUtils.convertCodeExecutionParts(
+				empty,
+				["```", "```"],
+				["<", ">"],
+			),
+		).toBeUndefined();
+
+		const multi: Content = {
+			parts: [
+				{ text: "keep" },
+				{
+					codeExecutionResult: {
+						outcome: Outcome.OUTCOME_OK,
+						output: "x",
+					},
+				},
+			],
+		};
+		CodeExecutionUtils.convertCodeExecutionParts(
+			multi,
+			["```", "```"],
+			["<", ">"],
+		);
+		expect(multi.parts?.[1]?.codeExecutionResult?.output).toBe("x");
+		expect(multi.role).toBeUndefined();
+	});
+
+	it("encodes invalid base64-looking strings via btoa", () => {
+		const weird = "not!!base64";
+		expect(CodeExecutionUtils.getEncodedFileContent(weird)).toBe(btoa(weird));
+	});
 });

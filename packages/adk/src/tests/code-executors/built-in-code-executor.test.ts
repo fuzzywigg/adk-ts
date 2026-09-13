@@ -54,4 +54,35 @@ describe("BuiltInCodeExecutor", () => {
 			"Gemini code execution tool is not supported for model gpt-4o",
 		);
 	});
+
+	it("creates config when missing and appends to existing tools", () => {
+		const executor = new BuiltInCodeExecutor();
+		const req = new LlmRequest({ model: "gemini-2.5-pro" });
+		expect(req.config).toBeUndefined();
+		executor.processLlmRequest(req);
+		expect(req.config?.tools).toEqual([{ codeExecution: {} }]);
+
+		req.config!.tools = [{ functionDeclarations: [] } as any];
+		executor.processLlmRequest(req);
+		expect(req.config?.tools).toHaveLength(2);
+		expect(req.config?.tools?.[1]).toEqual({ codeExecution: {} });
+	});
+
+	it("rejects undefined/empty models and double-call appends two tools", () => {
+		const executor = new BuiltInCodeExecutor();
+		expect(() =>
+			executor.processLlmRequest(new LlmRequest({ model: undefined })),
+		).toThrow(/not supported for model undefined/);
+		expect(() =>
+			executor.processLlmRequest(new LlmRequest({ model: "" })),
+		).toThrow(/not supported for model/);
+
+		const req = new LlmRequest({ model: "gemini-2.0-flash" });
+		executor.processLlmRequest(req);
+		executor.processLlmRequest(req);
+		expect(req.config?.tools).toEqual([
+			{ codeExecution: {} },
+			{ codeExecution: {} },
+		]);
+	});
 });

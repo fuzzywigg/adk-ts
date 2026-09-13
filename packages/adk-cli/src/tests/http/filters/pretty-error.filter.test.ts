@@ -178,4 +178,105 @@ describe("PrettyErrorFilter", () => {
 			}),
 		);
 	});
+
+	it("categorizes environment variable errors", () => {
+		const filter = new PrettyErrorFilter(false);
+		const { host, status, json } = createHost();
+		filter.catch(
+			new Error("Missing required environment variable: OPENAI_API_KEY"),
+			host,
+		);
+		expect(status).toHaveBeenCalledWith(HttpStatus.BAD_REQUEST);
+		expect(json).toHaveBeenCalledWith(
+			expect.objectContaining({
+				error: "Environment Configuration Error",
+				details: expect.arrayContaining([expect.stringContaining(".env")]),
+			}),
+		);
+	});
+
+	it("maps unauthorized and forbidden messages to 401/403", () => {
+		const filter = new PrettyErrorFilter(false);
+		const unauthorized = createHost();
+		filter.catch(new Error("unauthorized token"), unauthorized.host);
+		expect(unauthorized.status).toHaveBeenCalledWith(HttpStatus.UNAUTHORIZED);
+
+		const forbidden = createHost();
+		filter.catch(new Error("permission denied for resource"), forbidden.host);
+		expect(forbidden.status).toHaveBeenCalledWith(HttpStatus.FORBIDDEN);
+	});
+
+	it("maps does-not-exist to 404 and failed-to-import to agent loading", () => {
+		const filter = new PrettyErrorFilter(false);
+		const missing = createHost();
+		filter.catch(new Error("File does not exist: agent.ts"), missing.host);
+		expect(missing.status).toHaveBeenCalledWith(HttpStatus.NOT_FOUND);
+
+		const importFail = createHost();
+		filter.catch(
+			new Error("Failed to import agent via esbuild for foo.ts"),
+			importFail.host,
+		);
+		expect(importFail.json).toHaveBeenCalledWith(
+			expect.objectContaining({
+				error: "Agent Loading Error",
+				details: expect.arrayContaining([
+					expect.stringContaining("Compilation error"),
+					expect.stringContaining("TypeScript"),
+				]),
+			}),
+		);
+	});
+
+	it("handles Cannot find module without quoted package name", () => {
+		const filter = new PrettyErrorFilter(false);
+		const { host, json } = createHost();
+		filter.catch(new Error("Cannot find module missing-no-quotes"), host);
+		expect(json).toHaveBeenCalledWith(
+			expect.objectContaining({
+				error: "Module Not Found",
+				details: expect.arrayContaining([
+					expect.stringContaining("Check your imports"),
+				]),
+			}),
+		);
+	});
+
+	it("joins HttpException array messages and honors showStackTraces constructor", () => {
+		const filter = new PrettyErrorFilter(true);
+		const { host, status, json } = createHost("/arr");
+		filter.catch(
+			new HttpException(
+				{ message: ["a is required", "b is invalid"] },
+				HttpStatus.BAD_REQUEST,
+			),
+			host,
+		);
+		expect(status).toHaveBeenCalledWith(HttpStatus.BAD_REQUEST);
+		expect(json).toHaveBeenCalledWith(
+			expect.objectContaining({
+				message: "a is required; b is invalid",
+				stack: expect.any(String),
+			}),
+		);
+	});
+
+	it("maps missing required messages to 400 and uses Error.name for generic errors", () => {
+		const filter = new PrettyErrorFilter(false);
+		const missing = createHost();
+		filter.catch(new Error("missing required field foo"), missing.host);
+		expect(missing.status).toHaveBeenCalledWith(HttpStatus.BAD_REQUEST);
+
+		class CustomBoom extends Error {
+			name = "CustomBoom";
+		}
+		const generic = createHost();
+		filter.catch(new CustomBoom("unexpected"), generic.host);
+		expect(generic.status).toHaveBeenCalledWith(
+			HttpStatus.INTERNAL_SERVER_ERROR,
+		);
+		expect(generic.json).toHaveBeenCalledWith(
+			expect.objectContaining({ error: "CustomBoom" }),
+		);
+	});
 });
