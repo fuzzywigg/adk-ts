@@ -13,11 +13,14 @@
     <a href="https://www.npmjs.com/package/@iqai/adk">
       <img src="https://img.shields.io/npm/dm/@iqai/adk" alt="NPM Downloads" />
     </a>
-    <a href="https://github.com/IQAIcom/adk-ts/blob/main/LICENSE.md">
+    <a href="https://github.com/fuzzywigg/adk-ts/actions/workflows/ci.yml">
+      <img src="https://github.com/fuzzywigg/adk-ts/actions/workflows/ci.yml/badge.svg" alt="CI" />
+    </a>
+    <a href="https://github.com/fuzzywigg/adk-ts/blob/main/LICENSE.md">
       <img src="https://img.shields.io/npm/l/@iqai/adk" alt="License" />
     </a>
-    <a href="https://github.com/IQAIcom/adk-ts">
-      <img src="https://img.shields.io/github/stars/IQAIcom/adk-ts?style=social" alt="GitHub Stars" />
+    <a href="https://github.com/fuzzywigg/adk-ts">
+      <img src="https://img.shields.io/github/stars/fuzzywigg/adk-ts?style=social" alt="GitHub Stars" />
     </a>
   </p>
 </div>
