@@ -161,5 +161,143 @@ describe("SequentialAgent", () => {
 			expect(llmAgent.tools).toHaveLength(1);
 			expect(llmAgent.instruction).toBe("Already set.");
 		});
+
+		it("skips taskCompleted injection for non-LlmAgent sub-agents", async () => {
+			const plain = new MockSubAgent("plain");
+			plain.runLive.mockImplementation(async function* () {
+				yield new Event({ author: "plain" });
+			});
+			const agent = new SequentialAgent({
+				name: "seq",
+				description: "desc",
+				subAgents: [plain],
+			});
+
+			const events: Event[] = [];
+			for await (const event of agent["runLiveImpl"](mockContext)) {
+				events.push(event);
+			}
+
+			expect(events).toHaveLength(1);
+			expect(plain.runLive).toHaveBeenCalledWith(mockContext);
+		});
+
+		it("dedupes taskCompleted when tool is a BaseTool-like object", async () => {
+			const llmAgent = new LlmAgent({
+				name: "llmSub",
+				description: "llm",
+				instruction: "Stay.",
+				tools: [{ name: "taskCompleted", runAsync: async () => "x" } as any],
+			});
+			llmAgent.runLive = vi.fn().mockImplementation(async function* () {
+				yield new Event({ author: "llmSub" });
+			});
+			const agent = new SequentialAgent({
+				name: "seq",
+				description: "desc",
+				subAgents: [llmAgent],
+			});
+
+			for await (const _ of agent["runLiveImpl"](mockContext)) {
+			}
+
+			expect(llmAgent.tools).toHaveLength(1);
+			expect(llmAgent.instruction).toBe("Stay.");
+		});
+
+		it("injects taskCompleted once across mixed Llm and non-Llm sub-agents", async () => {
+			const llmAgent = new LlmAgent({
+				name: "llmSub",
+				description: "llm",
+				instruction: "Do work.",
+				tools: [],
+			});
+			llmAgent.runLive = vi.fn().mockImplementation(async function* () {
+				yield new Event({ author: "llmSub" });
+			});
+			const plain = new MockSubAgent("plain");
+			plain.runLive.mockImplementation(async function* () {
+				yield new Event({ author: "plain" });
+			});
+
+			const agent = new SequentialAgent({
+				name: "seq",
+				description: "desc",
+				subAgents: [plain, llmAgent],
+			});
+
+			const events: Event[] = [];
+			for await (const event of agent["runLiveImpl"](mockContext)) {
+				events.push(event);
+			}
+
+			expect(events.map((e) => e.author)).toEqual(["plain", "llmSub"]);
+			expect(llmAgent.tools).toHaveLength(1);
+			expect(typeof llmAgent.tools[0]).toBe("function");
+			const taskCompletedFn = llmAgent.tools[0] as () => string;
+			expect(taskCompletedFn.name).toBe("taskCompleted");
+			expect(taskCompletedFn()).toBe("Task completion signaled.");
+		});
+
+		it("runs live sub-agents in declaration order", async () => {
+			const a = new MockSubAgent("a");
+			const b = new MockSubAgent("b");
+			const order: string[] = [];
+			a.runLive.mockImplementation(async function* () {
+				order.push("a");
+				yield new Event({ author: "a" });
+			});
+			b.runLive.mockImplementation(async function* () {
+				order.push("b");
+				yield new Event({ author: "b" });
+			});
+
+			const agent = new SequentialAgent({
+				name: "seq",
+				description: "desc",
+				subAgents: [a, b],
+			});
+
+			for await (const _ of agent["runLiveImpl"](mockContext)) {
+			}
+
+			expect(order).toEqual(["a", "b"]);
+		});
+	});
+
+	describe("runAsyncImpl additional edges", () => {
+		it("yields multiple events from each sub-agent before moving on", async () => {
+			const agent = new SequentialAgent({
+				name: "seq",
+				description: "desc",
+				subAgents: [subAgent1, subAgent2],
+			});
+			const e1a = new Event({ author: "subAgent1", id: "1a" } as any);
+			const e1b = new Event({ author: "subAgent1", id: "1b" } as any);
+			const e2 = new Event({ author: "subAgent2", id: "2" } as any);
+
+			subAgent1.runAsync.mockImplementation(async function* () {
+				yield e1a;
+				yield e1b;
+			});
+			subAgent2.runAsync.mockImplementation(async function* () {
+				yield e2;
+			});
+
+			const yielded: Event[] = [];
+			for await (const event of agent["runAsyncImpl"](mockContext)) {
+				yielded.push(event);
+			}
+
+			expect(yielded).toEqual([e1a, e1b, e2]);
+		});
+
+		it("defaults subAgents to empty when omitted from config", () => {
+			const agent = new SequentialAgent({
+				name: "seq",
+				description: "desc",
+			});
+			expect(agent.subAgents).toEqual([]);
+		});
 	});
 });

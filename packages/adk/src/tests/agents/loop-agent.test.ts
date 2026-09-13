@@ -159,6 +159,157 @@ describe("LoopAgent", () => {
 
 			expect(yieldedEvents).toHaveLength(0);
 		});
+
+		it("stops on escalate from the second sub-agent mid-iteration", async () => {
+			const agent = new LoopAgent({
+				name: "testloop",
+				description: "desc",
+				subAgents: [subAgent1, subAgent2],
+				maxIterations: 5,
+			});
+
+			const escalateEvent = new Event({
+				author: "subAgent2",
+				actions: { escalate: true, stateDelta: {}, artifactDelta: {} },
+			});
+
+			subAgent1.runAsync.mockImplementation(async function* () {
+				yield new Event({ author: "subAgent1" });
+			});
+			subAgent2.runAsync.mockImplementation(async function* () {
+				yield escalateEvent;
+			});
+
+			const yielded: Event[] = [];
+			for await (const event of agent["runAsyncImpl"](mockContext)) {
+				yielded.push(event);
+			}
+
+			expect(subAgent1.runAsync).toHaveBeenCalledTimes(1);
+			expect(subAgent2.runAsync).toHaveBeenCalledTimes(1);
+			expect(yielded).toHaveLength(2);
+			expect(yielded[1]).toBe(escalateEvent);
+		});
+
+		it("stops on escalate even when maxIterations is undefined", async () => {
+			const agent = new LoopAgent({
+				name: "testloop",
+				description: "desc",
+				subAgents: [subAgent1],
+			});
+			const escalateEvent = new Event({
+				author: "subAgent1",
+				actions: { escalate: true, stateDelta: {}, artifactDelta: {} },
+			});
+			subAgent1.runAsync.mockImplementation(async function* () {
+				yield escalateEvent;
+			});
+
+			const yielded: Event[] = [];
+			for await (const event of agent["runAsyncImpl"](mockContext)) {
+				yielded.push(event);
+			}
+
+			expect(yielded).toEqual([escalateEvent]);
+			expect(subAgent1.runAsync).toHaveBeenCalledTimes(1);
+		});
+
+		it("does not treat escalate:undefined as a stop signal", async () => {
+			const agent = new LoopAgent({
+				name: "testloop",
+				description: "desc",
+				subAgents: [subAgent1],
+				maxIterations: 2,
+			});
+			subAgent1.runAsync.mockImplementation(async function* () {
+				yield new Event({
+					author: "subAgent1",
+					actions: { stateDelta: {}, artifactDelta: {} } as any,
+				});
+			});
+
+			const yielded: Event[] = [];
+			for await (const event of agent["runAsyncImpl"](mockContext)) {
+				yielded.push(event);
+			}
+
+			expect(yielded).toHaveLength(2);
+			expect(subAgent1.runAsync).toHaveBeenCalledTimes(2);
+		});
+
+		it("runs exactly once when maxIterations is 1", async () => {
+			const agent = new LoopAgent({
+				name: "testloop",
+				description: "desc",
+				subAgents: [subAgent1, subAgent2],
+				maxIterations: 1,
+			});
+			subAgent1.runAsync.mockImplementation(async function* () {
+				yield new Event({ author: "subAgent1" });
+			});
+			subAgent2.runAsync.mockImplementation(async function* () {
+				yield new Event({ author: "subAgent2" });
+			});
+
+			const yielded: Event[] = [];
+			for await (const event of agent["runAsyncImpl"](mockContext)) {
+				yielded.push(event);
+			}
+
+			expect(yielded.map((e) => e.author)).toEqual(["subAgent1", "subAgent2"]);
+			expect(subAgent1.runAsync).toHaveBeenCalledTimes(1);
+			expect(subAgent2.runAsync).toHaveBeenCalledTimes(1);
+		});
+
+		it("yields escalate mid-stream and does not emit later events from same agent", async () => {
+			const agent = new LoopAgent({
+				name: "testloop",
+				description: "desc",
+				subAgents: [subAgent1],
+				maxIterations: 3,
+			});
+			const escalateEvent = new Event({
+				author: "subAgent1",
+				actions: { escalate: true, stateDelta: {}, artifactDelta: {} },
+			});
+			const after = new Event({ author: "subAgent1" });
+
+			subAgent1.runAsync.mockImplementation(async function* () {
+				yield escalateEvent;
+				yield after;
+			});
+
+			const yielded: Event[] = [];
+			for await (const event of agent["runAsyncImpl"](mockContext)) {
+				yielded.push(event);
+			}
+
+			expect(yielded).toEqual([escalateEvent]);
+			expect(yielded).not.toContain(after);
+		});
+
+		it("ignores escalate:false and continues looping", async () => {
+			const agent = new LoopAgent({
+				name: "testloop",
+				description: "desc",
+				subAgents: [subAgent1],
+				maxIterations: 2,
+			});
+			subAgent1.runAsync.mockImplementation(async function* () {
+				yield new Event({
+					author: "subAgent1",
+					actions: { escalate: false, stateDelta: {}, artifactDelta: {} },
+				});
+			});
+
+			const yielded: Event[] = [];
+			for await (const event of agent["runAsyncImpl"](mockContext)) {
+				yielded.push(event);
+			}
+
+			expect(yielded).toHaveLength(2);
+			expect(subAgent1.runAsync).toHaveBeenCalledTimes(2);
+		});
 	});
 
 	describe("runLiveImpl", () => {
