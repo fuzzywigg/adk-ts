@@ -9,9 +9,11 @@ import { RunConfig, StreamingMode } from "../../agents/run-config.js";
 import { SequentialAgent } from "../../agents/sequential-agent.js";
 import { InMemoryArtifactService } from "../../artifacts/in-memory-artifact-service.js";
 import { BaseCodeExecutor } from "../../code-executors/base-code-executor.js";
+import { Event } from "../../events/event.js";
 import { InMemoryMemoryService } from "../../memory/in-memory-memory-service.js";
 import { BuiltInPlanner } from "../../planners/built-in-planner.js";
 import { BasePlugin } from "../../plugins/base-plugin.js";
+import { Runner } from "../../runners.js";
 import { InMemorySessionService } from "../../sessions/in-memory-session-service.js";
 import { createTool } from "../../tools/base/create-tool.js";
 
@@ -587,4 +589,486 @@ describe("AgentBuilder", () => {
 			expect((agent as LlmAgent).model).toBe("gemini-2.5-flash");
 		});
 	});
+
+	describe("Offline deepen (post #56) — session, schema, enhanced ask", () => {
+		beforeEach(() => {
+			vi.restoreAllMocks();
+		});
+
+		it("applies withOutputSchema on llm agents and exposes it via buildWithSchema", async () => {
+			const schema = z.object({ answer: z.string() });
+			const builder = AgentBuilder.create("schema_agent")
+				.withModel("gemini-2.5-flash")
+				.withOutputSchema(schema);
+
+			expect((builder as any).config.outputSchema).toBe(schema);
+
+			const { runner } = await builder.buildWithSchema<{ answer: string }>();
+			expect(runner.__outputSchema).toBe(schema);
+		});
+
+		it("throws when withOutputSchema is used on parallel aggregators", () => {
+			const sub = new LlmAgent({
+				name: "par_child_schema",
+				model: "gemini-2.5-flash",
+			});
+			expect(() =>
+				AgentBuilder.create("par_schema")
+					.asParallel([sub])
+					.withOutputSchema(z.object({ ok: z.boolean() })),
+			).toThrow(/cannot be applied to sequential or parallel/);
+		});
+
+		it("renames default_agent when withAgent provides a named agent", async () => {
+			const existing = new LlmAgent({
+				name: "renamed_from_default",
+				model: "gemini-2.5-flash",
+			});
+			const builder = AgentBuilder.create().withAgent(existing);
+			expect((builder as any).config.name).toBe("renamed_from_default");
+			const { agent } = await builder.build();
+			expect(agent).toBe(existing);
+		});
+
+		it("asSequential strips prior outputKey and outputSchema with warnings", async () => {
+			const sub = new LlmAgent({
+				name: "seq_strip_child",
+				model: "gemini-2.5-flash",
+			});
+			const schema = z.object({ x: z.number() });
+			const builder = AgentBuilder.create("seq_strip")
+				.withModel("gemini-2.5-flash")
+				.withOutputKey("will_go")
+				.withOutputSchema(schema);
+
+			expect((builder as any).config.outputKey).toBe("will_go");
+			expect((builder as any).config.outputSchema).toBe(schema);
+
+			builder.asSequential([sub]);
+			expect((builder as any).config.outputKey).toBeUndefined();
+			expect((builder as any).config.outputSchema).toBeUndefined();
+			expect((builder as any).agentType).toBe("sequential");
+
+			const { agent } = await builder.build();
+			expect(agent).toBeInstanceOf(SequentialAgent);
+		});
+
+		it("asParallel strips prior outputKey/outputSchema and ignores when locked", async () => {
+			const sub = new LlmAgent({
+				name: "par_strip_child",
+				model: "gemini-2.5-flash",
+			});
+			const schema = z.object({ y: z.string() });
+			const builder = AgentBuilder.create("par_strip")
+				.withModel("gemini-2.5-flash")
+				.withOutputKey("gone")
+				.withOutputSchema(schema);
+
+			builder.asParallel([sub]);
+			expect((builder as any).config.outputKey).toBeUndefined();
+			expect((builder as any).config.outputSchema).toBeUndefined();
+			expect((builder as any).agentType).toBe("parallel");
+
+			const locked = new LlmAgent({
+				name: "locked_par",
+				model: "gemini-2.5-flash",
+			});
+			const lockedBuilder = AgentBuilder.withAgent(locked).asParallel([sub]);
+			expect((lockedBuilder as any).agentType).toBe("llm");
+			expect((lockedBuilder as any).existingAgent).toBe(locked);
+		});
+
+		it("withSession requires a session service and reuses an existing session", async () => {
+			expect(() =>
+				AgentBuilder.create("needs_service")
+					.withModel("gemini-2.5-flash")
+					.withSession({
+						id: "s1",
+						userId: "u1",
+						appName: "a1",
+						state: {},
+						events: [],
+						lastUpdateTime: 0,
+					} as any),
+			).toThrow(/Session service must be configured/);
+
+			const existing = await sessionService.createSession(
+				"reuse-app",
+				"reuse-user",
+				{ seed: 1 },
+				"reuse-session-id",
+			);
+
+			const { session, agent } = await AgentBuilder.create("reuse_session")
+				.withModel("gemini-2.5-flash")
+				.withSessionService(sessionService)
+				.withSession(existing)
+				.build();
+
+			expect(session).toBe(existing);
+			expect(session.id).toBe("reuse-session-id");
+			expect(session.userId).toBe("reuse-user");
+			expect(agent).toBeInstanceOf(LlmAgent);
+		});
+
+		it("withRunConfig accepts Partial RunConfig and merges onto prior config", () => {
+			const builder = AgentBuilder.create("run_cfg")
+				.withModel("gemini-2.5-flash")
+				.withRunConfig({ streamingMode: StreamingMode.SSE })
+				.withRunConfig({ saveInputBlobsAsArtifacts: true });
+
+			const cfg = (builder as any).runConfig as RunConfig;
+			expect(cfg).toBeInstanceOf(RunConfig);
+			expect(cfg.streamingMode).toBe(StreamingMode.SSE);
+			expect(cfg.saveInputBlobsAsArtifacts).toBe(true);
+		});
+
+		it("AgentBuilder.ask delegates to the enhanced runner", async () => {
+			mockRunnerEvents([
+				new Event({
+					author: "ask_builder",
+					content: { parts: [{ text: "pong" }] },
+				}),
+			]);
+
+			const text = await AgentBuilder.create("ask_builder")
+				.withModel("gemini-2.5-flash")
+				.withSessionService(sessionService, {
+					userId: "ask-user",
+					appName: "ask-app",
+				})
+				.ask("ping");
+
+			expect(text).toBe("pong");
+		});
+
+		it("enhanced ask concatenates parts, skips empty part lists, and trims", async () => {
+			mockRunnerEvents([
+				new Event({
+					author: "concat_agent",
+					content: {
+						parts: [{ text: "Hel" }, { text: "lo" }, { inlineData: {} as any }],
+					},
+				}),
+				new Event({
+					author: "concat_agent",
+					content: { parts: [{ text: "!" }] },
+				}),
+				new Event({ author: "concat_agent", content: { parts: [] } }),
+				new Event({ author: "concat_agent" }),
+			]);
+
+			const { runner } = await AgentBuilder.create("concat_agent")
+				.withModel("gemini-2.5-flash")
+				.withSessionService(sessionService, {
+					userId: "u",
+					appName: "a",
+				})
+				.build();
+
+			await expect(runner.ask("hi")).resolves.toBe("Hello!");
+		});
+
+		it("enhanced ask accepts FullMessage and LlmRequest-shaped contents", async () => {
+			mockRunnerEvents([
+				new Event({
+					author: "msg_shapes",
+					content: { parts: [{ text: "ok" }] },
+				}),
+			]);
+
+			const { runner } = await AgentBuilder.create("msg_shapes")
+				.withModel("gemini-2.5-flash")
+				.withSessionService(sessionService, {
+					userId: "u",
+					appName: "a",
+				})
+				.build();
+
+			await expect(runner.ask({ parts: [{ text: "full" }] })).resolves.toBe(
+				"ok",
+			);
+
+			await expect(
+				runner.ask({
+					contents: [
+						{ role: "user", parts: [{ text: "earlier" }] },
+						{ role: "user", parts: [{ text: "latest" }] },
+					],
+				} as any),
+			).resolves.toBe("ok");
+		});
+
+		it("enhanced ask throws when session userId is missing", async () => {
+			const builderAny =
+				AgentBuilder.create("no_user2").withModel("gemini-2.5-flash");
+			(builderAny as any).sessionService = sessionService;
+			(builderAny as any).sessionOptions = { appName: "a" };
+			const session = await sessionService.createSession("a", "ghost", {});
+			const enhanced = (builderAny as any).createEnhancedRunner(
+				{
+					runAsync: async function* () {},
+					rewind: vi.fn(),
+				},
+				session,
+			);
+
+			await expect(enhanced.ask("x")).rejects.toThrow(
+				/Session configuration is required/,
+			);
+		});
+
+		it("enhanced ask returns per-sub-agent buffers for sequential/parallel", async () => {
+			mockRunnerEvents([
+				new Event({
+					author: "user",
+					content: { parts: [{ text: "prompt" }] },
+				}),
+				new Event({
+					author: "alpha",
+					content: { parts: [{ text: "A1" }] },
+				}),
+				new Event({
+					author: "beta",
+					content: { parts: [{ text: "B1" }] },
+				}),
+				new Event({
+					author: "alpha",
+					content: { parts: [{ text: "A2" }] },
+				}),
+				new Event({
+					author: "other",
+					content: { parts: [{ text: "ignored-for-map" }] },
+				}),
+			]);
+
+			const alpha = new LlmAgent({
+				name: "alpha",
+				model: "gemini-2.5-flash",
+			});
+			const beta = new LlmAgent({
+				name: "beta",
+				model: "gemini-2.5-flash",
+			});
+
+			const { runner: seqRunner } = await AgentBuilder.create("multi_seq")
+				.asSequential([alpha, beta])
+				.withSessionService(sessionService, {
+					userId: "u",
+					appName: "a",
+				})
+				.build();
+
+			await expect(seqRunner.ask("go")).resolves.toEqual([
+				{ agent: "alpha", response: "A1A2" },
+				{ agent: "beta", response: "B1" },
+			]);
+
+			mockRunnerEvents([
+				new Event({
+					author: "alpha",
+					content: { parts: [{ text: " only-alpha " }] },
+				}),
+			]);
+
+			const alpha2 = new LlmAgent({
+				name: "alpha",
+				model: "gemini-2.5-flash",
+			});
+			const beta2 = new LlmAgent({
+				name: "beta",
+				model: "gemini-2.5-flash",
+			});
+
+			const { runner: parRunner } = await AgentBuilder.create("multi_par")
+				.asParallel([alpha2, beta2])
+				.withSessionService(sessionService, {
+					userId: "u",
+					appName: "a",
+				})
+				.build();
+
+			await expect(parRunner.ask("go")).resolves.toEqual([
+				{ agent: "alpha", response: "only-alpha" },
+				{ agent: "beta", response: "" },
+			]);
+		});
+
+		it("enhanced ask parses JSON against outputSchema and falls back to raw parse", async () => {
+			const schema = z.object({ answer: z.string() });
+
+			mockRunnerEvents([
+				new Event({
+					author: "schema_ok",
+					content: { parts: [{ text: '{"answer":"yes"}' }] },
+				}),
+			]);
+			const { runner: okRunner } = await AgentBuilder.create("schema_ok")
+				.withModel("gemini-2.5-flash")
+				.withOutputSchema(schema)
+				.withSessionService(sessionService, {
+					userId: "u",
+					appName: "a",
+				})
+				.build();
+			await expect(okRunner.ask("q")).resolves.toEqual({ answer: "yes" });
+
+			mockRunnerEvents([
+				new Event({
+					author: "schema_raw",
+					content: { parts: [{ text: "not-json" }] },
+				}),
+			]);
+			const stringSchema = z.string().min(3);
+			const { runner: rawRunner } = await AgentBuilder.create("schema_raw")
+				.withModel("gemini-2.5-flash")
+				.withOutputSchema(stringSchema)
+				.withSessionService(sessionService, {
+					userId: "u",
+					appName: "a",
+				})
+				.build();
+			await expect(rawRunner.ask("q")).resolves.toBe("not-json");
+
+			mockRunnerEvents([
+				new Event({
+					author: "schema_fail",
+					content: { parts: [{ text: "nope" }] },
+				}),
+			]);
+			const { runner: failRunner } = await AgentBuilder.create("schema_fail")
+				.withModel("gemini-2.5-flash")
+				.withOutputSchema(schema)
+				.withSessionService(sessionService, {
+					userId: "u",
+					appName: "a",
+				})
+				.build();
+			await expect(failRunner.ask("q")).rejects.toThrow(
+				/Failed to parse and validate LLM output/,
+			);
+		});
+
+		it("enhanced runAsync forwards default runConfig and rewind delegates", async () => {
+			const runAsync = vi.fn(async function* () {
+				yield new Event({
+					author: "rw",
+					content: { parts: [{ text: "x" }] },
+				});
+			});
+			const rewind = vi.fn(async () => undefined);
+			vi.spyOn(Runner.prototype, "runAsync").mockImplementation(
+				runAsync as any,
+			);
+			vi.spyOn(Runner.prototype, "rewind").mockImplementation(rewind as any);
+
+			const { runner, session } = await AgentBuilder.create("rw_agent")
+				.withModel("gemini-2.5-flash")
+				.withRunConfig({ streamingMode: StreamingMode.BIDI })
+				.withSessionService(sessionService, {
+					userId: "u",
+					appName: "a",
+				})
+				.build();
+
+			const events = [];
+			for await (const e of runner.runAsync({
+				userId: session.userId,
+				sessionId: session.id,
+				newMessage: { parts: [{ text: "hi" }] },
+			})) {
+				events.push(e);
+			}
+			expect(events).toHaveLength(1);
+			expect(runAsync).toHaveBeenCalledWith(
+				expect.objectContaining({
+					runConfig: expect.objectContaining({
+						streamingMode: StreamingMode.BIDI,
+					}),
+				}),
+			);
+
+			await runner.rewind({
+				userId: session.userId,
+				sessionId: session.id,
+				rewindBeforeInvocationId: "inv-1",
+			});
+			expect(rewind).toHaveBeenCalledWith({
+				userId: session.userId,
+				sessionId: session.id,
+				rewindBeforeInvocationId: "inv-1",
+			});
+		});
+
+		it("withAgent static factory falls back when agent name is empty", async () => {
+			const nameless = new LlmAgent({
+				name: "temp",
+				model: "gemini-2.5-flash",
+			});
+			(nameless as any).name = "";
+			const builder = AgentBuilder.withAgent(nameless);
+			expect((builder as any).config.name).toBe("default_agent");
+			const { agent } = await builder.build();
+			expect(agent).toBe(nameless);
+		});
+
+		it("loop createAgent falls back to maxIterations 3 when set to 0", async () => {
+			const child = new LlmAgent({
+				name: "loop_child",
+				model: "gemini-2.5-flash",
+			});
+			const builder = AgentBuilder.create("loop_zero").asLoop([child], 0);
+			expect((builder as any).config.maxIterations).toBe(0);
+			const { agent } = await builder.build();
+			expect(agent).toBeInstanceOf(LoopAgent);
+			expect((agent as LoopAgent).maxIterations).toBe(3);
+		});
+
+		it("enhanced ask treats nullish parts as empty text and stringifies non-Error validation failures", async () => {
+			mockRunnerEvents([
+				new Event({
+					author: "null_parts",
+					content: { parts: [null as any, { text: "keep" }] },
+				}),
+			]);
+			const { runner } = await AgentBuilder.create("null_parts")
+				.withModel("gemini-2.5-flash")
+				.withSessionService(sessionService, {
+					userId: "u",
+					appName: "a",
+				})
+				.build();
+			await expect(runner.ask("x")).resolves.toBe("keep");
+
+			mockRunnerEvents([
+				new Event({
+					author: "schema_throw",
+					content: { parts: [{ text: '{"answer":1}' }] },
+				}),
+			]);
+			const throwingSchema = {
+				parse: () => {
+					throw "zod-string-error";
+				},
+			} as any;
+			const { runner: badRunner } = await AgentBuilder.create("schema_throw")
+				.withModel("gemini-2.5-flash")
+				.withOutputSchema(throwingSchema)
+				.withSessionService(sessionService, {
+					userId: "u",
+					appName: "a",
+				})
+				.build();
+			await expect(badRunner.ask("q")).rejects.toThrow(/zod-string-error/);
+		});
+	});
 });
+
+function mockRunnerEvents(events: Event[]) {
+	vi.spyOn(Runner.prototype, "runAsync").mockImplementation(async function* () {
+		for (const event of events) {
+			yield event;
+		}
+	});
+	vi.spyOn(Runner.prototype, "rewind").mockResolvedValue(undefined as never);
+}
