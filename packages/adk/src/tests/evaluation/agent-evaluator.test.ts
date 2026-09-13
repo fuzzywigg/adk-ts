@@ -8,8 +8,11 @@ import {
 	loadJson,
 	RESPONSE_EVALUATION_SCORE_KEY,
 	RESPONSE_MATCH_SCORE_KEY,
+	SAFETY_V1_KEY,
 	TOOL_TRAJECTORY_SCORE_KEY,
 } from "../../evaluation/agent-evaluator";
+import { EvalStatus } from "../../evaluation/evaluator";
+import { LocalEvalService } from "../../evaluation/local-eval-service";
 
 const tempDirs: string[] = [];
 
@@ -352,6 +355,295 @@ describe("AgentEvaluator.evaluate", () => {
 		});
 		evaluateEvalSet.mockRestore();
 	});
+
+	it("evaluates a single file path with numRuns forwarded", async () => {
+		const dir = await makeTempDir();
+		const file = path.join(dir, "solo.test.json");
+		await fs.writeFile(
+			file,
+			JSON.stringify({
+				evalSetId: "solo-set",
+				evalCases: [{ evalId: "s1", conversation: [] }],
+				creationTimestamp: 1,
+			}),
+		);
+
+		const evaluateEvalSet = vi
+			.spyOn(AgentEvaluator, "evaluateEvalSet")
+			.mockResolvedValue(undefined);
+
+		await AgentEvaluator.evaluate({ name: "agent" } as any, file, 3);
+
+		expect(evaluateEvalSet).toHaveBeenCalledOnce();
+		expect(evaluateEvalSet.mock.calls[0][3]).toBe(3);
+		evaluateEvalSet.mockRestore();
+	});
+
+	it("skips nested non-test json when walking directories", async () => {
+		const dir = await makeTempDir();
+		const nested = path.join(dir, "nested");
+		await fs.mkdir(nested);
+		await fs.writeFile(path.join(nested, "notes.json"), "[]");
+		await fs.writeFile(
+			path.join(nested, "ok.test.json"),
+			JSON.stringify({
+				evalSetId: "nested-set",
+				evalCases: [],
+				creationTimestamp: 1,
+			}),
+		);
+
+		const evaluateEvalSet = vi
+			.spyOn(AgentEvaluator, "evaluateEvalSet")
+			.mockResolvedValue(undefined);
+
+		await AgentEvaluator.evaluate({ name: "agent" } as any, dir, 1);
+
+		expect(evaluateEvalSet).toHaveBeenCalledOnce();
+		expect(evaluateEvalSet.mock.calls[0][1].evalSetId).toBe("nested-set");
+		evaluateEvalSet.mockRestore();
+	});
+});
+
+describe("AgentEvaluator.evaluateEvalSet", () => {
+	afterEach(() => {
+		vi.restoreAllMocks();
+	});
+
+	function stubLocalEvalService(caseResults: any[]) {
+		vi.spyOn(LocalEvalService.prototype, "performInference").mockImplementation(
+			async function* () {
+				yield [
+					{
+						invocationId: "expected-0",
+						userContent: { role: "user", parts: [{ text: "q" }] },
+						creationTimestamp: 1,
+					},
+					{
+						invocationId: "actual-0",
+						userContent: { role: "user", parts: [{ text: "q" }] },
+						finalResponse: { role: "model", parts: [{ text: "a" }] },
+						creationTimestamp: 1,
+					},
+				];
+			},
+		);
+		vi.spyOn(LocalEvalService.prototype, "evaluate").mockImplementation(
+			async function* () {
+				yield {
+					evalSetResultId: "result-1",
+					evalSetId: "set-1",
+					evalCaseResults: caseResults,
+					creationTimestamp: 1,
+				};
+			},
+		);
+	}
+
+	it("resolves when all metric averages meet thresholds", async () => {
+		stubLocalEvalService([
+			{
+				evalSetId: "set-1",
+				evalId: "c1",
+				finalEvalStatus: EvalStatus.PASSED,
+				overallEvalMetricResults: [],
+				evalMetricResultPerInvocation: [
+					{
+						actualInvocation: {
+							invocationId: "a",
+							userContent: { role: "user", parts: [{ text: "q" }] },
+							finalResponse: { role: "model", parts: [{ text: "ok" }] },
+							creationTimestamp: 1,
+						},
+						expectedInvocation: {
+							invocationId: "e",
+							userContent: { role: "user", parts: [{ text: "q" }] },
+							finalResponse: { role: "model", parts: [{ text: "ok" }] },
+							creationTimestamp: 1,
+						},
+						evalMetricResults: [
+							{
+								metricName: RESPONSE_MATCH_SCORE_KEY,
+								threshold: 0.8,
+								score: 1,
+								evalStatus: EvalStatus.PASSED,
+							},
+						],
+					},
+				],
+				sessionId: "s1",
+			},
+		]);
+
+		await expect(
+			AgentEvaluator.evaluateEvalSet(
+				{ name: "pass-agent" } as any,
+				{
+					evalSetId: "set-1",
+					evalCases: [],
+					creationTimestamp: 1,
+				},
+				{ [RESPONSE_MATCH_SCORE_KEY]: 0.8 },
+				1,
+			),
+		).resolves.toBeUndefined();
+	});
+
+	it("throws aggregated failures and prints details when requested", async () => {
+		const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+		const tableSpy = vi.spyOn(console, "table").mockImplementation(() => {});
+
+		stubLocalEvalService([
+			{
+				evalSetId: "set-1",
+				evalId: "c1",
+				finalEvalStatus: EvalStatus.FAILED,
+				overallEvalMetricResults: [],
+				evalMetricResultPerInvocation: [
+					{
+						actualInvocation: {
+							invocationId: "a",
+							userContent: { role: "user", parts: [{ text: "prompt" }] },
+							finalResponse: {
+								role: "model",
+								parts: [{ text: "actual" }, { text: "" }],
+							},
+							intermediateData: {
+								toolUses: [{ name: "search", args: { q: "1" } }],
+								intermediateResponses: [],
+							},
+							creationTimestamp: 1,
+						},
+						expectedInvocation: {
+							invocationId: "e",
+							userContent: { role: "user", parts: [{ text: "prompt" }] },
+							finalResponse: { role: "model", parts: [{ text: "expected" }] },
+							intermediateData: {
+								toolUses: [{ name: "search", args: { q: "1" } }],
+								intermediateResponses: [],
+							},
+							creationTimestamp: 1,
+						},
+						evalMetricResults: [
+							{
+								metricName: RESPONSE_MATCH_SCORE_KEY,
+								threshold: 0.95,
+								score: 0.1,
+								evalStatus: EvalStatus.FAILED,
+							},
+						],
+					},
+				],
+				sessionId: "s1",
+			},
+		]);
+
+		await expect(
+			AgentEvaluator.evaluateEvalSet(
+				{ name: "" } as any,
+				{
+					evalSetId: "set-1",
+					evalCases: [],
+					creationTimestamp: 1,
+				},
+				{ [RESPONSE_MATCH_SCORE_KEY]: 0.95 },
+				1,
+				true,
+			),
+		).rejects.toThrow(/test failures/);
+
+		expect(logSpy).toHaveBeenCalled();
+		expect(tableSpy).toHaveBeenCalled();
+		const tableArg = tableSpy.mock.calls[0][0] as Array<Record<string, string>>;
+		expect(tableArg[0].prompt).toBe("prompt");
+		expect(tableArg[0].expectedResponse).toBe("expected");
+		expect(tableArg[0].actualResponse).toBe("actual");
+		expect(tableArg[0].expectedToolCalls).toContain("search");
+	});
+
+	it("runs performInference once per numRuns before evaluate", async () => {
+		const inference = vi
+			.spyOn(LocalEvalService.prototype, "performInference")
+			.mockImplementation(async function* () {
+				yield [];
+			});
+		const evaluate = vi
+			.spyOn(LocalEvalService.prototype, "evaluate")
+			.mockImplementation(async function* () {
+				yield {
+					evalSetResultId: "r",
+					evalSetId: "set-1",
+					evalCaseResults: [],
+					creationTimestamp: 1,
+				};
+			});
+
+		await AgentEvaluator.evaluateEvalSet(
+			{ name: "agent" } as any,
+			{ evalSetId: "set-1", evalCases: [], creationTimestamp: 1 },
+			{ [RESPONSE_MATCH_SCORE_KEY]: 0.5 },
+			3,
+		);
+
+		expect(inference).toHaveBeenCalledTimes(3);
+		expect(evaluate).toHaveBeenCalledOnce();
+	});
+
+	it("groups metric results across multiple case runs", async () => {
+		stubLocalEvalService([
+			{
+				evalSetId: "set-1",
+				evalId: "c1",
+				finalEvalStatus: EvalStatus.PASSED,
+				overallEvalMetricResults: [],
+				evalMetricResultPerInvocation: [
+					{
+						actualInvocation: { invocationId: "a1", creationTimestamp: 1 },
+						expectedInvocation: { invocationId: "e1", creationTimestamp: 1 },
+						evalMetricResults: [
+							{
+								metricName: "m1",
+								threshold: 0.5,
+								score: 0.6,
+								evalStatus: EvalStatus.PASSED,
+							},
+						],
+					},
+				],
+				sessionId: "s",
+			},
+			{
+				evalSetId: "set-1",
+				evalId: "c1",
+				finalEvalStatus: EvalStatus.PASSED,
+				overallEvalMetricResults: [],
+				evalMetricResultPerInvocation: [
+					{
+						actualInvocation: { invocationId: "a2", creationTimestamp: 1 },
+						expectedInvocation: { invocationId: "e2", creationTimestamp: 1 },
+						evalMetricResults: [
+							{
+								metricName: "m1",
+								threshold: 0.5,
+								score: 0.8,
+								evalStatus: EvalStatus.PASSED,
+							},
+						],
+					},
+				],
+				sessionId: "s",
+			},
+		]);
+
+		await expect(
+			AgentEvaluator.evaluateEvalSet(
+				{ name: "agent" } as any,
+				{ evalSetId: "set-1", evalCases: [], creationTimestamp: 1 },
+				{ m1: 0.5 } as any,
+				1,
+			),
+		).resolves.toBeUndefined();
+	});
 });
 
 describe("AgentEvaluator metric aggregation helpers", () => {
@@ -404,5 +696,136 @@ describe("AgentEvaluator metric aggregation helpers", () => {
 			"agent",
 		);
 		expect(failures[0]).toContain("but got undefined");
+	});
+
+	it("skips failures when average score meets threshold", () => {
+		const failures = (AgentEvaluator as any)._processMetricsAndGetFailures(
+			{
+				ok: [
+					{
+						actualInvocation: {},
+						expectedInvocation: {},
+						evalMetricResult: {
+							metricName: "ok",
+							threshold: 0.5,
+							score: 0.7,
+							evalStatus: EvalStatus.PASSED,
+						},
+					},
+					{
+						actualInvocation: {},
+						expectedInvocation: {},
+						evalMetricResult: {
+							metricName: "ok",
+							threshold: 0.5,
+							score: 0.9,
+							evalStatus: EvalStatus.PASSED,
+						},
+					},
+				],
+			},
+			false,
+			"agent",
+		);
+		expect(failures).toEqual([]);
+	});
+
+	it("printDetails handles missing content and tool uses", () => {
+		const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+		const tableSpy = vi.spyOn(console, "table").mockImplementation(() => {});
+
+		(AgentEvaluator as any)._printDetails(
+			[
+				{
+					actualInvocation: { creationTimestamp: 1 },
+					expectedInvocation: {
+						userContent: { parts: [{ text: "" }, { inlineData: {} }] },
+						creationTimestamp: 1,
+					},
+					evalMetricResult: {
+						metricName: "x",
+						threshold: 1,
+						score: 0,
+						evalStatus: EvalStatus.FAILED,
+					},
+				},
+			],
+			EvalStatus.FAILED,
+			0,
+			"x",
+			1,
+		);
+
+		const row = (tableSpy.mock.calls[0][0] as any[])[0];
+		expect(row.prompt).toBe("");
+		expect(row.expectedResponse).toBe("");
+		expect(row.actualResponse).toBe("");
+		expect(row.expectedToolCalls).toBe("");
+		expect(row.actualToolCalls).toBe("");
+		logSpy.mockRestore();
+		tableSpy.mockRestore();
+	});
+
+	it("uses threshold 0 when metric result omits threshold", () => {
+		const failures = (AgentEvaluator as any)._processMetricsAndGetFailures(
+			{
+				bare: [
+					{
+						actualInvocation: {},
+						expectedInvocation: {},
+						evalMetricResult: {
+							metricName: "bare",
+							score: -1,
+							evalStatus: EvalStatus.FAILED,
+						},
+					},
+				],
+			},
+			false,
+			"agent",
+		);
+		expect(failures[0]).toContain("Expected 0");
+	});
+});
+
+describe("AgentEvaluator._validateInput response evaluation and safety", () => {
+	it("requires query for RESPONSE_EVALUATION_SCORE_KEY", () => {
+		expect(() =>
+			(AgentEvaluator as any)._validateInput([[{ reference: "x" }]], {
+				[RESPONSE_EVALUATION_SCORE_KEY]: 0.5,
+			}),
+		).toThrow(/must include 'query'/);
+	});
+
+	it("accepts SAFETY_V1 without extra columns", () => {
+		expect(() =>
+			(AgentEvaluator as any)._validateInput([[{ query: "hi" }]], {
+				[SAFETY_V1_KEY]: 0.8,
+			}),
+		).not.toThrow();
+	});
+
+	it("rejects empty sample arrays inside the dataset", () => {
+		expect(() =>
+			(AgentEvaluator as any)._validateInput([[]], {
+				[RESPONSE_MATCH_SCORE_KEY]: 0.5,
+			}),
+		).toThrow(/evaluation dataset is empty/);
+	});
+});
+
+describe("AgentEvaluator.findConfigForTestFile criteria shape", () => {
+	it("falls back when criteria exists but is not an object", async () => {
+		const dir = await makeTempDir();
+		const testFile = path.join(dir, "case.test.json");
+		await fs.writeFile(testFile, "[]");
+		await fs.writeFile(
+			path.join(dir, "test_config.json"),
+			JSON.stringify({ criteria: "not-an-object" }),
+		);
+
+		await expect(
+			AgentEvaluator.findConfigForTestFile(testFile),
+		).resolves.toEqual(DEFAULT_CRITERIA);
 	});
 });
