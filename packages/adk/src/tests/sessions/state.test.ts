@@ -45,4 +45,27 @@ describe("State", () => {
 		expect(state.get("user:name")).toBe("alice");
 		expect("user:name" in state).toBe(true);
 	});
+
+	it("supports TEMP_PREFIX keys", () => {
+		const key = `${State.TEMP_PREFIX}scratch`;
+		const state = State.create({}, {});
+		state.set(key, "transient");
+		expect(state.get(key)).toBe("transient");
+		expect(state.has(key)).toBe(true);
+		expect(state.toDict()[key]).toBe("transient");
+	});
+
+	it("returns empty object from toDict when empty", () => {
+		const state = State.create({}, {});
+		expect(state.toDict()).toEqual({});
+		expect(state.hasDelta()).toBe(false);
+	});
+
+	it("hasDelta becomes true after update", () => {
+		const state = State.create({ keep: 1 }, {});
+		expect(state.hasDelta()).toBe(false);
+		state.update({ keep: 2, added: 3 });
+		expect(state.hasDelta()).toBe(true);
+		expect(state.toDict()).toEqual({ keep: 2, added: 3 });
+	});
 });

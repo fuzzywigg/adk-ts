@@ -67,4 +67,68 @@ describe("TrajectoryEvaluator", () => {
 		expect(result.overallScore).toBe(0);
 		expect(result.overallEvalStatus).toBe(EvalStatus.FAILED);
 	});
+
+	it("treats empty toolUses arrays as a match", async () => {
+		const empty = {
+			toolUses: [],
+			intermediateResponses: [],
+		};
+		const result = await evaluator.evaluateInvocations(
+			[invocation(empty)],
+			[invocation(empty)],
+		);
+
+		expect(result.overallScore).toBe(1);
+		expect(result.overallEvalStatus).toBe(EvalStatus.PASSED);
+		expect(result.perInvocationResults[0].score).toBe(1);
+	});
+
+	it("fails when tool call counts differ", async () => {
+		const actual = invocation({
+			toolUses: [{ name: "search", args: { q: "a" } }],
+			intermediateResponses: [],
+		});
+		const expected = invocation({
+			toolUses: [
+				{ name: "search", args: { q: "a" } },
+				{ name: "lookup", args: { id: 1 } },
+			],
+			intermediateResponses: [],
+		});
+
+		const result = await evaluator.evaluateInvocations([actual], [expected]);
+		expect(result.overallScore).toBe(0);
+		expect(result.overallEvalStatus).toBe(EvalStatus.FAILED);
+		expect(result.perInvocationResults[0].evalStatus).toBe(EvalStatus.FAILED);
+	});
+
+	it("averages partial invocation matches against a 0.5 threshold", async () => {
+		const thresholdEvaluator = new TrajectoryEvaluator({
+			metricName: "tool_trajectory_avg_score",
+			threshold: 0.5,
+		});
+
+		const matchTools = {
+			toolUses: [{ name: "search", args: { q: "ok" } }],
+			intermediateResponses: [],
+		};
+		const mismatchActual = {
+			toolUses: [{ name: "search", args: { q: "a" } }],
+			intermediateResponses: [],
+		};
+		const mismatchExpected = {
+			toolUses: [{ name: "search", args: { q: "b" } }],
+			intermediateResponses: [],
+		};
+
+		const result = await thresholdEvaluator.evaluateInvocations(
+			[invocation(matchTools), invocation(mismatchActual)],
+			[invocation(matchTools), invocation(mismatchExpected)],
+		);
+
+		expect(result.overallScore).toBe(0.5);
+		expect(result.overallEvalStatus).toBe(EvalStatus.PASSED);
+		expect(result.perInvocationResults[0].evalStatus).toBe(EvalStatus.PASSED);
+		expect(result.perInvocationResults[1].evalStatus).toBe(EvalStatus.FAILED);
+	});
 });

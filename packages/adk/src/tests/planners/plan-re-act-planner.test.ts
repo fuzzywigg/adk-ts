@@ -47,4 +47,29 @@ describe("PlanReActPlanner", () => {
 		]);
 		expect(parts?.some((p) => p.text === "after tools")).toBe(false);
 	});
+
+	it("marks /*REPLANNING*/ content as thought", () => {
+		const parts = planner.processPlanningResponse({} as any, [
+			{ text: "/*REPLANNING*/ revise the plan with new tools" },
+		]);
+
+		expect(parts).toHaveLength(1);
+		expect(parts?.[0].text).toContain("/*REPLANNING*/");
+		expect(parts?.[0].thought).toBe(true);
+	});
+
+	it("handles a response with only /*ACTION*/ text then function calls", () => {
+		const parts = planner.processPlanningResponse({} as any, [
+			{ text: "/*ACTION*/" },
+			{ functionCall: { name: "search", args: { q: "adk" } } },
+			{ functionCall: { name: "summarize", args: {} } },
+		]);
+
+		expect(parts?.[0].text).toBe("/*ACTION*/");
+		expect(parts?.[0].thought).toBe(true);
+		expect(parts?.slice(1).map((p) => p.functionCall?.name)).toEqual([
+			"search",
+			"summarize",
+		]);
+	});
 });
