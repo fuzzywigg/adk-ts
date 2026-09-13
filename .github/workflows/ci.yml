@@ -58,6 +58,8 @@ jobs:
         run: pnpm test
 
       - name: ADK coverage report
+        # Report-only: thresholds remain commented out in vitest.config.mjs
+        continue-on-error: true
         run: pnpm --filter @iqai/adk test:coverage
 
       - name: Upload ADK coverage artifact
