@@ -302,7 +302,16 @@ describe("SessionsService", () => {
 
 		await expect(
 			service.getSessionState(loaded, "missing-state"),
-		).rejects.toThrow(/Session not found/);
+		).resolves.toEqual({
+			agentState: {},
+			userState: {},
+			sessionState: {},
+			metadata: expect.objectContaining({
+				changeCount: 0,
+				totalKeys: 0,
+				sizeBytes: 0,
+			}),
+		});
 	});
 
 	it("returns empty events/messages when session fetch throws", async () => {
