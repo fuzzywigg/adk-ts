@@ -160,4 +160,199 @@ describe("output-schema responseProcessor", () => {
 		expect(events).toEqual([]);
 		expect(response.errorCode).toBeUndefined();
 	});
+
+	it("strips prose before the first JSON object", async () => {
+		const schema = z.object({ answer: z.string() });
+		const response = new LlmResponse({
+			content: {
+				role: "model",
+				parts: [{ text: 'Here\'s the JSON:\n{"answer":"yes"}' }],
+			},
+		});
+
+		await collect(
+			responseProcessor.runAsync(
+				makeContext({ name: "schema-agent", outputSchema: schema }),
+				response,
+			),
+		);
+
+		expect(JSON.parse(response.content?.parts?.[0]?.text ?? "{}")).toEqual({
+			answer: "yes",
+		});
+	});
+
+	it("yields a parse error when JSON cannot be repaired", async () => {
+		const schema = z.object({ answer: z.string() });
+		const response = new LlmResponse({
+			content: {
+				role: "model",
+				parts: [{ text: "not-json-at-all {{{" }],
+			},
+		});
+
+		const events = await collect(
+			responseProcessor.runAsync(
+				makeContext({ name: "schema-agent", outputSchema: schema }),
+				response,
+			),
+		);
+
+		expect(events).toHaveLength(1);
+		expect(response.errorCode).toBe("OUTPUT_SCHEMA_VALIDATION_FAILED");
+		expect(response.errorMessage).toMatch(/JSON|parse|Unexpected/i);
+	});
+
+	it("ignores non-text parts when joining response text", async () => {
+		const schema = z.object({ answer: z.string() });
+		const response = new LlmResponse({
+			content: {
+				role: "model",
+				parts: [
+					{ inlineData: { mimeType: "image/png", data: "abc" } } as any,
+					{ text: '{"answer":"ok"}' },
+				],
+			},
+		});
+
+		const events = await collect(
+			responseProcessor.runAsync(
+				makeContext({ name: "schema-agent", outputSchema: schema }),
+				response,
+			),
+		);
+
+		expect(events).toEqual([]);
+		expect(response.errorCode).toBeUndefined();
+		const texts = (response.content?.parts || [])
+			.map((part) => ("text" in (part || {}) ? part.text : undefined))
+			.filter((t): t is string => Boolean(t));
+		expect(texts.some((t) => JSON.parse(t).answer === "ok")).toBe(true);
+		expect(response.content?.parts?.[0]).toMatchObject({
+			inlineData: { mimeType: "image/png", data: "abc" },
+		});
+	});
+
+	it("strips unlabeled triple-backtick fences", async () => {
+		const schema = z.object({ n: z.number() });
+		const response = new LlmResponse({
+			content: {
+				role: "model",
+				parts: [{ text: '```\n{"n": 3}\n```' }],
+			},
+		});
+
+		await collect(
+			responseProcessor.runAsync(
+				makeContext({ name: "schema-agent", outputSchema: schema }),
+				response,
+			),
+		);
+
+		expect(JSON.parse(response.content?.parts?.[0]?.text ?? "{}")).toEqual({
+			n: 3,
+		});
+	});
+
+	it("parses array JSON starting after prose", async () => {
+		const schema = z.array(z.object({ id: z.number() }));
+		const response = new LlmResponse({
+			content: {
+				role: "model",
+				parts: [{ text: 'Result list:\n[{"id":1},{"id":2}]' }],
+			},
+		});
+
+		const events = await collect(
+			responseProcessor.runAsync(
+				makeContext({ name: "schema-agent", outputSchema: schema }),
+				response,
+			),
+		);
+
+		expect(events).toEqual([]);
+		expect(JSON.parse(response.content?.parts?.[0]?.text ?? "[]")).toEqual([
+			{ id: 1 },
+			{ id: 2 },
+		]);
+	});
+
+	it("joins text across multiple parts before validation", async () => {
+		const schema = z.object({ answer: z.string() });
+		const response = new LlmResponse({
+			content: {
+				role: "model",
+				parts: [{ text: '{"ans' }, { text: 'wer":"split"}' }],
+			},
+		});
+
+		const events = await collect(
+			responseProcessor.runAsync(
+				makeContext({ name: "schema-agent", outputSchema: schema }),
+				response,
+			),
+		);
+
+		expect(events).toEqual([]);
+		expect(JSON.parse(response.content?.parts?.[0]?.text ?? "{}")).toEqual({
+			answer: "split",
+		});
+		expect(JSON.parse(response.content?.parts?.[1]?.text ?? "{}")).toEqual({
+			answer: "split",
+		});
+	});
+
+	it("returns early for empty parts array", async () => {
+		const schema = z.object({ answer: z.string() });
+		const response = new LlmResponse({
+			content: { role: "model", parts: [] },
+		});
+		const events = await collect(
+			responseProcessor.runAsync(
+				makeContext({ name: "schema-agent", outputSchema: schema }),
+				response,
+			),
+		);
+		expect(events).toEqual([]);
+		expect(response.errorCode).toBeUndefined();
+	});
+
+	it("returns early when outputSchema is falsy", async () => {
+		const response = new LlmResponse({
+			content: { role: "model", parts: [{ text: '{"a":1}' }] },
+		});
+		const events = await collect(
+			responseProcessor.runAsync(
+				makeContext({ name: "a", outputSchema: null }),
+				response,
+			),
+		);
+		expect(events).toEqual([]);
+		expect(response.errorCode).toBeUndefined();
+	});
+
+	it("preserves non-Error throw messages on validation failure", async () => {
+		const schema = {
+			parse: () => {
+				throw "plain failure";
+			},
+		};
+		const response = new LlmResponse({
+			content: {
+				role: "model",
+				parts: [{ text: '{"answer":"ok"}' }],
+			},
+		});
+
+		const events = await collect(
+			responseProcessor.runAsync(
+				makeContext({ name: "schema-agent", outputSchema: schema }),
+				response,
+			),
+		);
+
+		expect(events).toHaveLength(1);
+		expect(response.errorMessage).toContain("plain failure");
+		expect(response.errorCode).toBe("OUTPUT_SCHEMA_VALIDATION_FAILED");
+	});
 });
