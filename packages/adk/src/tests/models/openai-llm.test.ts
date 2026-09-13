@@ -1,4 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import OpenAI from "openai";
+import { LlmRequest } from "../../models/llm-request";
 import { LlmResponse } from "../../models/llm-response";
 import { OpenAiLlm } from "../../models/openai-llm";
 
@@ -23,10 +25,19 @@ vi.mock("openai", () => ({
 describe("OpenAiLlm", () => {
 	let llm: OpenAiLlm;
 	let originalEnv: NodeJS.ProcessEnv;
+	let mockCreate: ReturnType<typeof vi.fn>;
 
 	beforeEach(() => {
 		originalEnv = { ...process.env };
 		process.env.OPENAI_API_KEY = "test-key";
+		mockCreate = vi.fn();
+		(OpenAI as unknown as ReturnType<typeof vi.fn>).mockImplementation(() => ({
+			chat: {
+				completions: {
+					create: mockCreate,
+				},
+			},
+		}));
 		llm = new OpenAiLlm();
 	});
 
@@ -380,6 +391,356 @@ describe("OpenAiLlm", () => {
 			expect(req.config.labels).toBeUndefined();
 			expect(req.contents[0].parts[0].inline_data).toBeUndefined();
 			expect(req.contents[0].parts[1]).toEqual({ text: "keep" });
+		});
+	});
+
+	describe("generateContentAsyncImpl", () => {
+		function baseRequest(
+			overrides: Partial<LlmRequest> & Record<string, unknown> = {},
+		): LlmRequest {
+			return new LlmRequest({
+				contents: [{ role: "user", parts: [{ text: "hi" }] }],
+				config: {
+					maxOutputTokens: 64,
+					temperature: 0.2,
+					topP: 0.8,
+				},
+				...overrides,
+			});
+		}
+
+		it("yields a non-stream response with tools system and usage", async () => {
+			mockCreate.mockResolvedValue({
+				choices: [
+					{
+						message: {
+							content: "pong",
+							tool_calls: [
+								{
+									id: "tc1",
+									type: "function",
+									function: {
+										name: "lookup",
+										arguments: JSON.stringify({ q: "adk" }),
+									},
+								},
+							],
+						},
+						finish_reason: "tool_calls",
+					},
+				],
+				usage: {
+					prompt_tokens: 3,
+					completion_tokens: 5,
+					total_tokens: 8,
+				},
+			});
+
+			const request = baseRequest({
+				model: "gpt-4o",
+				config: {
+					systemInstruction: "be brief",
+					maxOutputTokens: 32,
+					temperature: 0.1,
+					topP: 0.5,
+					tools: [
+						{
+							functionDeclarations: [
+								{
+									name: "lookup",
+									description: "Find things",
+									parameters: {
+										type: "OBJECT",
+										properties: { q: { type: "STRING" } },
+									},
+								},
+							],
+						},
+					],
+				},
+			});
+
+			const responses: LlmResponse[] = [];
+			for await (const response of (llm as any).generateContentAsyncImpl(
+				request,
+				false,
+			)) {
+				responses.push(response);
+			}
+
+			expect(mockCreate).toHaveBeenCalledWith(
+				expect.objectContaining({
+					model: "gpt-4o",
+					stream: false,
+					tool_choice: "auto",
+					max_tokens: 32,
+					temperature: 0.1,
+					top_p: 0.5,
+					messages: expect.arrayContaining([
+						{ role: "system", content: "be brief" },
+						{ role: "user", content: "hi" },
+					]),
+					tools: [
+						{
+							type: "function",
+							function: {
+								name: "lookup",
+								description: "Find things",
+								parameters: {
+									type: "object",
+									properties: { q: { type: "string" } },
+								},
+							},
+						},
+					],
+				}),
+			);
+			expect(responses).toHaveLength(1);
+			expect(responses[0].content?.parts?.[0]).toEqual({ text: "pong" });
+			expect(responses[0].content?.parts?.[1]?.functionCall).toEqual({
+				id: "tc1",
+				name: "lookup",
+				args: { q: "adk" },
+			});
+			expect(responses[0].finishReason).toBe("STOP");
+			expect(responses[0].usageMetadata).toEqual({
+				promptTokenCount: 3,
+				candidatesTokenCount: 5,
+				totalTokenCount: 8,
+			});
+		});
+
+		it("yields nothing when non-stream choices are empty", async () => {
+			mockCreate.mockResolvedValue({ choices: [], usage: undefined });
+
+			const responses: LlmResponse[] = [];
+			for await (const response of (llm as any).generateContentAsyncImpl(
+				baseRequest(),
+				false,
+			)) {
+				responses.push(response);
+			}
+
+			expect(responses).toHaveLength(0);
+		});
+
+		it("streams partial text then finish_reason with leftover usage yield", async () => {
+			mockCreate.mockResolvedValue(
+				(async function* () {
+					yield {
+						choices: [{ delta: { content: "Hel" }, finish_reason: null }],
+					};
+					yield {
+						choices: [{ delta: { content: "lo" }, finish_reason: "stop" }],
+						usage: {
+							prompt_tokens: 1,
+							completion_tokens: 2,
+							total_tokens: 3,
+						},
+					};
+				})(),
+			);
+
+			const responses: LlmResponse[] = [];
+			for await (const response of (llm as any).generateContentAsyncImpl(
+				baseRequest(),
+				true,
+			)) {
+				responses.push(response);
+			}
+
+			expect(mockCreate).toHaveBeenCalledWith(
+				expect.objectContaining({ stream: true, model: "gpt-4o-mini" }),
+			);
+			expect(responses[0].partial).toBe(true);
+			expect(responses[0].content?.parts?.[0]?.text).toBe("Hel");
+			const finished = responses.find((r) => r.finishReason === "STOP");
+			expect(finished?.content?.parts).toEqual([{ text: "Hello" }]);
+			expect(finished?.usageMetadata?.totalTokenCount).toBe(3);
+			expect(
+				responses.some(
+					(r) =>
+						!r.partial &&
+						!r.finishReason &&
+						r.content?.parts?.[0]?.text === "Hello" &&
+						r.usageMetadata?.totalTokenCount === 3,
+				),
+			).toBe(true);
+		});
+
+		it("merges accumulated text when a later chunk clears content", async () => {
+			mockCreate.mockResolvedValue(
+				(async function* () {
+					yield {
+						choices: [
+							{ delta: { content: "[thinking] draft" }, finish_reason: null },
+						],
+					};
+					yield {
+						choices: [{ delta: { content: "answer" }, finish_reason: null }],
+					};
+					yield {
+						choices: [{ delta: {}, finish_reason: null }],
+						usage: {
+							prompt_tokens: 2,
+							completion_tokens: 4,
+							total_tokens: 6,
+						},
+					};
+					yield {
+						choices: [{ delta: {}, finish_reason: "length" }],
+					};
+				})(),
+			);
+
+			const responses: LlmResponse[] = [];
+			for await (const response of (llm as any).generateContentAsyncImpl(
+				baseRequest(),
+				true,
+			)) {
+				responses.push(response);
+			}
+
+			const merged = responses.find(
+				(r) =>
+					r.content?.parts?.some((p: any) => p.thought) &&
+					r.content?.parts?.some((p: any) => p.text === "answer") &&
+					!r.partial &&
+					!r.finishReason,
+			);
+			expect(merged?.usageMetadata).toEqual({
+				promptTokenCount: 2,
+				candidatesTokenCount: 4,
+				totalTokenCount: 6,
+			});
+			expect(responses.some((r) => r.finishReason === "MAX_TOKENS")).toBe(true);
+		});
+
+		it("accumulates streamed tool call fragments across indexes", async () => {
+			mockCreate.mockResolvedValue(
+				(async function* () {
+					yield {
+						choices: [
+							{
+								delta: {
+									tool_calls: [
+										{
+											index: 0,
+											id: "call-a",
+											type: "function",
+											function: { name: "look", arguments: "" },
+										},
+									],
+								},
+								finish_reason: null,
+							},
+						],
+					};
+					yield {
+						choices: [
+							{
+								delta: {
+									tool_calls: [
+										{
+											index: 0,
+											function: { arguments: '{"q":' },
+										},
+										{
+											index: 1,
+											id: "call-b",
+											type: "function",
+											function: { name: "ping", arguments: "{}" },
+										},
+									],
+								},
+								finish_reason: null,
+							},
+						],
+					};
+					yield {
+						choices: [
+							{
+								delta: {
+									tool_calls: [
+										{
+											index: 0,
+											function: { arguments: '"adk"}' },
+										},
+									],
+								},
+								finish_reason: "tool_calls",
+							},
+						],
+						usage: {
+							prompt_tokens: 4,
+							completion_tokens: 6,
+							total_tokens: 10,
+						},
+					};
+				})(),
+			);
+
+			const responses: LlmResponse[] = [];
+			for await (const response of (llm as any).generateContentAsyncImpl(
+				baseRequest(),
+				true,
+			)) {
+				responses.push(response);
+			}
+
+			const final = responses.find((r) => r.finishReason === "STOP");
+			expect(final?.content?.parts).toEqual([
+				{
+					functionCall: {
+						id: "call-a",
+						name: "look",
+						args: { q: "adk" },
+					},
+				},
+				{
+					functionCall: {
+						id: "call-b",
+						name: "ping",
+						args: {},
+					},
+				},
+			]);
+			expect(final?.usageMetadata?.totalTokenCount).toBe(10);
+		});
+
+		it("skips empty stream choices and omits tool_choice without tools", async () => {
+			mockCreate.mockResolvedValue(
+				(async function* () {
+					yield { choices: [] };
+					yield {
+						choices: [{ delta: { content: "only" }, finish_reason: "stop" }],
+						usage: {
+							prompt_tokens: 1,
+							completion_tokens: 1,
+							total_tokens: 2,
+						},
+					};
+				})(),
+			);
+
+			const responses: LlmResponse[] = [];
+			for await (const response of (llm as any).generateContentAsyncImpl(
+				baseRequest(),
+				true,
+			)) {
+				responses.push(response);
+			}
+
+			expect(mockCreate).toHaveBeenCalledWith(
+				expect.objectContaining({
+					tools: undefined,
+					tool_choice: undefined,
+				}),
+			);
+			expect(responses.some((r) => r.finishReason === "STOP")).toBe(true);
+			expect(
+				responses.some((r) => r.content?.parts?.[0]?.text === "only"),
+			).toBe(true);
 		});
 	});
 });

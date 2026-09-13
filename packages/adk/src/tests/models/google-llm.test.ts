@@ -11,6 +11,11 @@ vi.mock("@adk/helpers/logger", () => ({
 
 vi.mock("@google/genai", () => ({
 	GoogleGenAI: vi.fn(),
+	FinishReason: {
+		STOP: "STOP",
+		MAX_TOKENS: "MAX_TOKENS",
+		FINISH_REASON_UNSPECIFIED: "FINISH_REASON_UNSPECIFIED",
+	},
 }));
 
 describe("GoogleLlm", () => {
@@ -238,6 +243,144 @@ describe("GoogleLlm", () => {
 				}),
 			).toBe(false);
 			expect((llm as any).hasInlineData({})).toBe(false);
+		});
+	});
+
+	describe("generateContentAsyncImpl", () => {
+		beforeEach(() => {
+			process.env.GOOGLE_API_KEY = "abc";
+			process.env.GOOGLE_GENAI_USE_VERTEXAI = undefined;
+		});
+
+		it("yields a non-stream LlmResponse from generateContent", async () => {
+			const generateContent = vi.fn().mockResolvedValue({
+				candidates: [
+					{
+						content: { parts: [{ text: "hello gemini" }] },
+						groundingMetadata: { queries: ["q"] },
+					},
+				],
+				usageMetadata: { candidatesTokenCount: 7, totalTokenCount: 11 },
+			});
+			(GoogleGenAI as unknown as ReturnType<typeof vi.fn>).mockImplementation(
+				() => ({
+					models: {
+						generateContent,
+						generateContentStream: vi.fn(),
+					},
+				}),
+			);
+
+			const llm = new GoogleLlm("gemini-2.0-flash");
+			const request = {
+				model: "gemini-custom",
+				contents: [{ role: "user", parts: [{ text: "hi" }] }],
+				config: { temperature: 0.1 },
+			};
+
+			const responses: any[] = [];
+			for await (const response of (llm as any).generateContentAsyncImpl(
+				request,
+				false,
+			)) {
+				responses.push(response);
+			}
+
+			expect(generateContent).toHaveBeenCalledWith({
+				model: "gemini-custom",
+				contents: [{ role: "user", parts: [{ text: "hi" }] }],
+				config: { temperature: 0.1 },
+			});
+			expect(responses).toHaveLength(1);
+			expect(responses[0].content).toEqual({
+				parts: [{ text: "hello gemini" }],
+			});
+			expect(responses[0].groundingMetadata).toEqual({ queries: ["q"] });
+			expect(responses[0].usageMetadata?.candidatesTokenCount).toBe(7);
+		});
+
+		it("streams partial text, merge clears, and final STOP leftover", async () => {
+			const stream = (async function* () {
+				yield {
+					candidates: [{ content: { parts: [{ text: "A" }] } }],
+					usageMetadata: { totalTokenCount: 1 },
+				};
+				yield {
+					candidates: [{ content: { parts: [{ text: "B" }] } }],
+					usageMetadata: { totalTokenCount: 2 },
+				};
+				yield {
+					candidates: [{ content: { parts: [] } }],
+					usageMetadata: { totalTokenCount: 2 },
+				};
+				yield {
+					candidates: [
+						{
+							content: { parts: [{ text: "" }] },
+							finishReason: "STOP",
+						},
+					],
+					usageMetadata: { totalTokenCount: 3 },
+				};
+			})();
+
+			const generateContentStream = vi.fn().mockResolvedValue(stream);
+			(GoogleGenAI as unknown as ReturnType<typeof vi.fn>).mockImplementation(
+				() => ({
+					models: {
+						generateContent: vi.fn(),
+						generateContentStream,
+					},
+				}),
+			);
+
+			const llm = new GoogleLlm();
+			const responses: any[] = [];
+			for await (const response of (llm as any).generateContentAsyncImpl(
+				{
+					contents: [{ role: "user", parts: [{ text: "hi" }] }],
+					config: {},
+				},
+				true,
+			)) {
+				responses.push(response);
+			}
+
+			expect(generateContentStream).toHaveBeenCalledOnce();
+			expect(
+				responses.some((r) => r.partial && r.content?.parts?.[0]?.text === "A"),
+			).toBe(true);
+			expect(
+				responses.some(
+					(r) =>
+						!r.partial &&
+						r.content?.parts?.[0]?.text === "AB" &&
+						r.usageMetadata?.totalTokenCount === 2,
+				),
+			).toBe(true);
+		});
+
+		it("uses the instance model when request.model is omitted", async () => {
+			const generateContent = vi.fn().mockResolvedValue({
+				candidates: [{ content: { parts: [{ text: "ok" }] } }],
+			});
+			(GoogleGenAI as unknown as ReturnType<typeof vi.fn>).mockImplementation(
+				() => ({
+					models: { generateContent, generateContentStream: vi.fn() },
+				}),
+			);
+
+			const llm = new GoogleLlm("gemini-2.5-flash");
+			for await (const _ of (llm as any).generateContentAsyncImpl(
+				{ contents: [{ role: "user", parts: [{ text: "x" }] }] },
+				false,
+			)) {
+				/* drain */
+			}
+
+			expect(generateContent).toHaveBeenCalledWith(
+				expect.objectContaining({ model: "gemini-2.5-flash" }),
+			);
 		});
 	});
 });
