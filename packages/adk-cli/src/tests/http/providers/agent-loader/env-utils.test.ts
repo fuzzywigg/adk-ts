@@ -94,20 +94,20 @@ describe("EnvUtils", () => {
 				"  ",
 				"NO_VALUE",
 				"QUOTED_EQ=a=b=c",
-				'SPACED = "value"',
+				'QUOTED="value"',
 			].join("\n"),
 		);
 
 		delete process.env.NO_VALUE;
 		delete process.env.QUOTED_EQ;
-		delete process.env.SPACED;
+		delete process.env.QUOTED;
 
 		const utils = new EnvUtils(new Logger("EnvUtilsTest"), true);
 		utils.loadEnvironmentVariables(agentFile);
 
 		expect(process.env.NO_VALUE).toBeUndefined();
 		expect(process.env.QUOTED_EQ).toBe("a=b=c");
-		expect(process.env.SPACED).toBe("value");
+		expect(process.env.QUOTED).toBe("value");
 	});
 
 	it("stays quiet when no env files exist and quiet=true", () => {

@@ -1,9 +1,20 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import {
+	existsSync,
+	mkdirSync,
+	mkdtempSync,
+	readdirSync,
+	rmSync,
+	statSync,
+	writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { AgentLoader } from "../../../http/providers/agent-loader.service";
-import { CacheUtils } from "../../../http/providers/agent-loader/cache-utils";
+import {
+	CACHE_DIR,
+	CacheUtils,
+} from "../../../http/providers/agent-loader/cache-utils";
 
 vi.mock("@nestjs/common", async () => {
 	const actual =
@@ -119,15 +130,18 @@ describe("AgentLoader", () => {
 			"cached_demo",
 		);
 
-		const esbuild = await import("esbuild");
-		const buildSpy = vi.spyOn(esbuild, "build");
+		const cacheDir = join(root, CACHE_DIR);
+		expect(existsSync(cacheDir)).toBe(true);
+		const cacheFiles = readdirSync(cacheDir).filter((f) => f.endsWith(".cjs"));
+		expect(cacheFiles).toHaveLength(1);
+		const outFile = join(cacheDir, cacheFiles[0]);
+		const mtimeBefore = statSync(outFile).mtimeMs;
 
 		const second = await loader.importTypeScriptFile(agentFile, root, false);
 		expect((second as any).agent?.name || (second as any).default?.name).toBe(
 			"cached_demo",
 		);
-		expect(buildSpy).not.toHaveBeenCalled();
-		buildSpy.mockRestore();
+		expect(statSync(outFile).mtimeMs).toBe(mtimeBefore);
 	});
 
 	it("cleanupAllCacheFiles delegates to CacheUtils", () => {

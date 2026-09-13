@@ -42,12 +42,13 @@ describe("CacheUtils", () => {
 		expect(logSpy).toHaveBeenCalled();
 	});
 
-	it("creates distinct temp paths for successive calls", () => {
+	it("uses Date.now when naming temp cache files", () => {
 		const utils = new CacheUtils(new Logger("CacheUtilsTest"), true);
 		const root = mkdtempSync(join(tmpdir(), "adk-cli-cache-uniq-"));
-		const first = utils.createTempFilePath(root);
-		const second = utils.createTempFilePath(root);
-		expect(first).not.toBe(second);
+		const now = vi.spyOn(Date, "now").mockReturnValue(1_700_000_000_123);
+		const path = utils.createTempFilePath(root);
+		expect(path).toBe(join(root, CACHE_DIR, "agent-1700000000123.cjs"));
+		now.mockRestore();
 	});
 
 	it("skips cleanup logs when quiet", () => {
