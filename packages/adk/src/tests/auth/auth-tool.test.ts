@@ -79,7 +79,7 @@ describe("AuthTool", () => {
 			}),
 		).toBe(true);
 
-		expect(AuthTool.validateAuthArguments(null)).toBe(false);
+		expect(AuthTool.validateAuthArguments(undefined)).toBe(false);
 		expect(AuthTool.validateAuthArguments({ function_call_id: 1 })).toBe(false);
 		expect(AuthTool.validateAuthArguments({ function_call_id: "x" })).toBe(
 			false,

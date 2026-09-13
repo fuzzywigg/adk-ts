@@ -59,7 +59,7 @@ describe("convertMcpToolToBaseTool", () => {
 		const tool = await convertMcpToolToBaseTool({
 			mcpTool: {
 				name: "handled_tool",
-				description: "d",
+				description: "Handles requests via a custom tool handler",
 				inputSchema: { type: "object", properties: {} },
 			} as any,
 			toolHandler,
@@ -80,7 +80,7 @@ describe("convertMcpToolToBaseTool", () => {
 		const tool = await convertMcpToolToBaseTool({
 			mcpTool: {
 				name: "client_tool",
-				description: "d",
+				description: "Executes through an MCP client callTool method",
 				inputSchema: { type: "object", properties: {} },
 			} as any,
 			client: { callTool } as any,
@@ -101,7 +101,7 @@ describe("convertMcpToolToBaseTool", () => {
 		const tool = await convertMcpToolToBaseTool({
 			mcpTool: {
 				name: "orphan",
-				description: "no runner",
+				description: "Tool without any available execution method",
 				inputSchema: { type: "object", properties: {} },
 			} as any,
 		});
