@@ -1,6 +1,11 @@
 name: Push checks
 
-on: [push]
+# Feature-branch lint + unit tests only. Full lint/build/test for main and PRs
+# lives in ci.yml so main is not double-tested on every push.
+on:
+  push:
+    branches-ignore:
+      - main
 
 concurrency:
   group: push-checks-${{ github.ref }}
