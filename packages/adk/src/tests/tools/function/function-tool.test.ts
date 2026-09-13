@@ -180,4 +180,273 @@ describe("FunctionTool", () => {
 			tool.runAsync({ name: 42 } as any, makeContext()),
 		).resolves.toEqual({ name: "42" });
 	});
+
+	it("pulls description from JSDoc when options.description is omitted", () => {
+		function greetJsDoc(name: string) {
+			return `hi ${name}`;
+		}
+		Object.defineProperty(greetJsDoc, "toString", {
+			value: () =>
+				`/**\n * Greets someone warmly.\n */\nfunction greetJsDoc(name) { return "hi " + name; }`,
+		});
+
+		const tool = new FunctionTool(greetJsDoc);
+		expect(tool.description).toContain("Greets someone warmly");
+	});
+
+	it("rejects empty descriptions shorter than BaseTool minimum length", () => {
+		function bare(name: string) {
+			return name;
+		}
+
+		expect(() => new FunctionTool(bare)).toThrow(/too short/i);
+	});
+
+	it("stores shouldRetryOnFailure and maxRetryAttempts from options", () => {
+		function ping() {
+			return "pong";
+		}
+
+		const tool = new FunctionTool(ping, {
+			description: "ping",
+			shouldRetryOnFailure: true,
+			maxRetryAttempts: 7,
+		});
+
+		expect(tool.shouldRetryOnFailure).toBe(true);
+		expect(tool.maxRetryAttempts).toBe(7);
+	});
+
+	it("defaults retry flags when options omit them", () => {
+		function ping() {
+			return "pong";
+		}
+
+		const tool = new FunctionTool(ping, { description: "ping" });
+		expect(tool.shouldRetryOnFailure).toBe(false);
+		expect(tool.maxRetryAttempts).toBe(3);
+	});
+
+	it("overrides empty function name with options.name", () => {
+		const anonymous = (() => {
+			return (value: string) => value;
+		})();
+		Object.defineProperty(anonymous, "name", { value: "" });
+
+		const tool = new FunctionTool(anonymous, {
+			name: "named_tool",
+			description: "Named override",
+		});
+		expect(tool.name).toBe("named_tool");
+	});
+
+	it("allows optional params with defaults while requiring others", async () => {
+		function greet(name: string, label = "friend") {
+			return { name, label };
+		}
+
+		const tool = new FunctionTool(greet, { description: "Optional label" });
+		await expect(
+			tool.runAsync({ name: "Ada" } as any, makeContext()),
+		).resolves.toEqual({ name: "Ada", label: "friend" });
+	});
+
+	it("lists every missing mandatory parameter in the error", async () => {
+		function pair(left: string, right: string) {
+			return { left, right };
+		}
+
+		const tool = new FunctionTool(pair, { description: "Needs both" });
+		const result = await tool.runAsync({} as any, makeContext());
+		expect(result.error).toContain("left");
+		expect(result.error).toContain("right");
+	});
+
+	it("normalizes sync falsy returns of 0, false, and null to {}", async () => {
+		function zero() {
+			return 0;
+		}
+		function flag() {
+			return false;
+		}
+		function nada() {
+			return null;
+		}
+
+		await expect(
+			new FunctionTool(zero, { description: "zero" }).runAsync(
+				{},
+				makeContext(),
+			),
+		).resolves.toEqual({});
+		await expect(
+			new FunctionTool(flag, { description: "flag" }).runAsync(
+				{},
+				makeContext(),
+			),
+		).resolves.toEqual({});
+		await expect(
+			new FunctionTool(nada, { description: "nada" }).runAsync(
+				{},
+				makeContext(),
+			),
+		).resolves.toEqual({});
+	});
+
+	it("normalizes async falsy returns of 0, false, and null to {}", async () => {
+		async function zero() {
+			return 0;
+		}
+		async function flag() {
+			return false;
+		}
+		async function nada() {
+			return null;
+		}
+
+		await expect(
+			new FunctionTool(zero, { description: "zero" }).runAsync(
+				{},
+				makeContext(),
+			),
+		).resolves.toEqual({});
+		await expect(
+			new FunctionTool(flag, { description: "flag" }).runAsync(
+				{},
+				makeContext(),
+			),
+		).resolves.toEqual({});
+		await expect(
+			new FunctionTool(nada, { description: "nada" }).runAsync(
+				{},
+				makeContext(),
+			),
+		).resolves.toEqual({});
+	});
+
+	it("stringifies non-Error throws in the error payload", async () => {
+		function boom() {
+			throw "boom";
+		}
+
+		const tool = new FunctionTool(boom, { description: "string throw" });
+		const result = await tool.runAsync({}, makeContext());
+		expect(result.error).toBe("Error executing function boom: boom");
+	});
+
+	it("keeps already-typed number and boolean values without re-coercion", async () => {
+		function inspect(n: number, flag: boolean) {
+			return { n, flag, nType: typeof n, flagType: typeof flag };
+		}
+
+		const tool = new FunctionTool(inspect, {
+			description: "typed passthrough",
+			parameterTypes: {
+				n: "number" as any,
+				flag: "boolean" as any,
+			},
+		});
+
+		await expect(
+			tool.runAsync({ n: 5, flag: false } as any, makeContext()),
+		).resolves.toEqual({
+			n: 5,
+			flag: false,
+			nType: "number",
+			flagType: "boolean",
+		});
+	});
+
+	it("leaves non-coercible number/boolean inputs unchanged", async () => {
+		function inspect(n: number, flag: boolean) {
+			return { n, flag };
+		}
+
+		const tool = new FunctionTool(inspect, {
+			description: "invalid coerce",
+			parameterTypes: {
+				n: "number" as any,
+				flag: "boolean" as any,
+			},
+		});
+
+		await expect(
+			tool.runAsync({ n: "abc", flag: 1 } as any, makeContext()),
+		).resolves.toEqual({ n: "abc", flag: 1 });
+	});
+
+	it("stringifies objects for string parameters", async () => {
+		function label(name: string) {
+			return { name };
+		}
+
+		const tool = new FunctionTool(label, {
+			description: "object stringify",
+			parameterTypes: { name: "string" as any },
+		});
+
+		await expect(
+			tool.runAsync({ name: { a: 1 } } as any, makeContext()),
+		).resolves.toEqual({ name: "[object Object]" });
+	});
+
+	it("returns complex/unknown typed values unchanged via the default branch", async () => {
+		function wrap(payload: unknown) {
+			return { payload };
+		}
+		Object.defineProperty(wrap, "toString", {
+			value: () => "function wrap(payload: CustomBag) { return { payload }; }",
+		});
+
+		const tool = new FunctionTool(wrap, {
+			description: "complex payload",
+			parameterTypes: { payload: "object" as any },
+		});
+
+		const payload = { nested: [1, 2] };
+		await expect(
+			tool.runAsync({ payload } as any, makeContext()),
+		).resolves.toEqual({ payload });
+	});
+
+	it("coerces via declaration schema when parameterTypes omit a typed param", async () => {
+		function inspect(count: number) {
+			return { count, type: typeof count };
+		}
+		Object.defineProperty(inspect, "toString", {
+			value: () =>
+				"function inspect(count: number) { return { count, type: typeof count }; }",
+		});
+
+		const tool = new FunctionTool(inspect, {
+			description: "schema fallback coerce",
+		});
+
+		await expect(
+			tool.runAsync({ count: "3" } as any, makeContext()),
+		).resolves.toEqual({ count: 3, type: "number" });
+	});
+
+	it("overrides declaration types only for keys present in parameterTypes", () => {
+		function configure(a: number, b: string) {
+			return { a, b };
+		}
+		Object.defineProperty(configure, "toString", {
+			value: () =>
+				"function configure(a: number, b: string) { return { a, b }; }",
+		});
+
+		const tool = new FunctionTool(configure, {
+			description: "partial override",
+			parameterTypes: {
+				a: "number" as any,
+				missing: "boolean" as any,
+			},
+		});
+
+		const declaration = tool.getDeclaration();
+		expect(declaration.parameters?.properties?.a?.type).toBe("number");
+		expect(declaration.parameters?.properties?.b?.type).toBe("string");
+		expect(declaration.parameters?.properties?.missing).toBeUndefined();
+	});
 });

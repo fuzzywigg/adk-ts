@@ -148,4 +148,85 @@ function shaped(items, meta, flag, big, n) { return {}; }`,
 		expect(declaration.parameters?.properties?.big?.type).toBe("number");
 		expect(declaration.parameters?.properties?.n?.type).toBe("null");
 	});
+
+	it("maps JSDoc {bool} to boolean and {undefined} to null", () => {
+		const aliased = withSource(
+			(_flag: unknown, _empty: unknown) => ({}),
+			`/**
+ * Alias types
+ * @param {bool} flag Toggle
+ * @param {undefined} empty Missing value
+ */
+function aliased(flag, empty) { return {}; }`,
+		);
+		Object.defineProperty(aliased, "name", { value: "aliased" });
+
+		const declaration = buildFunctionDeclaration(aliased);
+		expect(declaration.parameters?.properties?.flag?.type).toBe("boolean");
+		expect(declaration.parameters?.properties?.empty?.type).toBe("null");
+	});
+
+	it("attaches @param descriptions without requiring a {type}", () => {
+		const describeOnly = withSource(
+			(_name: string) => _name,
+			`/**
+ * Names things
+ * @param name The display name
+ */
+function describeOnly(name) { return name; }`,
+		);
+		Object.defineProperty(describeOnly, "name", { value: "describeOnly" });
+
+		const declaration = buildFunctionDeclaration(describeOnly);
+		expect(declaration.parameters?.properties?.name?.description).toBe(
+			"The display name",
+		);
+		expect(declaration.parameters?.properties?.name?.type).toBe("string");
+	});
+
+	it("strips multiline JSDoc star prefixes into a trimmed description", () => {
+		const multi = withSource(
+			() => 1,
+			`/**
+ * First line of docs
+ * Second line of docs
+ */
+function multi() { return 1; }`,
+		);
+		Object.defineProperty(multi, "name", { value: "multi" });
+
+		const declaration = buildFunctionDeclaration(multi);
+		expect(declaration.description).toContain("First line of docs");
+		expect(declaration.description).toContain("Second line of docs");
+		expect(declaration.description).not.toMatch(/^\s*\*/);
+	});
+
+	it("returns empty properties when every param is ignored", () => {
+		const onlyContext = withSource(
+			(_toolContext?: unknown) => 1,
+			"function onlyContext(toolContext) { return 1; }",
+		);
+		Object.defineProperty(onlyContext, "name", { value: "onlyContext" });
+
+		const declaration = buildFunctionDeclaration(onlyContext, {
+			ignoreParams: ["toolContext"],
+		});
+		expect(declaration.parameters).toEqual({
+			type: Type.OBJECT,
+			properties: {},
+		});
+		expect(declaration.parameters?.required).toBeUndefined();
+	});
+
+	it("maps typescript bigint annotations to number schema type", () => {
+		const big = withSource(
+			(_n: bigint) => _n,
+			"function big(n: bigint) { return n; }",
+		);
+		Object.defineProperty(big, "name", { value: "big" });
+
+		const declaration = buildFunctionDeclaration(big);
+		expect(declaration.parameters?.properties?.n?.type).toBe("number");
+		expect(declaration.parameters?.required).toEqual(["n"]);
+	});
 });

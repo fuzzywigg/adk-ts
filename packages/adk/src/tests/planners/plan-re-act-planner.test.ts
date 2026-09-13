@@ -137,4 +137,61 @@ describe("PlanReActPlanner", () => {
 		expect(instruction).toContain("ask for clarification");
 		expect(instruction).toContain("prefer using the information available");
 	});
+
+	it("returns undefined when responseParts is nullish", () => {
+		expect(
+			planner.processPlanningResponse({} as any, null as any),
+		).toBeUndefined();
+		expect(
+			planner.processPlanningResponse({} as any, undefined as any),
+		).toBeUndefined();
+	});
+
+	it("keeps FINAL_ANSWER-only text without inventing an empty reasoning part", () => {
+		const parts = planner.processPlanningResponse({} as any, [
+			{ text: "/*FINAL_ANSWER*/ just the answer" },
+		]);
+
+		expect(parts).toHaveLength(2);
+		expect(parts?.[0].text).toBe("/*FINAL_ANSWER*/");
+		expect(parts?.[0].thought).toBe(true);
+		expect(parts?.[1].text).toBe(" just the answer");
+		expect(parts?.[1].thought).toBeUndefined();
+	});
+
+	it("preserves non-text parts without marking them as thought", () => {
+		const inline = {
+			inlineData: { mimeType: "text/plain", data: "abc" },
+		};
+		const parts = planner.processPlanningResponse({} as any, [inline as any]);
+
+		expect(parts).toHaveLength(1);
+		expect(parts?.[0]).toBe(inline);
+		expect(parts?.[0].thought).toBeUndefined();
+	});
+
+	it("stops collecting consecutive function calls at the first non-call", () => {
+		const parts = planner.processPlanningResponse({} as any, [
+			{ text: "/*REASONING*/ before tools" },
+			{ functionCall: { name: "search", args: { q: "a" } } },
+			{ functionCall: { name: "fetch", args: { url: "u" } } },
+			{ text: "interleaved text" },
+			{ functionCall: { name: "late", args: {} } },
+		]);
+
+		expect(parts?.map((p) => p.functionCall?.name || p.text)).toEqual([
+			"/*REASONING*/ before tools",
+			"search",
+			"fetch",
+		]);
+		expect(parts?.[0].thought).toBe(true);
+	});
+
+	it("marks /*ACTION*/-prefixed text as thought even without a trailing space", () => {
+		const parts = planner.processPlanningResponse({} as any, [
+			{ text: "/*ACTION*/call_now" },
+		]);
+		expect(parts?.[0].thought).toBe(true);
+		expect(parts?.[0].text).toBe("/*ACTION*/call_now");
+	});
 });
