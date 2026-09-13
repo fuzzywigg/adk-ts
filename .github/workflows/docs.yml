@@ -16,7 +16,9 @@ on:
       - 'packages/adk/README.md'
 
 concurrency:
-  group: "pages"
+  # Isolate PR builds from each other and from main deploys so cancel-in-progress
+  # cannot mark unrelated PR docs checks as failed.
+  group: pages-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
