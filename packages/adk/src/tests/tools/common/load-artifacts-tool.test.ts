@@ -136,4 +136,48 @@ describe("LoadArtifactsTool", () => {
 
 		errorSpy.mockRestore();
 	});
+
+	it("does not load artifacts when the last functionResponse is not load_artifacts", async () => {
+		const tool = new LoadArtifactsTool();
+		const loadArtifact = vi.fn();
+		const context = {
+			actions: {},
+			listArtifacts: vi.fn().mockResolvedValue(["a.txt"]),
+			loadArtifact,
+		} as unknown as ToolContext;
+		const llmRequest = new LlmRequest();
+		llmRequest.contents = [
+			{
+				role: "user",
+				parts: [
+					{
+						functionResponse: {
+							name: "other_tool",
+							response: { artifact_names: ["a.txt"] },
+						},
+					} as any,
+				],
+			},
+		];
+
+		await tool.processLlmRequest(context, llmRequest);
+
+		expect(loadArtifact).not.toHaveBeenCalled();
+	});
+
+	it("does not throw when listArtifacts returns names but appendInstructions is missing", async () => {
+		const tool = new LoadArtifactsTool();
+		const context = {
+			actions: {},
+			listArtifacts: vi.fn().mockResolvedValue(["a.txt"]),
+		} as unknown as ToolContext;
+		const llmRequest = {
+			contents: [],
+			toolsDict: {},
+		} as unknown as LlmRequest;
+
+		await expect(
+			tool.processLlmRequest(context, llmRequest),
+		).resolves.toBeUndefined();
+	});
 });

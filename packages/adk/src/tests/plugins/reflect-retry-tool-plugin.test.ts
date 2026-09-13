@@ -304,4 +304,19 @@ describe("ReflectAndRetryToolPlugin", () => {
 		expect(plugin.maxRetries).toBe(0);
 		expect(plugin.scope).toBe(TrackingScope.GLOBAL);
 	});
+
+	it("throws Unknown scope when trackingScope is forced invalid", async () => {
+		const plugin = new ReflectAndRetryToolPlugin({ maxRetries: 2 });
+		(plugin as { scope: string }).scope = "invalid-scope";
+		const tool = makeTool();
+
+		await expect(
+			plugin.onToolErrorCallback({
+				tool,
+				toolArgs: {},
+				toolContext: makeToolContext(),
+				error: new Error("boom"),
+			}),
+		).rejects.toThrow(/Unknown scope: invalid-scope/);
+	});
 });

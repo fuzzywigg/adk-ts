@@ -3,6 +3,8 @@ import type { InvocationContext } from "../../agents/invocation-context";
 import { LlmAgent } from "../../agents/llm-agent";
 import { Event } from "../../events/event";
 import { AutoFlow, SingleFlow } from "../../flows/llm-flows";
+import { BaseLlm } from "../../models/base-llm";
+import { LLMRegistry } from "../../models/llm-registry";
 import { FunctionTool } from "../../tools/function/function-tool";
 
 vi.mock("@adk/helpers/logger", () => ({
@@ -356,5 +358,81 @@ describe("LlmAgent defaults and canonical helpers", () => {
 		void (agent as any).llmFlow;
 		expect(AutoFlow).toHaveBeenCalled();
 		expect(SingleFlow).not.toHaveBeenCalled();
+	});
+
+	it("canonicalModel resolves string models via LLMRegistry", () => {
+		const newLLM = vi
+			.spyOn(LLMRegistry, "newLLM")
+			.mockReturnValue({ model: "gemini-2.0-flash", kind: "registry" } as any);
+		const agent = new LlmAgent({
+			name: "modelAgent",
+			model: "gemini-2.0-flash",
+		});
+		expect(agent.canonicalModel).toEqual({
+			model: "gemini-2.0-flash",
+			kind: "registry",
+		});
+		expect(newLLM).toHaveBeenCalledWith("gemini-2.0-flash");
+		newLLM.mockRestore();
+	});
+
+	it("canonicalModel returns BaseLlm instances as-is", () => {
+		class StubLlm extends BaseLlm {
+			async *generateContentAsync() {
+				yield { content: { role: "model", parts: [] } } as never;
+			}
+		}
+		const model = new StubLlm("stub-model");
+		const agent = new LlmAgent({ name: "baseLlmAgent", model });
+		expect(agent.canonicalModel).toBe(model);
+	});
+
+	it("canonicalModel inherits from a parent LlmAgent when unset or empty", () => {
+		const newLLM = vi
+			.spyOn(LLMRegistry, "newLLM")
+			.mockReturnValue({ model: "gpt-4o", kind: "registry" } as any);
+		const parent = new LlmAgent({
+			name: "parent_model",
+			model: "gpt-4o",
+		});
+		const child = new LlmAgent({ name: "child_model" });
+		parent.subAgents = [child];
+		child.parentAgent = parent;
+
+		expect(child.canonicalModel).toEqual({ model: "gpt-4o", kind: "registry" });
+
+		const emptyChild = new LlmAgent({ name: "empty_model", model: "" });
+		parent.subAgents = [child, emptyChild];
+		emptyChild.parentAgent = parent;
+		expect(emptyChild.canonicalModel).toEqual({
+			model: "gpt-4o",
+			kind: "registry",
+		});
+		newLLM.mockRestore();
+	});
+
+	it("canonicalModel throws when no ancestor provides a model", () => {
+		const agent = new LlmAgent({ name: "orphan" });
+		expect(() => agent.canonicalModel).toThrow(
+			/No model found for agent "orphan"/,
+		);
+	});
+
+	it("canonicalGlobalInstruction resolves string and provider forms", async () => {
+		const withString = new LlmAgent({
+			name: "global_str",
+			globalInstruction: "shared rules",
+		});
+		await expect(
+			withString.canonicalGlobalInstruction({} as any),
+		).resolves.toEqual(["shared rules", false]);
+
+		const withProvider = new LlmAgent({
+			name: "global_fn",
+			globalInstruction: async () => "from-global-provider",
+		});
+		await expect(
+			withProvider.canonicalGlobalInstruction({} as any),
+		).resolves.toEqual(["from-global-provider", true]);
 	});
 });

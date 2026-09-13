@@ -102,6 +102,35 @@ describe("PluginManager", () => {
 		expect(close).toHaveBeenCalledOnce();
 	});
 
+	it("close resolves when plugins omit a close method", async () => {
+		const manager = new PluginManager({
+			plugins: [new TestPlugin("no-close")],
+			closeTimeout: 1000,
+		});
+
+		await expect(manager.close()).resolves.toBeUndefined();
+	});
+
+	it("stringifies non-Error callback throws in the wrapper message", async () => {
+		class StringThrowPlugin extends BasePlugin {
+			constructor() {
+				super("string-throw");
+			}
+			async beforeRunCallback(): Promise<any> {
+				throw "plain-string-failure";
+			}
+		}
+		const manager = new PluginManager({
+			plugins: [new StringThrowPlugin()],
+		});
+
+		await expect(
+			manager.runBeforeRunCallback({ invocationContext: {} as any }),
+		).rejects.toThrow(
+			/Error in plugin 'string-throw' during 'beforeRunCallback' callback: plain-string-failure/,
+		);
+	});
+
 	it("runs additional callback runners and short-circuits on first result", async () => {
 		class MultiPlugin extends BasePlugin {
 			calls: string[] = [];
