@@ -50,9 +50,11 @@ const createMockContext = (agent: BaseAgent): InvocationContext =>
 			events: [],
 			lastUpdateTime: 0,
 		} as any,
-		createChildContext: vi.fn((childAgent) =>
-			createMockContext(childAgent),
-		) as any,
+		createChildContext: vi.fn(function (this: InvocationContext, childAgent) {
+			const child = createMockContext(childAgent);
+			child.pluginManager = this.pluginManager;
+			return child;
+		}) as any,
 	}) as InvocationContext;
 
 describe("BaseAgent", () => {
@@ -228,6 +230,50 @@ describe("BaseAgent", () => {
 			expect(cb2).toHaveBeenCalledOnce();
 			expect(cb3).not.toHaveBeenCalled();
 			expect(agent.runAsyncImplMock).not.toHaveBeenCalled();
+		});
+
+		it("lets plugin beforeAgentCallback short-circuit the agent impl", async () => {
+			mockContext.pluginManager = {
+				runBeforeAgentCallback: vi.fn(async () => ({
+					parts: [{ text: "from-plugin" }],
+				})),
+				runAfterAgentCallback: vi.fn(async () => undefined),
+			} as any;
+
+			const events = [];
+			for await (const event of agent["runAsyncInternal"](mockContext)) {
+				events.push(event);
+			}
+
+			expect(
+				mockContext.pluginManager.runBeforeAgentCallback,
+			).toHaveBeenCalledOnce();
+			expect(agent.runAsyncImplMock).not.toHaveBeenCalled();
+			expect(events).toHaveLength(1);
+			expect(events[0].content).toEqual({ parts: [{ text: "from-plugin" }] });
+			expect(events[0].invocationId).toBe("inv-123");
+			expect(events[0].author).toBe("test_agent");
+		});
+
+		it("prefers plugin afterAgentCallback over agent after callback", async () => {
+			const afterCb = vi.fn(() => ({ parts: [{ text: "agent-after" }] }));
+			agent.afterAgentCallback = afterCb;
+			mockContext.pluginManager = {
+				runBeforeAgentCallback: vi.fn(async () => undefined),
+				runAfterAgentCallback: vi.fn(async () => ({
+					parts: [{ text: "plugin-after" }],
+				})),
+			} as any;
+
+			const events = [];
+			for await (const event of agent["runAsyncInternal"](mockContext)) {
+				events.push(event);
+			}
+
+			expect(agent.runAsyncImplMock).toHaveBeenCalledOnce();
+			expect(afterCb).not.toHaveBeenCalled();
+			expect(events).toHaveLength(2);
+			expect(events[1].content).toEqual({ parts: [{ text: "plugin-after" }] });
 		});
 	});
 });

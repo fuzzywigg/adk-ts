@@ -1,8 +1,15 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import {
+	mkdirSync,
+	mkdtempSync,
+	rmSync,
+	utimesSync,
+	writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { AgentLoader } from "../../../http/providers/agent-loader.service";
+import { CacheUtils } from "../../../http/providers/agent-loader/cache-utils";
 
 vi.mock("@nestjs/common", async () => {
 	const actual =
@@ -97,5 +104,70 @@ describe("AgentLoader", () => {
 		await expect(
 			loader.importTypeScriptFile(agentFile, root, true),
 		).rejects.toThrow(/Failed to import TS agent via esbuild/);
+	});
+
+	it("normalizes backslashes and detects rebuild need from mtimes", () => {
+		const loader = new AgentLoader(true);
+		expect((loader as any).normalizePath("a\\b\\c.ts")).toBe("a/b/c.ts");
+
+		const root = mkdtempSync(join(tmpdir(), "adk-loader-rebuild-"));
+		dirs.push(root);
+		const src = join(root, "agent.ts");
+		const out = join(root, "out.mjs");
+		const tsconfig = join(root, "tsconfig.json");
+		writeFileSync(src, "export const agent = { name: 'x' };");
+		writeFileSync(tsconfig, "{}");
+
+		expect((loader as any).isRebuildNeeded(out, src, tsconfig)).toBe(true);
+
+		writeFileSync(out, "export const agent = { name: 'x' };");
+		const past = new Date(Date.now() - 60_000);
+		utimesSync(out, past, past);
+		utimesSync(src, new Date(), new Date());
+		expect((loader as any).isRebuildNeeded(out, src, tsconfig)).toBe(true);
+
+		const future = new Date(Date.now() + 60_000);
+		utimesSync(out, future, future);
+		expect((loader as any).isRebuildNeeded(out, src, tsconfig)).toBe(false);
+	});
+
+	it("reuses cache when outFile is fresher unless forceInvalidateCache", async () => {
+		const root = mkdtempSync(join(tmpdir(), "adk-loader-cache-"));
+		dirs.push(root);
+		writeFileSync(
+			join(root, "package.json"),
+			JSON.stringify({ name: "loader-cache" }),
+		);
+		writeFileSync(join(root, "tsconfig.json"), JSON.stringify({}));
+		const agentDir = join(root, "agents", "cached");
+		mkdirSync(agentDir, { recursive: true });
+		const agentFile = join(agentDir, "agent.ts");
+		writeFileSync(agentFile, `export const agent = { name: "first_compile" };`);
+
+		const loader = new AgentLoader(true);
+		const first = await loader.importTypeScriptFile(agentFile, root, true);
+		expect((first as any).agent.name).toBe("first_compile");
+
+		writeFileSync(
+			agentFile,
+			`export const agent = { name: "should_not_reload" };`,
+		);
+		const past = new Date(Date.now() - 120_000);
+		utimesSync(agentFile, past, past);
+
+		const cached = await loader.importTypeScriptFile(agentFile, root, false);
+		expect((cached as any).agent.name).toBe("first_compile");
+
+		const forced = await loader.importTypeScriptFile(agentFile, root, true);
+		expect((forced as any).agent.name).toBe("should_not_reload");
+	});
+
+	it("cleanupAllCacheFiles delegates to CacheUtils", () => {
+		const spy = vi
+			.spyOn(CacheUtils, "cleanupAllCacheFiles")
+			.mockImplementation(() => undefined);
+		AgentLoader.cleanupAllCacheFiles(undefined, true);
+		expect(spy).toHaveBeenCalledWith(undefined, true);
+		spy.mockRestore();
 	});
 });

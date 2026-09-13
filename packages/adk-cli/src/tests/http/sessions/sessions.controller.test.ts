@@ -48,4 +48,33 @@ describe("SessionsController", () => {
 		});
 		expect(sessions.switchSession).toHaveBeenCalledWith("/agents/a b", "s2");
 	});
+
+	it("decodes nested encoded path segments and empty bodies", async () => {
+		const sessions = {
+			listSessions: vi.fn(async () => ({ sessions: [] })),
+			createSession: vi.fn(async () => ({ id: "new" })),
+			deleteSession: vi.fn(async () => ({ success: true })),
+			switchSession: vi.fn(async () => ({ success: true })),
+		};
+		const controller = new SessionsController(sessions as never);
+		const nested = encodeURIComponent("/agents/demo%2Fnested");
+
+		await expect(controller.listSessions(nested)).resolves.toEqual({
+			sessions: [],
+		});
+		expect(sessions.listSessions).toHaveBeenCalledWith("/agents/demo%2Fnested");
+
+		await expect(controller.createSession(nested, {})).resolves.toEqual({
+			id: "new",
+		});
+		expect(sessions.createSession).toHaveBeenCalledWith(
+			"/agents/demo%2Fnested",
+			{},
+		);
+
+		await expect(
+			controller.deleteSession(encodeURIComponent(""), "s-empty"),
+		).resolves.toEqual({ success: true });
+		expect(sessions.deleteSession).toHaveBeenCalledWith("", "s-empty");
+	});
 });

@@ -395,4 +395,308 @@ describe("contents requestProcessor", () => {
 		expect(texts).not.toContain("discarded");
 		expect(texts).not.toContain("rewind-marker");
 	});
+
+	it("strips intermediate history when latest functionResponse is async", async () => {
+		const llmRequest = new LlmRequest();
+		const events = [
+			userEvent("before"),
+			new Event({
+				author: "assistant",
+				content: {
+					role: "model",
+					parts: [
+						{
+							functionCall: {
+								id: "call-async",
+								name: "slow_tool",
+								args: { q: 1 },
+							},
+						},
+					],
+				},
+			}),
+			agentEvent("assistant", "intermediate chatter"),
+			userEvent("unrelated user turn"),
+			new Event({
+				author: "user",
+				content: {
+					role: "user",
+					parts: [
+						{
+							functionResponse: {
+								id: "call-async",
+								name: "slow_tool",
+								response: { ok: true },
+							},
+						},
+					],
+				},
+			}),
+		];
+
+		await drain(
+			requestProcessor.runAsync(
+				ctx(duckAgent("assistant", "default"), events),
+				llmRequest,
+			),
+		);
+
+		const texts = llmRequest.contents.flatMap(
+			(c) => c.parts?.map((p) => p.text).filter(Boolean) ?? [],
+		);
+		expect(texts).toContain("before");
+		expect(texts).not.toContain("intermediate chatter");
+		expect(texts).not.toContain("unrelated user turn");
+		expect(
+			llmRequest.contents.some((c) =>
+				c.parts?.some((p) => p.functionCall?.id === "call-async"),
+			),
+		).toBe(true);
+		expect(
+			llmRequest.contents.some((c) =>
+				c.parts?.some((p) => p.functionResponse?.id === "call-async"),
+			),
+		).toBe(true);
+	});
+
+	it("merges multiple async functionResponses for one functionCall", async () => {
+		const llmRequest = new LlmRequest();
+		const events = [
+			new Event({
+				author: "assistant",
+				content: {
+					role: "model",
+					parts: [
+						{
+							functionCall: {
+								id: "c1",
+								name: "tool_a",
+								args: {},
+							},
+						},
+						{
+							functionCall: {
+								id: "c2",
+								name: "tool_b",
+								args: {},
+							},
+						},
+					],
+				},
+			}),
+			new Event({
+				author: "user",
+				content: {
+					role: "user",
+					parts: [
+						{
+							functionResponse: {
+								id: "c1",
+								name: "tool_a",
+								response: { a: 1 },
+							},
+						},
+					],
+				},
+			}),
+			new Event({
+				author: "user",
+				content: {
+					role: "user",
+					parts: [
+						{
+							functionResponse: {
+								id: "c2",
+								name: "tool_b",
+								response: { b: 2 },
+							},
+						},
+					],
+				},
+			}),
+			userEvent("after tools"),
+		];
+
+		await drain(
+			requestProcessor.runAsync(
+				ctx(duckAgent("assistant", "default"), events),
+				llmRequest,
+			),
+		);
+
+		const merged = llmRequest.contents.find((c) =>
+			c.parts?.some((p) => p.functionResponse),
+		);
+		expect(merged?.parts?.map((p) => p.functionResponse?.id)).toEqual([
+			"c1",
+			"c2",
+		]);
+		expect(llmRequest.contents.at(-1)?.parts?.[0]).toEqual({
+			text: "after tools",
+		});
+	});
+
+	it("keeps functionCalls that have no matching functionResponse", async () => {
+		const llmRequest = new LlmRequest();
+		const events = [
+			new Event({
+				author: "assistant",
+				content: {
+					role: "model",
+					parts: [
+						{
+							functionCall: {
+								id: "orphan",
+								name: "pending_tool",
+								args: { x: 1 },
+							},
+						},
+					],
+				},
+			}),
+			userEvent("continue"),
+		];
+
+		await drain(
+			requestProcessor.runAsync(
+				ctx(duckAgent("assistant", "default"), events),
+				llmRequest,
+			),
+		);
+
+		expect(llmRequest.contents).toHaveLength(2);
+		expect(llmRequest.contents[0].parts?.[0]?.functionCall).toEqual({
+			id: "orphan",
+			name: "pending_tool",
+			args: { x: 1 },
+		});
+		expect(llmRequest.contents[1].parts?.[0]).toEqual({ text: "continue" });
+	});
+
+	it("strips client-generated adk- function call ids from contents", async () => {
+		const llmRequest = new LlmRequest();
+		const events = [
+			new Event({
+				author: "assistant",
+				content: {
+					role: "model",
+					parts: [
+						{
+							functionCall: {
+								id: "adk-client-1",
+								name: "lookup",
+								args: {},
+							},
+						},
+					],
+				},
+			}),
+			new Event({
+				author: "user",
+				content: {
+					role: "user",
+					parts: [
+						{
+							functionResponse: {
+								id: "adk-client-1",
+								name: "lookup",
+								response: { ok: true },
+							},
+						},
+					],
+				},
+			}),
+		];
+
+		await drain(
+			requestProcessor.runAsync(
+				ctx(duckAgent("assistant", "default"), events),
+				llmRequest,
+			),
+		);
+
+		expect(llmRequest.contents[0].parts?.[0]?.functionCall?.id).toBeUndefined();
+		expect(
+			llmRequest.contents[1].parts?.[0]?.functionResponse?.id,
+		).toBeUndefined();
+	});
+
+	it("preserves adjacent matched functionCall/functionResponse pairs", async () => {
+		const llmRequest = new LlmRequest();
+		const events = [
+			userEvent("ask"),
+			new Event({
+				author: "assistant",
+				content: {
+					role: "model",
+					parts: [
+						{
+							functionCall: {
+								id: "sync-1",
+								name: "lookup",
+								args: { q: "x" },
+							},
+						},
+					],
+				},
+			}),
+			new Event({
+				author: "user",
+				content: {
+					role: "user",
+					parts: [
+						{
+							functionResponse: {
+								id: "sync-1",
+								name: "lookup",
+								response: { value: 9 },
+							},
+						},
+					],
+				},
+			}),
+		];
+
+		await drain(
+			requestProcessor.runAsync(
+				ctx(duckAgent("assistant", "default"), events),
+				llmRequest,
+			),
+		);
+
+		expect(llmRequest.contents).toHaveLength(3);
+		expect(llmRequest.contents[1].parts?.[0]?.functionCall?.id).toBe("sync-1");
+		expect(llmRequest.contents[2].parts?.[0]?.functionResponse?.id).toBe(
+			"sync-1",
+		);
+	});
+
+	it("passes through malformed events lacking function helpers during rearrange", async () => {
+		const llmRequest = new LlmRequest();
+		const malformed = {
+			author: "assistant",
+			timestamp: 10,
+			content: {
+				role: "model",
+				parts: [{ text: "malformed-ok" }],
+			},
+		} as unknown as Event;
+
+		await drain(
+			requestProcessor.runAsync(
+				ctx(duckAgent("assistant", "default"), [
+					userEvent("before", { timestamp: 1 }),
+					malformed,
+					userEvent("after", { timestamp: 20 }),
+				]),
+				llmRequest,
+			),
+		);
+
+		expect(llmRequest.contents.map((c) => c.parts?.[0]?.text)).toEqual([
+			"before",
+			"malformed-ok",
+			"after",
+		]);
+	});
 });
