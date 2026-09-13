@@ -107,4 +107,55 @@ describe("FileOperationsTool", () => {
 		expect(result.success).toBe(false);
 		expect(result.error).toContain("Access denied");
 	});
+
+	it("exposes declaration with required operation and filepath", () => {
+		const declaration = tool.getDeclaration();
+		expect(declaration.name).toBe("file_operations");
+		expect(declaration.parameters?.required).toEqual(["operation", "filepath"]);
+		expect(declaration.parameters?.properties?.operation?.enum).toEqual(
+			expect.arrayContaining(["read", "write", "list", "mkdir"]),
+		);
+	});
+
+	it("returns failure for missing reads/deletes and unsupported operations", async () => {
+		await expect(
+			tool.runAsync(
+				{ operation: "read", filepath: "missing.txt" },
+				makeContext(),
+			),
+		).resolves.toEqual(
+			expect.objectContaining({
+				success: false,
+				error: expect.stringMatching(/no such file|ENOENT|not found/i),
+			}),
+		);
+
+		await expect(
+			tool.runAsync(
+				{ operation: "delete", filepath: "missing.txt" },
+				makeContext(),
+			),
+		).resolves.toEqual(
+			expect.objectContaining({
+				success: false,
+			}),
+		);
+
+		await expect(
+			tool.runAsync(
+				{ operation: "unknown" as any, filepath: "x.txt" },
+				makeContext(),
+			),
+		).resolves.toEqual(
+			expect.objectContaining({
+				success: false,
+				error: expect.stringMatching(/unsupported|unknown/i),
+			}),
+		);
+	});
+
+	it("defaults basePath to process.cwd when omitted", () => {
+		const cwdTool = new FileOperationsTool();
+		expect(cwdTool.getDeclaration().name).toBe("file_operations");
+	});
 });

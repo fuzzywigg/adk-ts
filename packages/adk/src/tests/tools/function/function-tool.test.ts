@@ -81,4 +81,50 @@ describe("FunctionTool", () => {
 		const result = await tool.runAsync({}, makeContext());
 		expect(result.error).toContain("Error executing function boom: explode");
 	});
+
+	it("awaits async functions and honors custom name plus description", async () => {
+		async function doubleValue(n: number) {
+			return { doubled: n * 2 };
+		}
+
+		const tool = new FunctionTool(doubleValue, {
+			name: "double_tool",
+			description: "Doubles a value asynchronously.",
+			parameterTypes: { n: "number" as any },
+		});
+
+		expect(tool.name).toBe("double_tool");
+		expect(tool.getDeclaration().description).toContain("Doubles a value");
+		await expect(
+			tool.runAsync({ n: "4" } as any, makeContext()),
+		).resolves.toEqual({ doubled: 8 });
+	});
+
+	it("returns empty object when async function returns falsy", async () => {
+		async function noop() {
+			return undefined;
+		}
+
+		const tool = new FunctionTool(noop, {
+			description: "Returns nothing useful",
+		});
+		await expect(tool.runAsync({}, makeContext())).resolves.toEqual({});
+	});
+
+	it("treats context parameter as non-mandatory tool context alias", async () => {
+		function withContext(value: string, context?: ToolContext) {
+			return {
+				value,
+				hasContextParam: context !== undefined,
+			};
+		}
+
+		const tool = new FunctionTool(withContext, {
+			description: "Uses context alias name",
+		});
+
+		const missing = await tool.runAsync({} as any, makeContext());
+		expect(missing.error).toContain("value");
+		expect(missing.error).not.toContain("context");
+	});
 });

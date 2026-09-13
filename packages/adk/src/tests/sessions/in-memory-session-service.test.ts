@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { InMemorySessionService } from "../../sessions/in-memory-session-service";
 import { State } from "../../sessions/state";
 
@@ -150,5 +150,52 @@ describe("InMemorySessionService", () => {
 
 		const listed = await service.listSessions("app", "user");
 		expect(listed.sessions).toHaveLength(3);
+	});
+
+	it("mirrors CRUD through deprecated sync APIs", () => {
+		const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+		const service = new InMemorySessionService();
+
+		const created = service.createSessionSync(
+			"app",
+			"user",
+			{ a: 1 },
+			"sync-1",
+		);
+		expect(created.id).toBe("sync-1");
+		expect(service.getSessionSync("app", "user", "sync-1")?.state.a).toBe(1);
+		expect(service.listSessionsSync("app", "user").sessions).toHaveLength(1);
+
+		service.deleteSessionSync("app", "user", "sync-1");
+		expect(service.getSessionSync("app", "user", "sync-1")).toBeUndefined();
+		expect(warn).toHaveBeenCalled();
+		warn.mockRestore();
+	});
+
+	it("warns when appending to an unknown storage session", async () => {
+		const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+		const service = new InMemorySessionService();
+		const orphan = {
+			appName: "missing-app",
+			userId: "user",
+			id: "s1",
+			state: {},
+			events: [],
+			lastUpdateTime: Date.now() / 1000,
+		};
+
+		await service.appendEvent(
+			orphan as any,
+			{
+				author: "user",
+				timestamp: Date.now() / 1000,
+				content: { parts: [{ text: "orphan" }] },
+			} as any,
+		);
+
+		expect(warn).toHaveBeenCalledWith(
+			expect.stringContaining("appName missing-app not in sessions"),
+		);
+		warn.mockRestore();
 	});
 });

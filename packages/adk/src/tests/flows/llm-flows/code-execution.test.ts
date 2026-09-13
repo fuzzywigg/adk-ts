@@ -2,12 +2,20 @@ import { describe, expect, it, vi } from "vitest";
 import { LlmAgent } from "../../../agents/llm-agent";
 import type { InvocationContext } from "../../../agents/invocation-context";
 import { BuiltInCodeExecutor } from "../../../code-executors/built-in-code-executor";
+import { CodeExecutorContext } from "../../../code-executors/code-executor-context";
 import {
+	DATA_FILE_UTIL_MAP,
+	extractAndReplaceInlineFiles,
+	getDataFilePreprocessingCode,
+	getOrSetExecutionId,
+	hasCodeExecutor,
+	postProcessCodeExecutionResult,
 	requestProcessor,
 	responseProcessor,
 } from "../../../flows/llm-flows/code-execution";
 import { LlmRequest } from "../../../models/llm-request";
 import type { LlmResponse } from "../../../models/llm-response";
+import { State } from "../../../sessions/state";
 
 vi.mock("../../../logger", () => ({
 	Logger: vi.fn(() => ({
@@ -148,5 +156,193 @@ describe("code-execution processors", () => {
 			),
 		);
 		expect(events).toEqual([]);
+	});
+});
+
+describe("code-execution helpers", () => {
+	it("hasCodeExecutor detects duck-typed agents", () => {
+		expect(hasCodeExecutor(null)).toBeFalsy();
+		expect(hasCodeExecutor({})).toBe(false);
+		expect(hasCodeExecutor({ codeExecutor: undefined })).toBe(true);
+	});
+
+	it("extractAndReplaceInlineFiles swaps csv inline data for placeholders", () => {
+		const state = State.create({}, {});
+		const ctx = new CodeExecutorContext(state);
+		const llmRequest = new LlmRequest({
+			contents: [
+				{
+					role: "model",
+					parts: [{ inlineData: { mimeType: "text/csv", data: "a,b\n1,2" } }],
+				},
+				{
+					role: "user",
+					parts: [
+						{ text: "analyze" },
+						{ inlineData: { mimeType: "text/csv", data: "x,y\n3,4" } },
+						{ inlineData: { mimeType: "image/png", data: "ignore" } },
+					],
+				},
+			],
+		});
+
+		const files = extractAndReplaceInlineFiles(ctx, llmRequest);
+
+		expect(DATA_FILE_UTIL_MAP["text/csv"].extension).toBe(".csv");
+		expect(files).toHaveLength(1);
+		expect(files[0].name).toBe("data_2_2.csv");
+		expect(files[0].mimeType).toBe("text/csv");
+		expect(llmRequest.contents?.[1].parts?.[1]).toEqual({
+			text: "\nAvailable file: `data_2_2.csv`\n",
+		});
+		expect(llmRequest.contents?.[1].parts?.[2]?.inlineData?.mimeType).toBe(
+			"image/png",
+		);
+	});
+
+	it("getOrSetExecutionId is sticky only for stateful executors", () => {
+		const state = State.create({}, {});
+		const ctx = new CodeExecutorContext(state);
+		const session = { id: "sess-42", state: {}, events: [] };
+
+		expect(
+			getOrSetExecutionId(
+				{ agent: { name: "plain" }, session } as unknown as InvocationContext,
+				ctx,
+			),
+		).toBeUndefined();
+
+		expect(
+			getOrSetExecutionId(
+				{
+					agent: {
+						name: "coder",
+						codeExecutor: { stateful: false },
+					},
+					session,
+				} as unknown as InvocationContext,
+				ctx,
+			),
+		).toBeUndefined();
+
+		const first = getOrSetExecutionId(
+			{
+				agent: {
+					name: "coder",
+					codeExecutor: { stateful: true },
+				},
+				session,
+			} as unknown as InvocationContext,
+			ctx,
+		);
+		expect(first).toBe("sess-42");
+		expect(ctx.getExecutionId()).toBe("sess-42");
+
+		const second = getOrSetExecutionId(
+			{
+				agent: {
+					name: "coder",
+					codeExecutor: { stateful: true },
+				},
+				session: { id: "other", state: {}, events: [] },
+			} as unknown as InvocationContext,
+			ctx,
+		);
+		expect(second).toBe("sess-42");
+	});
+
+	it("getDataFilePreprocessingCode normalizes names and rejects unknown mime", () => {
+		expect(
+			getDataFilePreprocessingCode({
+				name: "report.pdf",
+				content: "",
+				mimeType: "application/pdf",
+			}),
+		).toBeUndefined();
+
+		const code = getDataFilePreprocessingCode({
+			name: "1-sales data.csv",
+			content: "",
+			mimeType: "text/csv",
+		});
+		expect(code).toContain("_1_sales_data = pd.read_csv('1-sales data.csv')");
+		expect(code).toContain("explore_df(_1_sales_data)");
+	});
+
+	it("postProcessCodeExecutionResult requires artifact service and tracks errors", async () => {
+		const state = State.create({}, {});
+		const ctx = new CodeExecutorContext(state);
+
+		await expect(
+			postProcessCodeExecutionResult(
+				{
+					agent: { name: "coder" },
+					session: {
+						id: "s1",
+						appName: "app",
+						userId: "u",
+						state: {},
+						events: [],
+					},
+					invocationId: "inv-1",
+					appName: "app",
+					userId: "u",
+				} as unknown as InvocationContext,
+				ctx,
+				{ stdout: "ok", stderr: "", outputFiles: [] },
+			),
+		).rejects.toThrow(/Artifact service is not initialized/);
+
+		const saveArtifact = vi.fn(async () => 3);
+		const withStderr = await postProcessCodeExecutionResult(
+			{
+				agent: { name: "coder" },
+				branch: "root",
+				session: {
+					id: "s1",
+					appName: "app",
+					userId: "u",
+					state: {},
+					events: [],
+				},
+				invocationId: "inv-err",
+				appName: "app",
+				userId: "u",
+				artifactService: { saveArtifact },
+			} as unknown as InvocationContext,
+			ctx,
+			{
+				stdout: "",
+				stderr: "Traceback",
+				outputFiles: [
+					{ name: "out.txt", content: btoa("hello"), mimeType: "text/plain" },
+				],
+			},
+		);
+
+		expect(ctx.getErrorCount("inv-err")).toBe(1);
+		expect(saveArtifact).toHaveBeenCalledOnce();
+		expect(withStderr.actions.artifactDelta["out.txt"]).toBe(3);
+		expect(withStderr.author).toBe("coder");
+
+		await postProcessCodeExecutionResult(
+			{
+				agent: { name: "coder" },
+				session: {
+					id: "s1",
+					appName: "app",
+					userId: "u",
+					state: {},
+					events: [],
+				},
+				invocationId: "inv-err",
+				appName: "app",
+				userId: "u",
+				artifactService: { saveArtifact },
+			} as unknown as InvocationContext,
+			ctx,
+			{ stdout: "ok", stderr: "", outputFiles: [] },
+		);
+		expect(ctx.getErrorCount("inv-err")).toBe(0);
 	});
 });

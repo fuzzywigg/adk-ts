@@ -5,6 +5,7 @@ import {
 	addEvalCaseToEvalSet,
 	deleteEvalCaseFromEvalSet,
 	getEvalCaseFromEvalSet,
+	getEvalSetFromAppAndId,
 	updateEvalCaseInEvalSet,
 } from "../../evaluation/eval-sets-manager-utils";
 
@@ -67,5 +68,20 @@ describe("eval-sets-manager-utils", () => {
 		expect(evalSet.evalCases.map((c) => c.evalId)).toEqual(["b"]);
 
 		expect(() => deleteEvalCaseFromEvalSet(evalSet, "a")).toThrow(/not found/);
+	});
+
+	it("resolves eval sets from manager or throws when missing", async () => {
+		const evalSet = makeEvalSet([makeCase("a")]);
+		const manager = {
+			getEvalSet: async (_app: string, id: string) =>
+				id === "set-1" ? evalSet : undefined,
+		};
+
+		await expect(
+			getEvalSetFromAppAndId(manager as never, "app", "set-1"),
+		).resolves.toBe(evalSet);
+		await expect(
+			getEvalSetFromAppAndId(manager as never, "app", "missing"),
+		).rejects.toThrow(/Eval set `missing` not found/);
 	});
 });

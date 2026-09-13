@@ -47,6 +47,25 @@ describe("parseTsConfigPaths", () => {
 		expect(parseTsConfigPaths(root, { warn } as never)).toEqual({});
 		expect(warn).toHaveBeenCalled();
 	});
+
+	it("returns empty object and warns on invalid tsconfig structure", () => {
+		const root = mkdtempSync(join(tmpdir(), "adk-cli-tsconfig-schema-"));
+		writeFileSync(
+			join(root, "tsconfig.json"),
+			JSON.stringify({
+				compilerOptions: {
+					baseUrl: 123,
+					paths: { "@lib/*": "not-an-array" },
+				},
+			}),
+		);
+		const warn = vi.fn();
+
+		expect(parseTsConfigPaths(root, { warn } as never)).toEqual({});
+		expect(warn).toHaveBeenCalledWith(
+			expect.stringContaining("Invalid tsconfig.json structure"),
+		);
+	});
 });
 
 describe("createPathMappingPlugin", () => {

@@ -149,4 +149,104 @@ describe("LocalEvalService", () => {
 				.evalMetricResults[0].score,
 		).toBe(1);
 	});
+
+	it("runs multi-turn inference and logs sessionInput when no initializer exists", async () => {
+		const ask = vi.fn(async (msg: unknown) => {
+			const text =
+				typeof msg === "string"
+					? msg
+					: ((msg as { parts?: { text?: string }[] })?.parts?.[0]?.text ?? "");
+			return `echo:${text}`;
+		});
+		const log = vi.spyOn(console, "log").mockImplementation(() => {});
+		const service = new LocalEvalService({
+			name: "stub-agent",
+			ask,
+		} as any);
+
+		const evalCase: EvalCase = {
+			evalId: "multi",
+			sessionInput: { state: { seeded: true } } as any,
+			conversation: [
+				{
+					userContent: { role: "user", parts: [{ text: "one" }] },
+					finalResponse: {
+						role: "model",
+						parts: [{ text: "echo:one" }],
+					},
+					creationTimestamp: 1,
+				},
+				{
+					userContent: { role: "user", parts: [{ text: "two" }] },
+					finalResponse: {
+						role: "model",
+						parts: [{ text: "echo:two" }],
+					},
+					creationTimestamp: 2,
+				},
+			],
+		};
+
+		const batches: unknown[][] = [];
+		for await (const batch of service.performInference({
+			evalSetId: "set-1",
+			evalCases: [makeEvalSet(evalCase)],
+		})) {
+			batches.push(batch);
+		}
+
+		expect(log).toHaveBeenCalledWith(
+			expect.stringContaining("Session input provided for multi"),
+			{ state: { seeded: true } },
+		);
+		expect(ask).toHaveBeenCalledTimes(2);
+		expect(batches[0]).toHaveLength(4);
+		log.mockRestore();
+	});
+
+	it("groups evaluate results using last hyphen in invocation ids", async () => {
+		const service = new LocalEvalService({
+			name: "unused",
+			ask: async () => "unused",
+		} as any);
+
+		const results: { evalSetId: string }[] = [];
+		for await (const evalResult of service.evaluate({
+			inferenceResults: [
+				[
+					{
+						invocationId: "case-with-dashes-expected",
+						userContent: { role: "user", parts: [{ text: "q" }] },
+						finalResponse: {
+							role: "model",
+							parts: [{ text: "same" }],
+						},
+						creationTimestamp: 1,
+					},
+					{
+						invocationId: "case-with-dashes-actual",
+						userContent: { role: "user", parts: [{ text: "q" }] },
+						finalResponse: {
+							role: "model",
+							parts: [{ text: "same" }],
+						},
+						creationTimestamp: 2,
+					},
+				],
+			],
+			evaluateConfig: {
+				evalMetrics: [
+					{
+						metricName: PrebuiltMetrics.RESPONSE_MATCH_SCORE,
+						threshold: 0.5,
+					},
+				],
+			},
+		})) {
+			results.push(evalResult);
+		}
+
+		expect(results).toHaveLength(1);
+		expect(results[0].evalSetId).toBe("case-with-dashes");
+	});
 });
