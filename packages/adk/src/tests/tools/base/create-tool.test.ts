@@ -70,4 +70,80 @@ describe("createTool", () => {
 		const result = await tool.runAsync({}, makeContext());
 		expect(result).toEqual({ error: "Error executing boom_tool: nope" });
 	});
+
+	it("supports async functions and maps null/undefined to empty objects", async () => {
+		const asyncTool = createTool({
+			name: "async_ok",
+			description: "async",
+			fn: async () => ({ ok: true }),
+		});
+		expect(await asyncTool.runAsync({}, makeContext())).toEqual({ ok: true });
+
+		const nullTool = createTool({
+			name: "null_tool",
+			description: "null",
+			fn: () => null,
+		});
+		expect(await nullTool.runAsync({}, makeContext())).toEqual({});
+
+		const undefTool = createTool({
+			name: "undef_tool",
+			description: "undef",
+			fn: () => undefined,
+		});
+		expect(await undefTool.runAsync({}, makeContext())).toEqual({});
+	});
+
+	it("preserves false and empty-string results", async () => {
+		const falseTool = createTool({
+			name: "false_tool",
+			description: "false",
+			fn: () => false,
+		});
+		expect(await falseTool.runAsync({}, makeContext())).toBe(false);
+
+		const emptyTool = createTool({
+			name: "empty_tool",
+			description: "empty",
+			fn: () => "",
+		});
+		expect(await emptyTool.runAsync({}, makeContext())).toBe("");
+	});
+
+	it("stringifies non-Error throws from the tool function", async () => {
+		const tool = createTool({
+			name: "string_boom",
+			description: "throws string",
+			fn: () => {
+				throw "kaboom";
+			},
+		});
+
+		expect(await tool.runAsync({}, makeContext())).toEqual({
+			error: "Error executing string_boom: kaboom",
+		});
+	});
+
+	it("wires retry/long-running flags and strips $schema from declarations", async () => {
+		const tool = createTool({
+			name: "flagged",
+			description: "flags",
+			schema: z.object({ n: z.number() }),
+			fn: ({ n }) => ({ n }),
+			isLongRunning: true,
+			shouldRetryOnFailure: true,
+			maxRetryAttempts: 5,
+		});
+
+		expect(tool.isLongRunning).toBe(true);
+		expect(tool.shouldRetryOnFailure).toBe(true);
+		expect(tool.maxRetryAttempts).toBe(5);
+
+		const declaration = tool.getDeclaration();
+		expect(declaration?.parameters).not.toHaveProperty("$schema");
+		expect(declaration?.parameters).toMatchObject({
+			type: "object",
+			properties: { n: { type: "number" } },
+		});
+	});
 });

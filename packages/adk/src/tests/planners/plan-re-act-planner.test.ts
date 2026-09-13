@@ -72,4 +72,44 @@ describe("PlanReActPlanner", () => {
 			"summarize",
 		]);
 	});
+
+	it("keeps only the first leading named function call when FC is at index 0", () => {
+		const parts = planner.processPlanningResponse({} as any, [
+			{ functionCall: { name: "first", args: { a: 1 } } },
+			{ functionCall: { name: "second", args: {} } },
+			{ text: "should be dropped" },
+		]);
+
+		expect(parts?.map((p) => p.functionCall?.name)).toEqual(["first"]);
+	});
+
+	it("skips empty-name function calls before capturing the first named call", () => {
+		const parts = planner.processPlanningResponse({} as any, [
+			{ functionCall: { name: "", args: {} } },
+			{ text: "/*REASONING*/ still planning" },
+			{ functionCall: { name: "tool", args: { x: 1 } } },
+		]);
+
+		expect(parts?.[0].thought).toBe(true);
+		expect(parts?.[1].functionCall?.name).toBe("tool");
+	});
+
+	it("preserves plain text without planning tags without marking thought", () => {
+		const parts = planner.processPlanningResponse({} as any, [
+			{ text: "just a narrative reply" },
+		]);
+
+		expect(parts).toHaveLength(1);
+		expect(parts?.[0].thought).toBeUndefined();
+		expect(parts?.[0].text).toBe("just a narrative reply");
+	});
+
+	it("does not treat mid-string ACTION substrings without tags as special", () => {
+		const parts = planner.processPlanningResponse({} as any, [
+			{ text: "mention ACTION casually without tags" },
+		]);
+
+		expect(parts?.[0].thought).toBeUndefined();
+		expect(parts?.[0].text).toContain("ACTION");
+	});
 });

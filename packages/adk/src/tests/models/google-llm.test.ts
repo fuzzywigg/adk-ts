@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, vi, afterEach } from "vitest";
+import { FinishReason, GoogleGenAI } from "@google/genai";
 import { GoogleLlm } from "../../models/google-llm";
-import { GoogleGenAI } from "@google/genai";
+import { LlmResponse } from "../../models/llm-response";
 
 vi.mock("@adk/helpers/logger", () => ({
 	Logger: vi.fn(() => ({
@@ -9,16 +10,38 @@ vi.mock("@adk/helpers/logger", () => ({
 	})),
 }));
 
-vi.mock("@google/genai", () => ({
-	GoogleGenAI: vi.fn(),
-}));
+vi.mock("@google/genai", async (importOriginal) => {
+	const actual = await importOriginal<typeof import("@google/genai")>();
+	return {
+		...actual,
+		GoogleGenAI: vi.fn(),
+	};
+});
+
+async function* asAsyncIterable<T>(items: T[]): AsyncGenerator<T> {
+	for (const item of items) {
+		yield item;
+	}
+}
 
 describe("GoogleLlm", () => {
 	let originalEnv: NodeJS.ProcessEnv;
+	let mockGenerateContent: ReturnType<typeof vi.fn>;
+	let mockGenerateContentStream: ReturnType<typeof vi.fn>;
 
 	beforeEach(() => {
 		originalEnv = { ...process.env };
 		vi.clearAllMocks();
+		mockGenerateContent = vi.fn();
+		mockGenerateContentStream = vi.fn();
+		(GoogleGenAI as unknown as ReturnType<typeof vi.fn>).mockImplementation(
+			() => ({
+				models: {
+					generateContent: mockGenerateContent,
+					generateContentStream: mockGenerateContentStream,
+				},
+			}),
+		);
 	});
 
 	afterEach(() => {
@@ -163,6 +186,217 @@ describe("GoogleLlm", () => {
 			const llm = new GoogleLlm("foo");
 			expect(() => llm.connect({} as any)).toThrow(
 				"Live connection is not supported for foo.",
+			);
+		});
+	});
+
+	describe("generateContentAsyncImpl", () => {
+		const baseRequest = {
+			contents: [{ role: "user", parts: [{ text: "Hello" }] }],
+			config: { temperature: 0.2 },
+		};
+
+		beforeEach(() => {
+			process.env.GOOGLE_API_KEY = "test-key";
+			process.env.GOOGLE_GENAI_USE_VERTEXAI = undefined;
+		});
+
+		it("yields a non-stream response from generateContent", async () => {
+			mockGenerateContent.mockResolvedValue({
+				candidates: [
+					{
+						content: { role: "model", parts: [{ text: "Hi" }] },
+					},
+				],
+				usageMetadata: {
+					promptTokenCount: 2,
+					candidatesTokenCount: 1,
+					totalTokenCount: 3,
+				},
+			});
+
+			const llm = new GoogleLlm();
+			const results: LlmResponse[] = [];
+			for await (const response of (llm as any).generateContentAsyncImpl(
+				baseRequest,
+			)) {
+				results.push(response);
+			}
+
+			expect(results).toHaveLength(1);
+			expect(results[0].content?.parts).toEqual([{ text: "Hi" }]);
+			expect(mockGenerateContent).toHaveBeenCalledWith(
+				expect.objectContaining({
+					model: "gemini-2.5-flash",
+					contents: [{ role: "user", parts: [{ text: "Hello" }] }],
+				}),
+			);
+		});
+
+		it("uses request model override and converts assistant role to model", async () => {
+			mockGenerateContent.mockResolvedValue({
+				candidates: [{ content: { role: "model", parts: [{ text: "ok" }] } }],
+			});
+
+			const llm = new GoogleLlm();
+			for await (const _ of (llm as any).generateContentAsyncImpl({
+				...baseRequest,
+				model: "gemini-2.0-flash",
+				contents: [{ role: "assistant", parts: [{ text: "prior" }] }],
+			})) {
+				/* drain */
+			}
+
+			expect(mockGenerateContent).toHaveBeenCalledWith(
+				expect.objectContaining({
+					model: "gemini-2.0-flash",
+					contents: [{ role: "model", parts: [{ text: "prior" }] }],
+				}),
+			);
+		});
+
+		it("clears labels and displayName for Gemini API backend", async () => {
+			mockGenerateContent.mockResolvedValue({
+				candidates: [{ content: { role: "model", parts: [{ text: "ok" }] } }],
+			});
+			const request = {
+				...baseRequest,
+				config: { labels: { env: "test" } },
+				contents: [
+					{
+						role: "user",
+						parts: [
+							{
+								text: "with file",
+								inlineData: { displayName: "pic", data: "abc" },
+								fileData: { displayName: "doc", fileUri: "gs://x" },
+							},
+						],
+					},
+				],
+			};
+
+			const llm = new GoogleLlm();
+			for await (const _ of (llm as any).generateContentAsyncImpl(request)) {
+				/* drain */
+			}
+
+			expect((request.config as any).labels).toBeUndefined();
+			expect(
+				(request.contents[0].parts[0] as any).inlineData.displayName,
+			).toBeNull();
+			expect(
+				(request.contents[0].parts[0] as any).fileData.displayName,
+			).toBeNull();
+		});
+
+		it("streams partial text then final STOP merge", async () => {
+			mockGenerateContentStream.mockResolvedValue(
+				asAsyncIterable([
+					{
+						candidates: [
+							{ content: { role: "model", parts: [{ text: "Hel" }] } },
+						],
+					},
+					{
+						candidates: [
+							{ content: { role: "model", parts: [{ text: "lo" }] } },
+						],
+					},
+					{
+						candidates: [
+							{
+								content: { role: "model", parts: [{ text: "" }] },
+								finishReason: FinishReason.STOP,
+							},
+						],
+						usageMetadata: { totalTokenCount: 4 },
+					},
+				]),
+			);
+
+			const llm = new GoogleLlm();
+			const results: LlmResponse[] = [];
+			for await (const response of (llm as any).generateContentAsyncImpl(
+				baseRequest,
+				true,
+			)) {
+				results.push(response);
+			}
+
+			expect(results.some((r) => r.partial === true)).toBe(true);
+			expect(mockGenerateContentStream).toHaveBeenCalled();
+			expect(
+				results.some((r) =>
+					r.content?.parts?.some((p: any) => p.text === "Hello"),
+				),
+			).toBe(true);
+		});
+
+		it("accumulates thought parts while streaming", async () => {
+			mockGenerateContentStream.mockResolvedValue(
+				asAsyncIterable([
+					{
+						candidates: [
+							{
+								content: {
+									role: "model",
+									parts: [{ text: "plan", thought: true }],
+								},
+							},
+						],
+					},
+					{
+						candidates: [
+							{ content: { role: "model", parts: [{ text: "done" }] } },
+						],
+					},
+					{
+						candidates: [
+							{
+								content: { role: "model", parts: [] },
+								finishReason: FinishReason.STOP,
+							},
+						],
+					},
+				]),
+			);
+
+			const llm = new GoogleLlm();
+			const results: LlmResponse[] = [];
+			for await (const response of (llm as any).generateContentAsyncImpl(
+				baseRequest,
+				true,
+			)) {
+				results.push(response);
+			}
+
+			expect(
+				results.some((r) =>
+					r.content?.parts?.some(
+						(p: any) => p.text === "plan" && p.thought === true,
+					),
+				),
+			).toBe(true);
+		});
+
+		it("falls back to content.content text when parts are missing", async () => {
+			mockGenerateContent.mockResolvedValue({
+				candidates: [{ content: { role: "model", parts: [{ text: "ok" }] } }],
+			});
+
+			const llm = new GoogleLlm();
+			for await (const _ of (llm as any).generateContentAsyncImpl({
+				contents: [{ role: "user", content: "plain" }],
+				config: {},
+			})) {
+				/* drain */
+			}
+
+			expect(mockGenerateContent).toHaveBeenCalledWith(
+				expect.objectContaining({
+					contents: [{ role: "user", parts: [{ text: "plain" }] }],
+				}),
 			);
 		});
 	});

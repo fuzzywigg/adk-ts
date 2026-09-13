@@ -1,8 +1,16 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { diag } from "@opentelemetry/api";
 import type { Event } from "../events/event";
 import type { LlmRequest } from "../models/llm-request";
 import type { LlmResponse } from "../models/llm-response";
-import { TelemetryService } from "../telemetry";
+import {
+	initializeTelemetry,
+	shutdownTelemetry,
+	TelemetryService,
+	traceLlmCall,
+	traceToolCall,
+	tracer,
+} from "../telemetry";
 import type { BaseTool } from "../tools";
 
 afterEach(() => {
@@ -233,5 +241,96 @@ describe("TelemetryService with mocked active span", () => {
 			"gen_ai.content.completion",
 			expect.any(Object),
 		);
+	});
+});
+
+describe("TelemetryService private helpers", () => {
+	it("safeJsonStringify returns placeholder for circular objects", () => {
+		const service = new TelemetryService();
+		const circular: Record<string, unknown> = {};
+		circular.self = circular;
+		expect((service as any)._safeJsonStringify(circular)).toBe(
+			"<not serializable>",
+		);
+		expect((service as any)._safeJsonStringify({ ok: true })).toBe(
+			'{"ok":true}',
+		);
+	});
+
+	it("buildLlmRequestForTrace drops inlineData parts", () => {
+		const service = new TelemetryService();
+		const traced = (service as any)._buildLlmRequestForTrace({
+			model: "gpt-4o",
+			config: { temperature: 0.1 },
+			contents: [
+				{
+					role: "user",
+					parts: [
+						{ text: "hi" },
+						{ inlineData: { mimeType: "image/png", data: "abc" } },
+					],
+				},
+			],
+		});
+
+		expect(traced.model).toBe("gpt-4o");
+		expect(traced.contents).toEqual([
+			{ role: "user", parts: [{ text: "hi" }] },
+		]);
+	});
+
+	it("excludeNonSerializableFromConfig drops response_schema and nulls", () => {
+		const service = new TelemetryService();
+		const cleaned = (service as any)._excludeNonSerializableFromConfig({
+			temperature: 0.5,
+			response_schema: { type: "object" },
+			topP: null,
+			unused: undefined,
+			functions: [
+				{
+					name: "fn",
+					description: "d",
+					parameters: { type: "object" },
+					impl: () => {},
+				},
+			],
+		});
+
+		expect(cleaned).toEqual({
+			temperature: 0.5,
+			functions: [
+				{
+					name: "fn",
+					description: "d",
+					parameters: { type: "object" },
+				},
+			],
+		});
+	});
+
+	it("skips re-initialization when already initialized", () => {
+		const service = new TelemetryService();
+		(service as any).isInitialized = true;
+		const warn = vi.spyOn(diag, "warn");
+
+		service.initialize({
+			appName: "adk",
+			appVersion: "1.0.0",
+			otlpEndpoint: "http://localhost:4318",
+		} as any);
+
+		expect(warn).toHaveBeenCalledWith(
+			"Telemetry is already initialized. Skipping.",
+		);
+	});
+});
+
+describe("telemetry module exports", () => {
+	it("re-exports initializeTelemetry / trace helpers against the singleton", () => {
+		expect(typeof initializeTelemetry).toBe("function");
+		expect(typeof traceToolCall).toBe("function");
+		expect(typeof traceLlmCall).toBe("function");
+		expect(typeof shutdownTelemetry).toBe("function");
+		expect(tracer).toBeTruthy();
 	});
 });

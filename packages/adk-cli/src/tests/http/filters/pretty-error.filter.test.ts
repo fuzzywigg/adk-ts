@@ -178,4 +178,96 @@ describe("PrettyErrorFilter", () => {
 			}),
 		);
 	});
+
+	it("categorizes missing environment variable errors", () => {
+		const filter = new PrettyErrorFilter(false);
+		const { host, status, json } = createHost();
+		filter.catch(
+			new Error("Missing required environment variable OPENAI_API_KEY"),
+			host,
+		);
+
+		expect(status).toHaveBeenCalledWith(HttpStatus.BAD_REQUEST);
+		expect(json).toHaveBeenCalledWith(
+			expect.objectContaining({
+				error: "Environment Configuration Error",
+				details: expect.arrayContaining([expect.stringContaining(".env")]),
+			}),
+		);
+	});
+
+	it("maps unauthorized and forbidden messages to 401/403", () => {
+		const filter = new PrettyErrorFilter(false);
+
+		const unauthorized = createHost();
+		filter.catch(new Error("User unauthorized"), unauthorized.host);
+		expect(unauthorized.status).toHaveBeenCalledWith(HttpStatus.UNAUTHORIZED);
+
+		const forbidden = createHost();
+		filter.catch(new Error("Access forbidden for resource"), forbidden.host);
+		expect(forbidden.status).toHaveBeenCalledWith(HttpStatus.FORBIDDEN);
+	});
+
+	it("joins HttpException object messages", () => {
+		const filter = new PrettyErrorFilter(false);
+		const { host, json } = createHost();
+		filter.catch(
+			new HttpException({ message: ["a", "b"] }, HttpStatus.BAD_REQUEST),
+			host,
+		);
+
+		expect(json).toHaveBeenCalledWith(
+			expect.objectContaining({
+				message: "a; b",
+			}),
+		);
+	});
+
+	it("adds esbuild and typescript hints for agent loading errors", () => {
+		const filter = new PrettyErrorFilter(false);
+		const { host, json } = createHost();
+		filter.catch(
+			new Error("Failed to load agent: esbuild failed on agent.ts"),
+			host,
+		);
+
+		expect(json).toHaveBeenCalledWith(
+			expect.objectContaining({
+				error: "Agent Loading Error",
+				details: expect.arrayContaining([
+					expect.stringContaining("bundling"),
+					expect.stringContaining("TypeScript"),
+				]),
+			}),
+		);
+	});
+
+	it("falls back when Cannot find module has no quoted name", () => {
+		const filter = new PrettyErrorFilter(false);
+		const { host, json } = createHost();
+		filter.catch(new Error("Cannot find module somewhere"), host);
+
+		expect(json).toHaveBeenCalledWith(
+			expect.objectContaining({
+				error: "Module Not Found",
+				details: expect.arrayContaining([
+					expect.stringContaining("dependencies"),
+				]),
+			}),
+		);
+	});
+
+	it("uses a custom Error name when present", () => {
+		const filter = new PrettyErrorFilter(false);
+		const { host, json } = createHost();
+		const err = new Error("custom failure");
+		err.name = "CustomBoom";
+		filter.catch(err, host);
+
+		expect(json).toHaveBeenCalledWith(
+			expect.objectContaining({
+				error: "CustomBoom",
+			}),
+		);
+	});
 });
