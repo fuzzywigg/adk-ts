@@ -139,4 +139,122 @@ describe("AgentGraphService", () => {
 		expect(graph.nodes[0].type).toBe("ParallelAgent");
 		expect(graph.edges).toEqual([]);
 	});
+
+	it("labels LoopAgent nodes and draws nested multi-level trees", async () => {
+		class LoopAgent {
+			name = "looper";
+			subAgents: any[] = [];
+		}
+		class NestedLlm {
+			name = "leaf";
+			subAgents = [];
+			async canonicalTools() {
+				return [
+					{ name: "dup", constructor: { name: "FunctionTool" } },
+					{ name: "dup", constructor: { name: "FunctionTool" } },
+					{ name: "other", constructor: { name: "CustomTool" } },
+				];
+			}
+		}
+		const leaf = new NestedLlm();
+		Object.defineProperty(leaf, "constructor", { value: { name: "LlmAgent" } });
+		const loop = new LoopAgent();
+		loop.subAgents = [leaf];
+		Object.defineProperty(loop, "constructor", {
+			value: { name: "LoopAgent" },
+		});
+
+		const service = new AgentGraphService(
+			makeAgentManager({
+				loaded: new Map([["agents/loop", { agent: loop }]]),
+			}) as any,
+		);
+		const graph = await service.getGraph("agents/loop");
+
+		expect(graph.nodes.find((n) => n.id === "agent:looper")?.group).toBe(
+			"loop",
+		);
+		expect(graph.nodes.find((n) => n.id === "tool:dup")?.shape).toBe("box");
+		expect(graph.nodes.find((n) => n.id === "tool:dup")?.kind).toBe("tool");
+		expect(graph.nodes.map((n) => n.id).sort()).toEqual([
+			"agent:leaf",
+			"agent:looper",
+			"tool:dup",
+			"tool:other",
+		]);
+		expect(
+			graph.edges.filter((e) => e.to === "tool:dup").length,
+		).toBeGreaterThanOrEqual(1);
+	});
+
+	it("uses default meta for unknown constructors and agents without subAgents", async () => {
+		const agent = {
+			name: "mystery",
+			async canonicalTools() {
+				return [];
+			},
+		};
+		Object.defineProperty(agent, "constructor", {
+			value: { name: "CustomAgent" },
+		});
+
+		const service = new AgentGraphService(
+			makeAgentManager({
+				loaded: new Map([["agents/mystery", { agent }]]),
+			}) as any,
+		);
+		const graph = await service.getGraph("agents/mystery");
+		expect(graph.nodes).toEqual([
+			expect.objectContaining({
+				id: "agent:mystery",
+				type: "CustomAgent",
+				shape: "ellipse",
+			}),
+		]);
+	});
+
+	it("builds deeper registry parent trees from relative paths", async () => {
+		const registry = new Map([
+			[
+				"agents/root",
+				{
+					name: "root",
+					relativePath: "agents/root",
+					absolutePath: "/tmp/agents/root",
+				},
+			],
+			[
+				"agents/root/mid",
+				{
+					name: "mid",
+					relativePath: "agents/root/mid",
+					absolutePath: "/tmp/agents/root/mid",
+				},
+			],
+			[
+				"agents/root/mid/leaf",
+				{
+					name: "leaf",
+					relativePath: "agents/root/mid/leaf",
+					absolutePath: "/tmp/agents/root/mid/leaf",
+				},
+			],
+		]);
+
+		const service = new AgentGraphService(
+			makeAgentManager({ registry }) as any,
+		);
+		const graph = await service.getGraph("agents/root");
+		expect(graph.nodes.map((n) => n.id).sort()).toEqual([
+			"agent:leaf",
+			"agent:mid",
+			"agent:root",
+		]);
+		expect(graph.edges).toEqual(
+			expect.arrayContaining([
+				{ from: "agent:root", to: "agent:mid" },
+				{ from: "agent:root", to: "agent:leaf" },
+			]),
+		);
+	});
 });

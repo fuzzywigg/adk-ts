@@ -77,4 +77,36 @@ describe("resolveAgentExport", () => {
 			}),
 		).rejects.toThrow(/Failed executing exported agent function/);
 	});
+
+	it("resolves a default export that is itself an agent instance", async () => {
+		const agent = fakeAgent("default-instance");
+		const result = await resolveAgentExport({ default: agent });
+		expect(result.agent).toBe(agent);
+	});
+
+	it("resolves named buildFoo factories returning { agent }", async () => {
+		const agent = fakeAgent("build-foo");
+		const result = await resolveAgentExport({
+			buildFoo: () => ({ agent }),
+		});
+		expect(result.agent).toBe(agent);
+	});
+
+	it("surfaces Failed to await function result for rejecting async factories", async () => {
+		await expect(
+			resolveAgentExport({
+				agent: async () => {
+					throw new Error("async boom");
+				},
+			}),
+		).rejects.toThrow(/Failed to await function result|async boom/);
+	});
+
+	it("resolves BuiltAgent on a non-default named export key", async () => {
+		const agent = fakeAgent("named-built");
+		const built = { agent, runner: {}, session: {} };
+		const result = await resolveAgentExport({ myAgent: built });
+		expect(result.agent).toBe(agent);
+		expect(result.builtAgent).toBe(built);
+	});
 });

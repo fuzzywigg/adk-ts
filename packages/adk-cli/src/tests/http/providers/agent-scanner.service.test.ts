@@ -99,4 +99,42 @@ describe("AgentScanner", () => {
 		const agents = scanner.scanAgents("/path/does/not/exist", new Map());
 		expect(agents).toBeInstanceOf(Map);
 	});
+
+	it("uses directory name when agent file has no name and skips ignored dirs", () => {
+		const root = makeProject();
+		writeFileSync(
+			join(root, "agent.ts"),
+			"export const agent = { runAsync() {} };",
+		);
+		for (const skip of [".git", ".next", "coverage"]) {
+			const skipDir = join(root, skip, "nested");
+			mkdirSync(skipDir, { recursive: true });
+			writeFileSync(
+				join(skipDir, "agent.ts"),
+				`export const agent = { name: "ignored_${skip}" };`,
+			);
+		}
+
+		const scanner = new AgentScanner(true);
+		const agents = scanner.scanAgents(root, new Map());
+		expect(
+			[...agents.values()].some((a) => a.name.startsWith("ignored_")),
+		).toBe(false);
+		const rootDirName = root.split(/[/\\]/).pop() as string;
+		expect(agents.get(rootDirName)?.name).toBe(rootDirName);
+	});
+
+	it("quiet mode still discovers agents without throwing", () => {
+		const root = makeProject();
+		const agentDir = join(root, "agents", "quiet");
+		mkdirSync(agentDir, { recursive: true });
+		writeFileSync(
+			join(agentDir, "agent.js"),
+			`export const agent = { name: "quiet_bot" };`,
+		);
+
+		const scanner = new AgentScanner(true);
+		const agents = scanner.scanAgents(root, new Map());
+		expect(agents.get("agents/quiet")?.name).toBe("quiet_bot");
+	});
 });

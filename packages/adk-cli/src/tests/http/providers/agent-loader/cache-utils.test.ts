@@ -41,4 +41,18 @@ describe("CacheUtils", () => {
 		expect(existsSync(cacheDir)).toBe(false);
 		expect(logSpy).toHaveBeenCalled();
 	});
+
+	it("cleanupAllCacheFiles is quiet when quiet=true and tolerates missing files", () => {
+		const logger = new Logger("CacheUtilsQuiet");
+		const logSpy = vi.spyOn(logger, "log").mockImplementation(() => undefined);
+		const utils = new CacheUtils(logger, true);
+		const root = mkdtempSync(join(tmpdir(), "adk-cli-cache-quiet-"));
+		const cacheDir = join(root, CACHE_DIR);
+		mkdirSync(cacheDir, { recursive: true });
+		const missing = join(cacheDir, "already-gone.cjs");
+		utils.trackCacheFile(missing, root);
+
+		CacheUtils.cleanupAllCacheFiles(logger, true);
+		expect(logSpy).not.toHaveBeenCalled();
+	});
 });
