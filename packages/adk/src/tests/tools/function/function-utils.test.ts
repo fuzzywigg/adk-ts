@@ -148,4 +148,132 @@ function shaped(items, meta, flag, big, n) { return {}; }`,
 		expect(declaration.parameters?.properties?.big?.type).toBe("number");
 		expect(declaration.parameters?.properties?.n?.type).toBe("null");
 	});
+
+	it("maps JSDoc {bool} and {undefined} via typescript type mapper", () => {
+		const aliases = withSource(
+			(_flag: unknown, _missing: unknown) => ({}),
+			`/**
+ * Alias types
+ * @param {bool} flag Toggle alias
+ * @param {undefined} missing Absent marker
+ */
+function aliases(flag, missing) { return {}; }`,
+		);
+		Object.defineProperty(aliases, "name", { value: "aliases" });
+
+		const declaration = buildFunctionDeclaration(aliases);
+		expect(declaration.parameters?.properties?.flag?.type).toBe("boolean");
+		expect(declaration.parameters?.properties?.missing?.type).toBe("null");
+	});
+
+	it("captures spanning @param text when the next tag is on a starred JSDoc line", () => {
+		const documented = withSource(
+			(_id: string, _label: string) => ({}),
+			`/**
+ * Multi-param docs
+ * @param {string} id Primary
+ * identifier spanning lines
+ * @param {string} label Short label
+ */
+function documented(id, label) { return {}; }`,
+		);
+		Object.defineProperty(documented, "name", { value: "documented" });
+
+		const declaration = buildFunctionDeclaration(documented);
+		expect(declaration.parameters?.properties?.id?.description).toContain(
+			"Primary",
+		);
+		expect(declaration.parameters?.properties?.id?.description).toContain(
+			"identifier spanning lines",
+		);
+		expect(declaration.parameters?.properties).toHaveProperty("label");
+		expect(declaration.parameters?.required).toEqual(["id", "label"]);
+	});
+
+	it("attaches @param descriptions for each documented parameter name", () => {
+		const documented = withSource(
+			(_id: string, _label: string) => ({}),
+			`/**
+ * Single-line params
+ * @param {string} id Primary identifier
+ * @param {string} label Short label
+ */
+function documented(id, label) { return {}; }`,
+		);
+		Object.defineProperty(documented, "name", { value: "documented" });
+
+		const declaration = buildFunctionDeclaration(documented);
+		expect(declaration.parameters?.properties?.id?.description).toContain(
+			"Primary identifier",
+		);
+		expect(declaration.parameters?.properties?.label?.type).toBe("string");
+		expect(declaration.parameters?.required).toEqual(["id", "label"]);
+	});
+
+	it("parses real arrow function toString signatures", () => {
+		const arrow = withSource(
+			(count: number) => count,
+			"(count: number) => count",
+		);
+		Object.defineProperty(arrow, "name", { value: "arrow" });
+
+		const declaration = buildFunctionDeclaration(arrow);
+		expect(declaration.parameters?.properties?.count?.type).toBe("number");
+		expect(declaration.parameters?.required).toEqual(["count"]);
+	});
+
+	it("best-effort handles destructured / non-word parameter names", () => {
+		const destructured = withSource(
+			(_opts: unknown) => ({}),
+			"function destructured({ a, b }: Opts) { return {}; }",
+		);
+		Object.defineProperty(destructured, "name", { value: "destructured" });
+
+		const declaration = buildFunctionDeclaration(destructured);
+		expect(declaration.parameters?.properties).toBeDefined();
+		const keys = Object.keys(declaration.parameters?.properties || {});
+		expect(keys.length).toBeGreaterThanOrEqual(1);
+	});
+
+	it("extracts description from JSDoc when options.description is empty", () => {
+		const greet = withSource(
+			() => "hi",
+			`/**
+ * Greets politely
+ */
+function greet() { return "hi"; }`,
+		);
+		Object.defineProperty(greet, "name", { value: "greet" });
+
+		const declaration = buildFunctionDeclaration(greet, { description: "" });
+		expect(declaration.description).toContain("Greets politely");
+	});
+
+	it("returns empty properties for a lone empty parameter string", () => {
+		const emptyParams = withSource(
+			() => 1,
+			"function emptyParams( ) { return 1; }",
+		);
+		Object.defineProperty(emptyParams, "name", { value: "emptyParams" });
+
+		expect(buildFunctionDeclaration(emptyParams).parameters).toEqual({
+			type: Type.OBJECT,
+			properties: {},
+		});
+	});
+
+	it("prefers JSDoc types over TypeScript annotations when both exist", () => {
+		const dual = withSource(
+			(_n: string) => _n,
+			`/**
+ * Dual typed
+ * @param {number} n Actually a number
+ */
+function dual(n: string) { return n; }`,
+		);
+		Object.defineProperty(dual, "name", { value: "dual" });
+
+		const declaration = buildFunctionDeclaration(dual);
+		expect(declaration.parameters?.properties?.n?.type).toBe("number");
+	});
 });
