@@ -119,4 +119,95 @@ describe("HttpRequestTool", () => {
 			error: "network down",
 		});
 	});
+
+	it("does not override an explicit Content-Type for JSON bodies", async () => {
+		const tool = new HttpRequestTool();
+		const fetchMock = vi.fn().mockResolvedValue({
+			status: 200,
+			headers: new Headers({ "x-ok": "1" }),
+			text: async () => "ok",
+		});
+		globalThis.fetch = fetchMock as typeof fetch;
+
+		await tool.runAsync(
+			{
+				url: "https://example.com/items",
+				method: "PUT",
+				headers: { "Content-Type": "text/plain", "X-Custom": "yes" },
+				body: JSON.stringify({ a: 1 }),
+				timeout: 2500,
+			},
+			makeContext(),
+		);
+
+		expect(fetchMock).toHaveBeenCalledWith(
+			"https://example.com/items",
+			expect.objectContaining({
+				method: "PUT",
+				headers: {
+					"Content-Type": "text/plain",
+					"X-Custom": "yes",
+				},
+				body: JSON.stringify({ a: 1 }),
+			}),
+		);
+	});
+
+	it("leaves Content-Type unset for non-JSON bodies", async () => {
+		const tool = new HttpRequestTool();
+		const fetchMock = vi.fn().mockResolvedValue({
+			status: 200,
+			headers: new Headers(),
+			text: async () => "",
+		});
+		globalThis.fetch = fetchMock as typeof fetch;
+
+		await tool.runAsync(
+			{
+				url: "https://example.com/raw",
+				method: "POST",
+				body: "not-json",
+			},
+			makeContext(),
+		);
+
+		expect(fetchMock).toHaveBeenCalledWith(
+			"https://example.com/raw",
+			expect.objectContaining({
+				headers: {},
+				body: "not-json",
+			}),
+		);
+	});
+
+	it("stringifies non-Error rejection values", async () => {
+		const tool = new HttpRequestTool();
+		globalThis.fetch = vi.fn().mockRejectedValue("boom-string") as typeof fetch;
+
+		const result = await tool.runAsync(
+			{ url: "https://example.com/fail" },
+			makeContext(),
+		);
+
+		expect(result.error).toBe("boom-string");
+		expect(result.statusCode).toBe(0);
+	});
+
+	it("declares supported HTTP methods on the tool schema", () => {
+		const tool = new HttpRequestTool();
+		const method = tool.getDeclaration().parameters?.properties?.method as {
+			enum?: string[];
+			default?: string;
+		};
+		expect(method.enum).toEqual([
+			"GET",
+			"POST",
+			"PUT",
+			"DELETE",
+			"PATCH",
+			"HEAD",
+			"OPTIONS",
+		]);
+		expect(method.default).toBe("GET");
+	});
 });

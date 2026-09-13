@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Invocation } from "../../evaluation/eval-case";
 import { EvalStatus } from "../../evaluation/evaluator";
 import { PrebuiltMetrics } from "../../evaluation/eval-metrics";
@@ -124,6 +124,61 @@ describe("ResponseEvaluator", () => {
 					(result.perInvocationResults[1].score as number)) /
 					2,
 			);
+		});
+	});
+
+	describe("RESPONSE_EVALUATION_SCORE Vertex facade path", () => {
+		const originalProject = process.env.GOOGLE_CLOUD_PROJECT;
+		const originalLocation = process.env.GOOGLE_CLOUD_LOCATION;
+
+		beforeEach(() => {
+			vi.spyOn(console, "warn").mockImplementation(() => undefined);
+			vi.spyOn(console, "error").mockImplementation(() => undefined);
+			process.env.GOOGLE_CLOUD_PROJECT = "test-project";
+			process.env.GOOGLE_CLOUD_LOCATION = "us-central1";
+			vi.spyOn(Math, "random").mockReturnValue(0.6);
+		});
+
+		afterEach(() => {
+			vi.restoreAllMocks();
+			if (originalProject === undefined) {
+				delete process.env.GOOGLE_CLOUD_PROJECT;
+			} else {
+				process.env.GOOGLE_CLOUD_PROJECT = originalProject;
+			}
+			if (originalLocation === undefined) {
+				delete process.env.GOOGLE_CLOUD_LOCATION;
+			} else {
+				process.env.GOOGLE_CLOUD_LOCATION = originalLocation;
+			}
+		});
+
+		it("delegates coherence scoring to VertexAiEvalFacade", async () => {
+			const evaluator = new ResponseEvaluator({
+				metricName: PrebuiltMetrics.RESPONSE_EVALUATION_SCORE,
+				threshold: 0.5,
+			});
+			const result = await evaluator.evaluateInvocations(
+				[invocation("actual answer")],
+				[invocation("expected answer")],
+			);
+
+			expect(result.overallScore).toBeCloseTo(0.6 * 0.5 + 0.5);
+			expect(result.overallEvalStatus).toBe(EvalStatus.PASSED);
+			expect(result.perInvocationResults).toHaveLength(1);
+		});
+
+		it("returns NOT_EVALUATED when cloud project env is missing", async () => {
+			delete process.env.GOOGLE_CLOUD_PROJECT;
+			const evaluator = new ResponseEvaluator({
+				metricName: PrebuiltMetrics.RESPONSE_EVALUATION_SCORE,
+				threshold: 0.5,
+			});
+			const result = await evaluator.evaluateInvocations(
+				[invocation("a")],
+				[invocation("b")],
+			);
+			expect(result.overallEvalStatus).toBe(EvalStatus.NOT_EVALUATED);
 		});
 	});
 });

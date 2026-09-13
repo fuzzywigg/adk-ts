@@ -216,4 +216,92 @@ describe("ReflectAndRetryToolPlugin", () => {
 		expect(response?.reflection_guidance).toContain("(no arguments)");
 		expect(response?.error_details).toBe("string-error");
 	});
+
+	it("afterToolCallback reflects when extractErrorFromResult finds an error", async () => {
+		class DetectingPlugin extends ReflectAndRetryToolPlugin {
+			override async extractErrorFromResult(): Promise<Error> {
+				return new Error("embedded");
+			}
+		}
+
+		const plugin = new DetectingPlugin({ maxRetries: 2 });
+		const response = await plugin.afterToolCallback({
+			tool: makeTool("writer"),
+			toolArgs: { path: "/tmp/x" },
+			toolContext: makeToolContext(),
+			result: { ok: false },
+		});
+
+		expect(response?.response_type).toBe(REFLECT_AND_RETRY_RESPONSE_TYPE);
+		expect(response?.retry_count).toBe(1);
+		expect(response?.reflection_guidance).toContain("path: /tmp/x");
+	});
+
+	it("returns exceed message immediately when maxRetries is 0 and throw is disabled", async () => {
+		const plugin = new ReflectAndRetryToolPlugin({
+			maxRetries: 0,
+			throwExceptionIfRetryExceeded: false,
+		});
+		const response = await plugin.onToolErrorCallback({
+			tool: makeTool("x"),
+			toolArgs: { a: 1 },
+			toolContext: makeToolContext(),
+			error: new Error("nope"),
+		});
+
+		expect(response?.retry_count).toBe(0);
+		expect(response?.reflection_guidance).toContain("retry limit exceeded");
+	});
+
+	it("isolates failure counters per invocation when scope is INVOCATION", async () => {
+		const plugin = new ReflectAndRetryToolPlugin({ maxRetries: 2 });
+		const tool = makeTool();
+
+		await plugin.onToolErrorCallback({
+			tool,
+			toolArgs: {},
+			toolContext: makeToolContext("inv-a"),
+			error: new Error("a"),
+		});
+		const other = await plugin.onToolErrorCallback({
+			tool,
+			toolArgs: {},
+			toolContext: makeToolContext("inv-b"),
+			error: new Error("b"),
+		});
+
+		expect(other?.retry_count).toBe(1);
+	});
+
+	it("serializes concurrent onToolErrorCallback increments via the internal lock", async () => {
+		const plugin = new ReflectAndRetryToolPlugin({ maxRetries: 5 });
+		const tool = makeTool();
+		const toolContext = makeToolContext();
+
+		const responses = await Promise.all(
+			Array.from({ length: 3 }, (_, i) =>
+				plugin.onToolErrorCallback({
+					tool,
+					toolArgs: { i },
+					toolContext,
+					error: new Error(`e${i}`),
+				}),
+			),
+		);
+
+		const counts = responses.map((r) => r?.retry_count).sort();
+		expect(counts).toEqual([1, 2, 3]);
+	});
+
+	it("accepts custom plugin name and maxRetries zero", () => {
+		const plugin = new ReflectAndRetryToolPlugin({
+			name: "custom_retry",
+			maxRetries: 0,
+			throwExceptionIfRetryExceeded: false,
+			trackingScope: TrackingScope.GLOBAL,
+		});
+		expect(plugin.name).toBe("custom_retry");
+		expect(plugin.maxRetries).toBe(0);
+		expect(plugin.scope).toBe(TrackingScope.GLOBAL);
+	});
 });
