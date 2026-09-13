@@ -1,10 +1,13 @@
 import { Type } from "@google/genai";
 import { describe, expect, it } from "vitest";
 import {
+	adkToMcpToolType,
 	declarationToJsonSchema,
 	jsonSchemaToDeclaration,
+	mcpSchemaToParameters,
 	normalizeJsonSchema,
 } from "../../../tools/mcp/schema-conversion";
+import type { BaseTool } from "../../../tools/base/base-tool";
 
 describe("schema-conversion", () => {
 	it("returns empty object when declaration has no parameters", () => {
@@ -88,6 +91,102 @@ describe("schema-conversion", () => {
 		});
 
 		expect(normalizeJsonSchema(null as any)).toEqual({
+			type: Type.OBJECT,
+			properties: {},
+		});
+	});
+
+	it("returns whole parameters object when properties are absent", () => {
+		expect(
+			declarationToJsonSchema({
+				name: "tool",
+				description: "d",
+				parameters: {
+					type: Type.OBJECT,
+					required: ["q"],
+				} as any,
+			}),
+		).toEqual({
+			type: Type.OBJECT,
+			required: ["q"],
+		});
+	});
+
+	it("converts ADK tools to MCP tool type", () => {
+		const tool = {
+			name: "lookup",
+			description: "find things",
+			getDeclaration: () => ({
+				name: "lookup",
+				description: "find things",
+				parameters: {
+					type: Type.OBJECT,
+					properties: { id: { type: Type.STRING } },
+				},
+			}),
+		} as BaseTool;
+
+		expect(adkToMcpToolType(tool)).toEqual({
+			name: "lookup",
+			description: "find things",
+			inputSchema: {
+				type: "object",
+				properties: { id: { type: Type.STRING } },
+			},
+		});
+	});
+
+	it("normalizes boolean/null/number schemas and enum inference", () => {
+		expect(normalizeJsonSchema({ type: "boolean" })).toEqual({
+			type: Type.BOOLEAN,
+		});
+		expect(normalizeJsonSchema({ type: "null" })).toEqual({
+			type: Type.NULL,
+		});
+		expect(
+			normalizeJsonSchema({ type: "integer", minimum: 1, maximum: 5 }),
+		).toEqual({
+			type: "integer",
+			minimum: 1,
+			maximum: 5,
+		});
+		expect(normalizeJsonSchema({ enum: ["a", "b"] })).toEqual({
+			type: Type.STRING,
+			enum: ["a", "b"],
+		});
+		expect(normalizeJsonSchema({ enum: [1, 2] })).toEqual({
+			type: Type.NUMBER,
+			enum: [1, 2],
+		});
+	});
+
+	it("maps mcp inputSchema and parameters fallbacks", () => {
+		expect(
+			mcpSchemaToParameters({
+				name: "t",
+				inputSchema: {
+					type: "object",
+					properties: { q: { type: "string" } },
+				},
+			} as any),
+		).toEqual({
+			type: Type.OBJECT,
+			properties: {
+				q: { type: Type.STRING },
+			},
+		});
+
+		expect(
+			mcpSchemaToParameters({
+				name: "t",
+				parameters: { type: "object", properties: {} },
+			} as any),
+		).toEqual({
+			type: Type.OBJECT,
+			properties: {},
+		});
+
+		expect(mcpSchemaToParameters({ name: "empty" } as any)).toEqual({
 			type: Type.OBJECT,
 			properties: {},
 		});

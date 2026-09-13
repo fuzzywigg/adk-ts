@@ -283,5 +283,54 @@ describe("LogFormatter", () => {
 			expect(result[1]).toContain("function_call:");
 			expect(result[2]).toContain("function_response:");
 		});
+
+		it("formats file, executable code, and code execution result parts", () => {
+			const content: Content = {
+				role: "model",
+				parts: [
+					{ fileData: { mimeType: "text/csv", fileUri: "gs://x" } as any },
+					{
+						executableCode: {
+							code: "print(1)",
+							language: "PYTHON" as any,
+						},
+					},
+					{
+						codeExecutionResult: {
+							outcome: "OUTCOME_OK" as any,
+							output: "1",
+						},
+					},
+					{ text: "a".repeat(60) },
+					{} as Part,
+				],
+			};
+
+			const result = LogFormatter.formatContentParts(content);
+			expect(result[0]).toMatch(/file_data: file: text\/csv/);
+			expect(result[1]).toMatch(/executable_code: "print\(1\)"/);
+			expect(result[2]).toMatch(/code_execution_result: execution result:/);
+			expect(result[3]).toContain("...");
+			expect(result[4]).toMatch(/unknown: unknown content/);
+		});
+	});
+
+	describe("formatFunctionResponse", () => {
+		it("formats responses and handles missing payloads", () => {
+			expect(LogFormatter.formatFunctionResponse({} as Part)).toBe("none");
+			expect(
+				LogFormatter.formatFunctionResponse({
+					functionResponse: {
+						name: "lookup",
+						response: { ok: true },
+					},
+				}),
+			).toContain("lookup ->");
+			expect(
+				LogFormatter.formatFunctionResponse({
+					functionResponse: { name: "empty" } as any,
+				}),
+			).toBe("empty -> {}");
+		});
 	});
 });

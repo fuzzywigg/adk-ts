@@ -32,10 +32,11 @@ export class CodeExecutionUtils {
 	 * Gets the file content as a base64-encoded string
 	 */
 	static getEncodedFileContent(data: string | ArrayBuffer): string {
-		// Convert ArrayBuffer to string if needed
 		let decodedData: string;
 		if (data instanceof ArrayBuffer) {
 			decodedData = new TextDecoder().decode(data);
+		} else {
+			decodedData = data;
 		}
 
 		// Check if already base64 encoded

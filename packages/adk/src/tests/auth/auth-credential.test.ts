@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
 	ApiKeyCredential,
+	AuthCredential,
+	AuthCredentialType,
 	BasicAuthCredential,
 	BearerTokenCredential,
 	OAuth2Credential,
@@ -69,5 +71,43 @@ describe("auth credentials", () => {
 	it("rejects refresh when no refresh function is available", async () => {
 		const credential = new OAuth2Credential({ accessToken: "access" });
 		await expect(credential.refresh()).rejects.toThrow(/Cannot refresh token/);
+	});
+
+	it("treats oauth tokens without expiresAt as not expired", () => {
+		const credential = new OAuth2Credential({
+			accessToken: "access",
+			refreshToken: "refresh",
+			refreshFunction: async () => ({ accessToken: "next" }),
+		});
+		expect(credential.isExpired()).toBe(false);
+	});
+
+	it("keeps prior refresh token when refresh payload omits it", async () => {
+		const credential = new OAuth2Credential({
+			accessToken: "access",
+			refreshToken: "keep-me",
+			expiresIn: 1,
+			refreshFunction: async () => ({
+				accessToken: "rotated",
+			}),
+		});
+		await credential.refresh();
+		expect(credential.getToken()).toBe("rotated");
+		expect(credential.refreshToken).toBe("keep-me");
+	});
+
+	it("throws for unsupported base credential refresh", async () => {
+		class Unsupported extends AuthCredential {
+			getToken() {
+				return "x";
+			}
+			getHeaders() {
+				return {};
+			}
+		}
+		const credential = new Unsupported(AuthCredentialType.API_KEY);
+		await expect(credential.refresh()).rejects.toThrow(
+			/Token refresh not supported/,
+		);
 	});
 });
