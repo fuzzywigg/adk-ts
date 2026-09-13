@@ -158,4 +158,84 @@ describe("FileOperationsTool", () => {
 		const cwdTool = new FileOperationsTool();
 		expect(cwdTool.getDeclaration().name).toBe("file_operations");
 	});
+
+	it("writes empty content when content is omitted and supports custom encoding", async () => {
+		const writeResult = await tool.runAsync(
+			{ operation: "write", filepath: "empty.txt" },
+			makeContext(),
+		);
+		expect(writeResult.success).toBe(true);
+
+		const readResult = await tool.runAsync(
+			{ operation: "read", filepath: "empty.txt", encoding: "utf8" },
+			makeContext(),
+		);
+		expect(readResult).toEqual({ success: true, data: "" });
+
+		await tool.runAsync(
+			{
+				operation: "append",
+				filepath: "empty.txt",
+				content: "x",
+				encoding: "utf8",
+			},
+			makeContext(),
+		);
+		const reread = await tool.runAsync(
+			{ operation: "read", filepath: "empty.txt" },
+			makeContext(),
+		);
+		expect(reread.data).toBe("x");
+	});
+
+	it("allows absolute paths that remain inside the base directory", async () => {
+		const absolute = path.join(basePath, "abs.txt");
+		const writeResult = await tool.runAsync(
+			{ operation: "write", filepath: absolute, content: "abs" },
+			makeContext(),
+		);
+		expect(writeResult.success).toBe(true);
+
+		const readResult = await tool.runAsync(
+			{ operation: "read", filepath: absolute },
+			makeContext(),
+		);
+		expect(readResult.data).toBe("abs");
+	});
+
+	it("denies absolute paths outside the base directory", async () => {
+		const outside = path.join(os.tmpdir(), `adk-outside-${Date.now()}.txt`);
+		const result = await tool.runAsync(
+			{ operation: "read", filepath: outside },
+			makeContext(),
+		);
+		expect(result.success).toBe(false);
+		expect(result.error).toContain("Access denied");
+	});
+
+	it("does not treat a path-prefix sibling of basePath as inside the sandbox", async () => {
+		const siblingBase = `${basePath}-sibling`;
+		await fs.mkdir(siblingBase, { recursive: true });
+		try {
+			const siblingFile = path.join(siblingBase, "secret.txt");
+			await fs.writeFile(siblingFile, "nope");
+			const result = await tool.runAsync(
+				{ operation: "read", filepath: siblingFile },
+				makeContext(),
+			);
+			expect(result.success).toBe(false);
+			expect(result.error).toContain("Access denied");
+		} finally {
+			await fs.rm(siblingBase, { recursive: true, force: true });
+		}
+	});
+
+	it("returns failure when listing a missing directory", async () => {
+		const result = await tool.runAsync(
+			{ operation: "list", filepath: "missing-dir" },
+			makeContext(),
+		);
+		expect(result.success).toBe(false);
+		expect(result.error).toMatch(/Failed to list directory/i);
+	});
 });
