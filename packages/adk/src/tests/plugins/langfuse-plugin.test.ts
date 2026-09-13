@@ -373,4 +373,140 @@ describe("LangfusePlugin", () => {
 		expect(result).toBeUndefined();
 		expect(generationMock).not.toHaveBeenCalled();
 	});
+
+	it("nests child agent spans under the parent agent span", async () => {
+		const plugin = new LangfusePlugin({ publicKey: "pk", secretKey: "sk" });
+		const rootAgent = {
+			name: "root",
+			constructor: { name: "LlmAgent" },
+			parentAgent: undefined,
+			subAgents: [{ name: "worker" }],
+			description: "root agent",
+		};
+		const workerAgent = {
+			name: "worker",
+			constructor: { name: "LlmAgent" },
+			parentAgent: rootAgent,
+			subAgents: [],
+			description: "worker agent",
+		};
+		const inv = makeInvocation({ agent: rootAgent });
+		const rootCtx = makeCallbackContext(inv);
+		const workerCtx = {
+			...makeCallbackContext(inv),
+			agentName: "worker",
+		};
+
+		await plugin.beforeAgentCallback({
+			agent: rootAgent as any,
+			callbackContext: rootCtx,
+		});
+		expect(spanMock).toHaveBeenCalledWith(
+			expect.objectContaining({ name: "root" }),
+		);
+
+		const rootSpan = spanMock.mock.results[0]?.value;
+		await plugin.beforeAgentCallback({
+			agent: workerAgent as any,
+			callbackContext: workerCtx,
+		});
+		expect(rootSpan.span).toHaveBeenCalledWith(
+			expect.objectContaining({
+				name: "worker",
+				metadata: expect.objectContaining({ parentAgent: "root" }),
+			}),
+		);
+
+		await plugin.afterAgentCallback({
+			agent: workerAgent as any,
+			callbackContext: workerCtx,
+			result: { content: { role: "model", parts: [{ text: "child-done" }] } },
+		});
+		expect(eventMock).toHaveBeenCalledWith(
+			expect.objectContaining({ name: "worker_completed" }),
+		);
+	});
+
+	it("serializes fileData and inlineData through onEventCallback metadata", async () => {
+		const plugin = new LangfusePlugin({ publicKey: "pk", secretKey: "sk" });
+		const inv = makeInvocation();
+		await plugin.beforeRunCallback({ invocationContext: inv });
+		eventMock.mockClear();
+
+		const event = new Event({
+			invocationId: "inv-1",
+			author: "root",
+			partial: true,
+			content: {
+				role: "user",
+				parts: [
+					{
+						fileData: {
+							mimeType: "image/png",
+							fileUri: "gs://bucket/a.png",
+						},
+					},
+					{
+						inlineData: {
+							mimeType: "text/plain",
+							data: "YQ==",
+						},
+					},
+				],
+			},
+		});
+
+		await plugin.onEventCallback({ invocationContext: inv, event });
+		expect(eventMock).toHaveBeenCalledWith(
+			expect.objectContaining({
+				name: "root.event",
+				input: expect.objectContaining({
+					parts: expect.arrayContaining([
+						expect.objectContaining({
+							fileData: {
+								mimeType: "image/png",
+								fileUri: "gs://bucket/a.png",
+							},
+						}),
+						expect.objectContaining({
+							inlineData: { mimeType: "text/plain", dataSize: 4 },
+						}),
+					]),
+				}),
+			}),
+		);
+	});
+
+	it("afterModelCallback maps usage metadata onto the generation end", async () => {
+		const plugin = new LangfusePlugin({ publicKey: "pk", secretKey: "sk" });
+		const inv = makeInvocation();
+		const callbackContext = makeCallbackContext(inv);
+		await plugin.beforeAgentCallback({ agent: inv.agent, callbackContext });
+
+		const llmRequest = new LlmRequest({ model: "gemini-2.5-flash" });
+		await plugin.beforeModelCallback({ callbackContext, llmRequest });
+		await plugin.afterModelCallback({
+			callbackContext,
+			llmRequest,
+			llmResponse: new LlmResponse({
+				content: { role: "model", parts: [{ text: "ok" }] },
+				usageMetadata: {
+					promptTokenCount: 11,
+					candidatesTokenCount: 7,
+					totalTokenCount: 18,
+				},
+			}),
+		});
+
+		expect(endMock).toHaveBeenCalled();
+		expect(updateMock).toHaveBeenCalledWith(
+			expect.objectContaining({
+				usage: expect.objectContaining({
+					input: 11,
+					output: 7,
+					total: 18,
+				}),
+			}),
+		);
+	});
 });

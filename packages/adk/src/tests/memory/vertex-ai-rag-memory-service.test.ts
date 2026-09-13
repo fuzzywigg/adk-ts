@@ -1,10 +1,25 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+const { unlinkSync } = vi.hoisted(() => ({
+	unlinkSync: vi.fn(),
+}));
+
+vi.mock("node:fs", async (importOriginal) => {
+	const actual = await importOriginal<typeof import("node:fs")>();
+	return {
+		...actual,
+		unlinkSync,
+	};
+});
+
+import type { Event } from "../../events/event";
 import { VertexAiRagMemoryService } from "../../memory/vertex-ai-rag-memory-service";
 import type { Session } from "../../sessions/session";
-import type { Event } from "../../events/event";
 
 describe("VertexAiRagMemoryService", () => {
 	beforeEach(() => {
+		unlinkSync.mockReset();
+		unlinkSync.mockImplementation(() => undefined);
 		vi.spyOn(console, "log").mockImplementation(() => undefined);
 		vi.spyOn(console, "warn").mockImplementation(() => undefined);
 	});
@@ -80,6 +95,7 @@ describe("VertexAiRagMemoryService", () => {
 				display_name: "demo.alice.sess-9",
 			}),
 		);
+		expect(unlinkSync).toHaveBeenCalled();
 	});
 
 	it("searchMemory returns empty memories from the built-in mock retrieval", async () => {
@@ -100,5 +116,35 @@ describe("VertexAiRagMemoryService", () => {
 				rag_resources: [{ rag_corpus: "corpus-1" }],
 			}),
 		);
+	});
+
+	it("addSessionToMemory warns when temp file cleanup fails", async () => {
+		unlinkSync.mockImplementation(() => {
+			throw new Error("ENOENT");
+		});
+
+		const service = new VertexAiRagMemoryService("corpus-cleanup");
+		const session: Session = {
+			id: "sess-cleanup",
+			appName: "demo",
+			userId: "alice",
+			state: {},
+			events: [
+				{
+					author: "user",
+					timestamp: 1,
+					content: { parts: [{ text: "persist me" }] },
+				} as Event,
+			],
+			lastUpdateTime: 1,
+		};
+
+		await expect(service.addSessionToMemory(session)).resolves.toBeUndefined();
+		expect(console.warn).toHaveBeenCalledWith(
+			"Failed to delete temporary file:",
+			expect.any(String),
+			expect.any(Error),
+		);
+		expect(unlinkSync).toHaveBeenCalled();
 	});
 });

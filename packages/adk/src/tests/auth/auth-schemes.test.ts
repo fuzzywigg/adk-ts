@@ -22,6 +22,16 @@ describe("auth schemes", () => {
 		expect(scheme.description).toBe("API key header");
 	});
 
+	it("builds cookie and query API key schemes without description", () => {
+		const cookie = new ApiKeyScheme({ in: "cookie", name: "sid" });
+		const query = new ApiKeyScheme({ in: "query", name: "api_key" });
+
+		expect(cookie.in).toBe("cookie");
+		expect(cookie.description).toBeUndefined();
+		expect(query.in).toBe("query");
+		expect(query.name).toBe("api_key");
+	});
+
 	it("builds HTTP schemes", () => {
 		const scheme = new HttpScheme({
 			scheme: "bearer",
@@ -31,6 +41,19 @@ describe("auth schemes", () => {
 		expect(scheme.type).toBe(AuthSchemeType.HTTP);
 		expect(scheme.scheme).toBe("bearer");
 		expect(scheme.bearerFormat).toBe("JWT");
+	});
+
+	it("builds digest and other HTTP schemes with description", () => {
+		const digest = new HttpScheme({
+			scheme: "digest",
+			description: "Digest auth",
+		});
+		const other = new HttpScheme({ scheme: "other" });
+
+		expect(digest.scheme).toBe("digest");
+		expect(digest.description).toBe("Digest auth");
+		expect(digest.bearerFormat).toBeUndefined();
+		expect(other.scheme).toBe("other");
 	});
 
 	it("builds OAuth2 schemes with flows", () => {
@@ -50,6 +73,31 @@ describe("auth schemes", () => {
 		expect(scheme.description).toBe("OAuth2");
 	});
 
+	it("builds OAuth2 schemes with implicit, password, and clientCredentials flows", () => {
+		const scheme = new OAuth2Scheme({
+			flows: {
+				implicit: {
+					authorizationUrl: "https://example.com/implicit",
+					scopes: { openid: "OpenID" },
+				},
+				password: {
+					tokenUrl: "https://example.com/token",
+					scopes: { write: "Write" },
+				},
+				clientCredentials: {
+					tokenUrl: "https://example.com/token",
+					refreshUrl: "https://example.com/refresh",
+					scopes: { admin: "Admin" },
+				},
+			},
+		});
+
+		expect(scheme.flows.implicit?.authorizationUrl).toContain("implicit");
+		expect(scheme.flows.password?.scopes.write).toBe("Write");
+		expect(scheme.flows.clientCredentials?.refreshUrl).toContain("refresh");
+		expect(scheme.description).toBeUndefined();
+	});
+
 	it("builds OpenID Connect schemes", () => {
 		const scheme = new OpenIdConnectScheme({
 			openIdConnectUrl: "https://example.com/.well-known/openid",
@@ -57,6 +105,14 @@ describe("auth schemes", () => {
 
 		expect(scheme.type).toBe(AuthSchemeType.OPENID_CONNECT);
 		expect(scheme.openIdConnectUrl).toContain("openid");
+	});
+
+	it("stores OpenID Connect description when provided", () => {
+		const scheme = new OpenIdConnectScheme({
+			openIdConnectUrl: "https://example.com/.well-known/openid",
+			description: "OIDC",
+		});
+		expect(scheme.description).toBe("OIDC");
 	});
 });
 
