@@ -65,4 +65,17 @@ describe("CodeExecutorContext", () => {
 			},
 		]);
 	});
+
+	it("handles missing error-count map and appends multiple results", () => {
+		const state = State.create({}, {});
+		const context = new CodeExecutorContext(state);
+
+		context.resetErrorCount("never-seen");
+		expect(context.getErrorCount("never-seen")).toBe(0);
+		expect(context.getInputFiles()).toEqual([]);
+
+		context.updateCodeExecutionResult("inv-3", "a", "1", "");
+		context.updateCodeExecutionResult("inv-3", "b", "2", "err");
+		expect(state["_code_execution_results"]["inv-3"]).toHaveLength(2);
+	});
 });

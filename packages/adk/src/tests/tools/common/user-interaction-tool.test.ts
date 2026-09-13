@@ -55,4 +55,39 @@ describe("UserInteractionTool", () => {
 			userInput: "Alice",
 		});
 	});
+
+	it("omits choices and skipSummarization when unavailable", async () => {
+		const tool = new UserInteractionTool();
+		const promptUser = vi.fn().mockResolvedValue("ok");
+		const context = {
+			actions: { promptUser },
+		} as unknown as ToolContext;
+
+		const result = await tool.runAsync(
+			{ prompt: "Continue?", options: [] },
+			context,
+		);
+
+		expect(promptUser).toHaveBeenCalledWith({
+			prompt: "Continue?",
+			defaultValue: undefined,
+			options: undefined,
+		});
+		expect(result).toEqual({ success: true, userInput: "ok" });
+	});
+
+	it("returns success:false when promptUser throws", async () => {
+		const tool = new UserInteractionTool();
+		const context = {
+			actions: {
+				promptUser: vi.fn().mockRejectedValue(new Error("dialog cancelled")),
+				skipSummarization: vi.fn(),
+			},
+		} as unknown as ToolContext;
+
+		await expect(tool.runAsync({ prompt: "Name?" }, context)).resolves.toEqual({
+			success: false,
+			error: "dialog cancelled",
+		});
+	});
 });
