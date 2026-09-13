@@ -115,4 +115,56 @@ describe("BaseSessionService.appendEvent", () => {
 		expect(session.state.removeUndef).toBeUndefined();
 		expect(session.state.keep).toBe(true);
 	});
+
+	it("no-ops when actions or stateDelta are missing", async () => {
+		const service = new InMemoryStubSessionService();
+		const session = await service.createSession("app", "user", { a: 1 }, "s1");
+
+		await service.appendEvent(session, { author: "user" } as Event);
+		expect(session.state).toEqual({ a: 1 });
+		expect(session.events).toHaveLength(1);
+
+		await service.appendEvent(session, {
+			author: "agent",
+			actions: {},
+		} as Event);
+		expect(session.state).toEqual({ a: 1 });
+		expect(session.events).toHaveLength(2);
+
+		await service.appendEvent(session, {
+			author: "agent",
+			actions: { stateDelta: {} },
+		} as Event);
+		expect(session.state).toEqual({ a: 1 });
+		expect(session.events).toHaveLength(3);
+	});
+
+	it("ignores inherited enumerable keys that fail Object.hasOwn", async () => {
+		const service = new InMemoryStubSessionService();
+		const session = await service.createSession("app", "user", { a: 1 }, "s1");
+		const proto = { inherited: "skip-me" };
+		const stateDelta = Object.create(proto) as Record<string, any>;
+		stateDelta.a = 2;
+
+		await service.appendEvent(session, {
+			author: "agent",
+			actions: { stateDelta },
+		} as Event);
+
+		expect(session.state.a).toBe(2);
+		expect(session.state.inherited).toBeUndefined();
+	});
+
+	it("wires stub CRUD list/get/delete for coverage of abstract overrides", async () => {
+		const service = new InMemoryStubSessionService();
+		await service.createSession("app", "user", { z: 9 }, "s1");
+		await service.createSession("app", "other", {}, "s2");
+
+		expect((await service.getSession("app", "user", "s1"))?.state.z).toBe(9);
+		expect((await service.listSessions("app", "user")).sessions).toHaveLength(
+			1,
+		);
+		await service.deleteSession("app", "user", "s1");
+		expect(await service.getSession("app", "user", "s1")).toBeUndefined();
+	});
 });

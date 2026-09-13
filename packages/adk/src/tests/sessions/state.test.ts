@@ -68,4 +68,42 @@ describe("State", () => {
 		expect(state.hasDelta()).toBe(true);
 		expect(state.toDict()).toEqual({ keep: 2, added: 3 });
 	});
+
+	it("reads delta-only keys and reports has for them", () => {
+		const state = State.create({}, { pending: true });
+		expect(state.has("pending")).toBe(true);
+		expect(state.get("pending")).toBe(true);
+		expect(state["pending"]).toBe(true);
+		expect("pending" in state).toBe(true);
+		expect(state.toDict()).toEqual({ pending: true });
+	});
+
+	it("supports APP_PREFIX keys via set and proxy", () => {
+		const key = `${State.APP_PREFIX}feature`;
+		const state = State.create({}, {});
+		state.set(key, "on");
+		expect(state.get(key)).toBe("on");
+		state[`${State.USER_PREFIX}role`] = "admin";
+		expect(state.get(`${State.USER_PREFIX}role`)).toBe("admin");
+		expect(state.hasDelta()).toBe(true);
+		expect(state.toDict()).toEqual({
+			[key]: "on",
+			[`${State.USER_PREFIX}role`]: "admin",
+		});
+	});
+
+	it("get returns undefined default when key missing and no fallback", () => {
+		const state = State.create({ a: 1 }, {});
+		expect(state.get("missing")).toBeUndefined();
+		expect(state.get("a")).toBe(1);
+	});
+
+	it("exposes methods through the proxy without treating them as state keys", () => {
+		const state = State.create({ a: 1 }, {});
+		expect(typeof state.set).toBe("function");
+		expect(typeof state.hasDelta).toBe("function");
+		expect(typeof state.toDict).toBe("function");
+		expect("set" in state).toBe(true);
+		expect(state.has("set")).toBe(false);
+	});
 });
