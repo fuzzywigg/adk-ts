@@ -172,7 +172,9 @@ export class VertexAiSessionService extends BaseSessionService {
 
 			if (listEventsApiResponse.sessionEvents) {
 				session.events.push(
-					...listEventsApiResponse.sessionEvents.map(this.fromApiEvent),
+					...listEventsApiResponse.sessionEvents.map(
+						(apiEvent: Record<string, any>) => this.fromApiEvent(apiEvent),
+					),
 				);
 			}
 
@@ -187,7 +189,9 @@ export class VertexAiSessionService extends BaseSessionService {
 
 				if (listEventsApiResponse.sessionEvents) {
 					session.events.push(
-						...listEventsApiResponse.sessionEvents.map(this.fromApiEvent),
+						...listEventsApiResponse.sessionEvents.map(
+							(apiEvent: Record<string, any>) => this.fromApiEvent(apiEvent),
+						),
 					);
 				}
 			}
