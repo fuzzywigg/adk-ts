@@ -1,5 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { InvocationContext } from "../../agents/invocation-context";
+import { AuthConfig } from "../../auth/auth-config";
+import { AuthHandler } from "../../auth/auth-handler";
 import { requestProcessor } from "../../auth/auth-preprocessor";
 import { Event } from "../../events/event";
 import { REQUEST_EUC_FUNCTION_CALL_NAME } from "../../flows/llm-flows/functions";
@@ -550,6 +552,222 @@ describe("auth requestProcessor", () => {
 			originalCall,
 			{ secure_api: tool },
 			new Set(["tool-mix"]),
+		);
+		warn.mockRestore();
+	});
+});
+
+describe("auth requestProcessor.parseAndStoreAuthResponse", () => {
+	function callStore(
+		authHandler: AuthHandler,
+		invocationContext: InvocationContext,
+	): void {
+		(requestProcessor as any).parseAndStoreAuthResponse(
+			authHandler,
+			invocationContext,
+		);
+	}
+
+	it("prefixes non-temp credentialKey values with temp:", () => {
+		const state: Record<string, unknown> = {};
+		const authHandler = new AuthHandler({
+			authConfig: new AuthConfig({
+				authScheme: { type: "apiKey" } as any,
+				context: { credentialKey: "my-cred" },
+			}),
+			credential: { apiKey: "secret" } as any,
+		});
+
+		callStore(authHandler, baseCtx({ state }));
+
+		expect(state["temp:my-cred"]).toEqual({ apiKey: "secret" });
+		expect(state["my-cred"]).toBeUndefined();
+	});
+
+	it("keeps credentialKey values that already start with temp:", () => {
+		const state: Record<string, unknown> = {};
+		const authHandler = new AuthHandler({
+			authConfig: new AuthConfig({
+				authScheme: { type: "apiKey" } as any,
+				context: { credentialKey: "temp:already" },
+			}),
+			credential: { token: "abc" } as any,
+		});
+
+		callStore(authHandler, baseCtx({ state }));
+
+		expect(state["temp:already"]).toEqual({ token: "abc" });
+		expect(Object.keys(state)).toEqual(["temp:already"]);
+	});
+
+	it("defaults credentialKey to a temp: timestamp when context omits it", () => {
+		const state: Record<string, unknown> = {};
+		const authHandler = new AuthHandler({
+			authConfig: new AuthConfig({
+				authScheme: { type: "apiKey" } as any,
+			}),
+			credential: { apiKey: "k" } as any,
+		});
+
+		const before = Date.now();
+		callStore(authHandler, baseCtx({ state }));
+		const after = Date.now();
+
+		const keys = Object.keys(state);
+		expect(keys).toHaveLength(1);
+		expect(keys[0].startsWith("temp:")).toBe(true);
+		const ts = Number(keys[0].slice("temp:".length));
+		expect(ts).toBeGreaterThanOrEqual(before);
+		expect(ts).toBeLessThanOrEqual(after);
+		expect(state[keys[0]]).toEqual({ apiKey: "k" });
+	});
+
+	it("stores oauth2 credentials without throwing", () => {
+		const state: Record<string, unknown> = {};
+		const authHandler = new AuthHandler({
+			authConfig: new AuthConfig({
+				authScheme: { type: "oauth2" } as any,
+				context: { credentialKey: "temp:oauth" },
+			}),
+			credential: { accessToken: "tok" } as any,
+		});
+
+		expect(() => callStore(authHandler, baseCtx({ state }))).not.toThrow();
+		expect(state["temp:oauth"]).toEqual({ accessToken: "tok" });
+	});
+
+	it("stores openIdConnect credentials without throwing", () => {
+		const state: Record<string, unknown> = {};
+		const authHandler = new AuthHandler({
+			authConfig: new AuthConfig({
+				authScheme: { type: "openIdConnect" } as any,
+				context: { credentialKey: "oidc-cred" },
+			}),
+			credential: { idToken: "idt" } as any,
+		});
+
+		expect(() => callStore(authHandler, baseCtx({ state }))).not.toThrow();
+		expect(state["temp:oidc-cred"]).toEqual({ idToken: "idt" });
+	});
+
+	it("warns when session state assignment throws", () => {
+		const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+		const state: Record<string, unknown> = {};
+		Object.defineProperty(state, "temp:boom", {
+			configurable: true,
+			enumerable: true,
+			get() {
+				return undefined;
+			},
+			set() {
+				throw new Error("state write failed");
+			},
+		});
+		const authHandler = new AuthHandler({
+			authConfig: new AuthConfig({
+				authScheme: { type: "apiKey" } as any,
+				context: { credentialKey: "temp:boom" },
+			}),
+			credential: { apiKey: "x" } as any,
+		});
+
+		expect(() => callStore(authHandler, baseCtx({ state }))).not.toThrow();
+		expect(warn).toHaveBeenCalledWith(
+			"Failed to store auth response:",
+			expect.any(Error),
+		);
+		warn.mockRestore();
+	});
+
+	it("resumes only matching tool ids when EUC call event mixes other functionCalls", async () => {
+		const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+		handleFunctionCallsAsyncMock.mockResolvedValue(null);
+
+		const originalCall = new Event({
+			author: "auth-agent",
+			content: {
+				role: "model",
+				parts: [
+					{
+						functionCall: {
+							id: "tool-keep",
+							name: "secure_api",
+							args: {},
+						},
+					},
+					{
+						functionCall: {
+							id: "tool-other",
+							name: "other_api",
+							args: {},
+						},
+					},
+				],
+			},
+		});
+		const eucCall = new Event({
+			author: "auth-agent",
+			content: {
+				role: "model",
+				parts: [
+					{
+						functionCall: {
+							id: "euc-partial",
+							name: REQUEST_EUC_FUNCTION_CALL_NAME,
+							args: JSON.stringify({
+								function_call_id: "tool-keep",
+							}) as any,
+						},
+					},
+					{
+						functionCall: {
+							id: "unrelated-fc",
+							name: "noop",
+							args: {},
+						},
+					},
+				],
+			},
+		});
+		const eucResponse = new Event({
+			author: "user",
+			content: {
+				role: "user",
+				parts: [
+					{
+						functionResponse: {
+							id: "euc-partial",
+							name: REQUEST_EUC_FUNCTION_CALL_NAME,
+							response: JSON.stringify({
+								authScheme: { type: "apiKey" },
+								rawAuthCredential: { apiKey: "k" },
+							}),
+						},
+					},
+				],
+			},
+		});
+
+		const tool = { name: "secure_api" };
+		const events = await collect(
+			requestProcessor.runAsync(
+				baseCtx({
+					agent: {
+						name: "auth-agent",
+						canonicalTools: async () => [tool],
+					},
+					events: [originalCall, eucCall, eucResponse],
+				}),
+				new LlmRequest(),
+			),
+		);
+
+		expect(events).toEqual([]);
+		expect(handleFunctionCallsAsyncMock).toHaveBeenCalledWith(
+			expect.anything(),
+			originalCall,
+			{ secure_api: tool },
+			new Set(["tool-keep"]),
 		);
 		warn.mockRestore();
 	});
