@@ -157,4 +157,50 @@ describe("InMemoryArtifactService", () => {
 			service.loadArtifact({ ...base, filename: "bad-ref.txt" }),
 		).rejects.toThrow(/Invalid artifact reference URI/);
 	});
+
+	it("supports multi-version saves and out-of-range loads", async () => {
+		const service = new InMemoryArtifactService();
+
+		for (let i = 0; i < 3; i++) {
+			const version = await service.saveArtifact({
+				...base,
+				filename: "versions.bin",
+				artifact: { text: `v${i}` },
+			});
+			expect(version).toBe(i);
+		}
+
+		expect(
+			await service.listVersions({ ...base, filename: "versions.bin" }),
+		).toEqual([0, 1, 2]);
+		expect(
+			await service.loadArtifact({
+				...base,
+				filename: "versions.bin",
+				version: 1,
+			}),
+		).toEqual({ text: "v1" });
+		expect(
+			await service.loadArtifact({
+				...base,
+				filename: "versions.bin",
+				version: -2,
+			}),
+		).toEqual({ text: "v1" });
+		expect(
+			await service.loadArtifact({
+				...base,
+				filename: "versions.bin",
+				version: -4,
+			}),
+		).toBeNull();
+	});
+
+	it("deleteArtifact is a no-op for missing keys", async () => {
+		const service = new InMemoryArtifactService();
+		await expect(
+			service.deleteArtifact({ ...base, filename: "ghost.txt" }),
+		).resolves.toBeUndefined();
+		expect(await service.listArtifactKeys(base)).toEqual([]);
+	});
 });
