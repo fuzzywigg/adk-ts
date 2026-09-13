@@ -179,4 +179,81 @@ describe("DatabaseSessionService (sqlite :memory:)", () => {
 		await service.createSession("app", "user-a", {}, "s1");
 		expect((await service.listSessions("app", "user-b")).sessions).toEqual([]);
 	});
+
+	it("limits getSession events with numRecentEvents across multiple appends", async () => {
+		const session = await service.createSession("app", "user", {}, "s-ts");
+
+		await service.appendEvent(
+			session,
+			new Event({
+				author: "user",
+				content: { parts: [{ text: "one" }] },
+			}),
+		);
+		await service.appendEvent(
+			session,
+			new Event({
+				author: "agent",
+				content: { parts: [{ text: "two" }] },
+			}),
+		);
+		await service.appendEvent(
+			session,
+			new Event({
+				author: "user",
+				content: { parts: [{ text: "three" }] },
+			}),
+		);
+
+		const recent = await service.getSession("app", "user", "s-ts", {
+			numRecentEvents: 2,
+		});
+		expect(recent?.events).toHaveLength(2);
+		const texts = recent?.events.map((e) => e.content?.parts?.[0]?.text) ?? [];
+		expect(
+			texts.every((t) => ["one", "two", "three"].includes(t as string)),
+		).toBe(true);
+	});
+
+	it("appends events without stateDelta and round-trips functionResponse", async () => {
+		const session = await service.createSession("app", "user", {}, "s-fr");
+		const event = new Event({
+			author: "tool",
+			content: {
+				role: "user",
+				parts: [
+					{
+						functionResponse: {
+							id: "call-1",
+							name: "lookup",
+							response: { ok: true },
+						},
+					},
+				],
+			},
+		});
+
+		await service.appendEvent(session, event);
+		const fetched = await service.getSession("app", "user", "s-fr");
+		expect(fetched?.events).toHaveLength(1);
+		expect(fetched?.events[0].content?.parts?.[0]?.functionResponse?.name).toBe(
+			"lookup",
+		);
+		expect(fetched?.state).toEqual({});
+	});
+
+	it("update and delete are no-ops for missing sessions", async () => {
+		await service.updateSession({
+			id: "ghost",
+			appName: "app",
+			userId: "user",
+			state: { a: 1 },
+			events: [],
+			lastUpdateTime: Date.now() / 1000,
+		} as any);
+		await expect(
+			service.deleteSession("app", "user", "ghost"),
+		).resolves.toBeUndefined();
+		expect(await service.getSession("app", "user", "ghost")).toBeUndefined();
+	});
 });

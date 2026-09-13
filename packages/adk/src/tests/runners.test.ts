@@ -1,7 +1,15 @@
-import { describe, it, expect, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { LlmAgent } from "../agents/llm-agent";
+import { RunConfig } from "../agents/run-config";
 import { Event } from "../events/event";
+import { EventActions } from "../events/event-actions";
+import { InMemoryMemoryService } from "../memory/in-memory-memory-service";
+import {
+	_findFunctionCallEventIfLastEventIsFunctionResponse,
+	Runner,
+} from "../runners";
+import { InMemorySessionService } from "../sessions/in-memory-session-service";
 import type { Session } from "../sessions/session";
-import { _findFunctionCallEventIfLastEventIsFunctionResponse } from "../runners";
 
 const createMockSession = (events: (Event | null)[] | null): Session =>
 	({
@@ -137,5 +145,195 @@ describe("_findFunctionCallEventIfLastEventIsFunctionResponse", () => {
 		const session = createMockSession([functionCallEvent, responseEvent]);
 		const result = _findFunctionCallEventIfLastEventIsFunctionResponse(session);
 		expect(result).toBe(functionCallEvent);
+	});
+});
+
+describe("Runner.runAsync", () => {
+	let sessionService: InMemorySessionService;
+	let agent: LlmAgent;
+	let runner: Runner;
+
+	beforeEach(() => {
+		sessionService = new InMemorySessionService();
+		agent = new LlmAgent({
+			name: "root_agent",
+			model: "gemini-2.0-flash-exp",
+			description: "stub",
+		});
+		runner = new Runner({
+			appName: "runner-app",
+			agent,
+			sessionService,
+			memoryService: new InMemoryMemoryService(),
+		});
+	});
+
+	it("throws when the session does not exist", async () => {
+		const gen = runner.runAsync({
+			userId: "u1",
+			sessionId: "missing",
+			newMessage: { role: "user", parts: [{ text: "hi" }] },
+		});
+		await expect(gen.next()).rejects.toThrow(/Session not found: missing/);
+	});
+
+	it("runs the root agent and appends non-partial events", async () => {
+		await sessionService.createSession("runner-app", "u1", {}, "s1");
+		const agentEvent = new Event({
+			author: "root_agent",
+			content: { role: "model", parts: [{ text: "hello" }] },
+		});
+		vi.spyOn(agent, "runAsync").mockImplementation(async function* () {
+			yield agentEvent;
+		});
+
+		const events: Event[] = [];
+		for await (const event of runner.runAsync({
+			userId: "u1",
+			sessionId: "s1",
+			newMessage: { role: "user", parts: [{ text: "ping" }] },
+		})) {
+			events.push(event);
+		}
+
+		expect(events).toHaveLength(1);
+		expect(events[0].content?.parts?.[0]?.text).toBe("hello");
+
+		const session = await sessionService.getSession("runner-app", "u1", "s1");
+		expect(session?.events.some((e) => e.author === "user")).toBe(true);
+		expect(session?.events.some((e) => e.author === "root_agent")).toBe(true);
+	});
+
+	it("skips persisting partial agent events", async () => {
+		await sessionService.createSession("runner-app", "u1", {}, "s2");
+		const partial = new Event({
+			author: "root_agent",
+			partial: true,
+			content: { role: "model", parts: [{ text: "stream" }] },
+		});
+		const final = new Event({
+			author: "root_agent",
+			content: { role: "model", parts: [{ text: "done" }] },
+		});
+		vi.spyOn(agent, "runAsync").mockImplementation(async function* () {
+			yield partial;
+			yield final;
+		});
+
+		const events: Event[] = [];
+		for await (const event of runner.runAsync({
+			userId: "u1",
+			sessionId: "s2",
+			newMessage: { role: "user", parts: [{ text: "go" }] },
+		})) {
+			events.push(event);
+		}
+
+		expect(events).toHaveLength(2);
+		const session = await sessionService.getSession("runner-app", "u1", "s2");
+		expect(
+			session?.events.filter((e) => e.author === "root_agent"),
+		).toHaveLength(1);
+		expect(
+			session?.events.find((e) => e.author === "root_agent")?.content
+				?.parts?.[0]?.text,
+		).toBe("done");
+	});
+
+	it("routes to a transferable sub-agent based on prior non-user events", async () => {
+		const child = new LlmAgent({
+			name: "child_agent",
+			model: "gemini-2.0-flash-exp",
+		});
+		agent = new LlmAgent({
+			name: "root_agent",
+			model: "gemini-2.0-flash-exp",
+			subAgents: [child],
+		});
+		runner = new Runner({
+			appName: "runner-app",
+			agent,
+			sessionService,
+		});
+
+		const session = await sessionService.createSession(
+			"runner-app",
+			"u1",
+			{},
+			"s3",
+		);
+		await sessionService.appendEvent(
+			session,
+			new Event({
+				author: "child_agent",
+				content: { role: "model", parts: [{ text: "prior" }] },
+				actions: new EventActions({ transferToAgent: "child_agent" }),
+			}),
+		);
+
+		const childSpy = vi
+			.spyOn(child, "runAsync")
+			.mockImplementation(async function* () {
+				yield new Event({
+					author: "child_agent",
+					content: { role: "model", parts: [{ text: "from-child" }] },
+				});
+			});
+		vi.spyOn(agent, "runAsync").mockImplementation(async function* () {
+			yield new Event({
+				author: "root_agent",
+				content: { role: "model", parts: [{ text: "from-root" }] },
+			});
+		});
+
+		const events: Event[] = [];
+		for await (const event of runner.runAsync({
+			userId: "u1",
+			sessionId: "s3",
+			newMessage: { role: "user", parts: [{ text: "continue" }] },
+		})) {
+			events.push(event);
+		}
+
+		expect(childSpy).toHaveBeenCalled();
+		expect(events[0].author).toBe("child_agent");
+	});
+
+	it("falls back to root when compaction config has no summarizer", async () => {
+		await sessionService.createSession("runner-app", "u1", {}, "s4");
+		runner = new Runner({
+			appName: "runner-app",
+			agent,
+			sessionService,
+			eventsCompactionConfig: {
+				compactionInterval: 10,
+				overlapSize: 1,
+			},
+		});
+		vi.spyOn(agent, "runAsync").mockImplementation(async function* () {
+			yield new Event({
+				author: "root_agent",
+				content: { role: "model", parts: [{ text: "ok" }] },
+			});
+		});
+
+		const events: Event[] = [];
+		for await (const event of runner.runAsync({
+			userId: "u1",
+			sessionId: "s4",
+			newMessage: { role: "user", parts: [{ text: "hi" }] },
+			runConfig: new RunConfig(),
+		})) {
+			events.push(event);
+		}
+		expect(events).toHaveLength(1);
+	});
+
+	it("close delegates to the plugin manager", async () => {
+		const closeSpy = vi
+			.spyOn(runner.pluginManager, "close")
+			.mockResolvedValue(undefined);
+		await runner.close();
+		expect(closeSpy).toHaveBeenCalledTimes(1);
 	});
 });

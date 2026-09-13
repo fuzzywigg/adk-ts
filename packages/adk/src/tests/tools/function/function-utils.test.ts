@@ -119,4 +119,33 @@ function lookup(id, toolContext) { return id; }`,
 			properties: {},
 		});
 	});
+
+	it("maps JSDoc array/object/bigint/null/boolean types", () => {
+		const shaped = withSource(
+			(
+				_items: unknown,
+				_meta: unknown,
+				_flag: unknown,
+				_big: unknown,
+				_n: unknown,
+			) => ({}),
+			`/**
+ * Shapes values
+ * @param {array} items List of values
+ * @param {object} meta Metadata bag
+ * @param {boolean} flag Toggle
+ * @param {bigint} big Large integer
+ * @param {null} n Nullable marker
+ */
+function shaped(items, meta, flag, big, n) { return {}; }`,
+		);
+		Object.defineProperty(shaped, "name", { value: "shaped" });
+
+		const declaration = buildFunctionDeclaration(shaped);
+		expect(declaration.parameters?.properties?.items?.type).toBe("array");
+		expect(declaration.parameters?.properties?.meta?.type).toBe("object");
+		expect(declaration.parameters?.properties?.flag?.type).toBe("boolean");
+		expect(declaration.parameters?.properties?.big?.type).toBe("number");
+		expect(declaration.parameters?.properties?.n?.type).toBe("null");
+	});
 });

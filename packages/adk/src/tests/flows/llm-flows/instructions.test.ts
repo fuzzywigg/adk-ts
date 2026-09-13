@@ -87,6 +87,49 @@ describe("instructions requestProcessor", () => {
 		expect(llmRequest.getSystemInstructionText()).toContain("raw only");
 	});
 
+	it("bypasses state injection for global instructions when requested", async () => {
+		const rootAgent = {
+			canonicalModel: "gpt-4o",
+			globalInstruction: "raw global",
+			canonicalGlobalInstruction: async () =>
+				["raw global", true] as [string, boolean],
+		};
+		const agent = {
+			name: "child",
+			canonicalModel: "gpt-4o",
+			rootAgent,
+			canonicalInstruction: async () => ["", false] as [string, boolean],
+		};
+
+		const llmRequest = new LlmRequest();
+		await drain(
+			requestProcessor.runAsync(
+				{ agent } as unknown as InvocationContext,
+				llmRequest,
+			),
+		);
+
+		expect(injectSessionState).not.toHaveBeenCalled();
+		expect(llmRequest.getSystemInstructionText()).toContain("raw global");
+	});
+
+	it("is a no-op when agent has neither instruction nor outputSchema", async () => {
+		const agent = {
+			name: "empty",
+			canonicalModel: "gpt-4o",
+			rootAgent: { name: "root" },
+		};
+		const llmRequest = new LlmRequest();
+		await drain(
+			requestProcessor.runAsync(
+				{ agent } as unknown as InvocationContext,
+				llmRequest,
+			),
+		);
+		expect(llmRequest.getSystemInstructionText()).toBeUndefined();
+		expect(injectSessionState).not.toHaveBeenCalled();
+	});
+
 	it("appends JSON schema guidance when outputSchema is set", async () => {
 		const schema = z.object({ answer: z.string() });
 		const agent = {

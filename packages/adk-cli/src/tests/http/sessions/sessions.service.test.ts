@@ -268,4 +268,129 @@ describe("SessionsService", () => {
 			/Session missing not found/,
 		);
 	});
+
+	it("deletes sessions and surfaces deleteAgentSession errors", async () => {
+		const sessionService = new InMemorySessionService();
+		const loaded = makeLoaded({ sessionId: "del-1" });
+		const agentManager = {
+			getLoadedAgents: vi.fn(() => new Map([["demo", loaded]])),
+			startAgent: vi.fn(),
+			getInitialStateForAgent: vi.fn(),
+		};
+		const hotReload = { broadcastState: vi.fn() };
+		const service = new SessionsService(
+			agentManager as never,
+			sessionService,
+			true,
+			hotReload as never,
+		);
+
+		await sessionService.createSession(
+			loaded.appName,
+			loaded.userId,
+			{},
+			"del-1",
+		);
+		await expect(service.deleteSession("demo", "del-1")).resolves.toEqual({
+			success: true,
+		});
+		expect(
+			await sessionService.getSession(loaded.appName, loaded.userId, "del-1"),
+		).toBeUndefined();
+
+		const failing = new SessionsService(
+			agentManager as never,
+			{
+				deleteSession: vi.fn().mockRejectedValue(new Error("db down")),
+			} as never,
+			true,
+		);
+		await expect(failing.deleteSession("demo", "x")).rejects.toThrow(/db down/);
+	});
+
+	it("returns empty state/events fallbacks when session lookups fail", async () => {
+		const loaded = makeLoaded();
+		const service = new SessionsService(
+			{ getLoadedAgents: vi.fn(), startAgent: vi.fn() } as never,
+			{
+				getSession: vi.fn().mockRejectedValue(new Error("boom")),
+			} as never,
+			true,
+		);
+
+		const state = await service.getSessionState(loaded, "missing");
+		expect(state.sessionState).toEqual({});
+		expect(state.metadata.totalKeys).toBe(0);
+
+		const events = await service.getSessionEvents(loaded, "missing");
+		expect(events).toEqual({ events: [], totalCount: 0 });
+	});
+
+	it("treats codeExecutionResult parts as non-final for plain events", async () => {
+		const sessionService = {
+			getSession: vi.fn().mockResolvedValue({
+				events: [
+					{
+						id: "code-1",
+						author: "demo",
+						timestamp: Date.now(),
+						content: {
+							role: "model",
+							parts: [{ codeExecutionResult: { outcome: "OK" } }],
+						},
+					},
+				],
+			}),
+		};
+		const service = new SessionsService(
+			{ getLoadedAgents: vi.fn(), startAgent: vi.fn() } as never,
+			sessionService as never,
+			true,
+		);
+
+		const events = await service.getSessionEvents(makeLoaded(), "s1");
+		expect(events.events[0].isFinalResponse).toBe(false);
+	});
+
+	it("creates sessions preferring request state over agent initial state", async () => {
+		const sessionService = new InMemorySessionService();
+		const loaded = makeLoaded();
+		const agentManager = {
+			getLoadedAgents: vi.fn(() => new Map([["demo", loaded]])),
+			startAgent: vi.fn(),
+			getInitialStateForAgent: vi.fn(() => ({ theme: "dark", keep: true })),
+		};
+		const service = new SessionsService(
+			agentManager as never,
+			sessionService,
+			true,
+		);
+
+		const created = await service.createSession("demo", {
+			state: { theme: "light", extra: 1 },
+		});
+		expect("error" in created).toBe(false);
+		if (!("error" in created)) {
+			expect(created.state).toEqual({ theme: "light", extra: 1 });
+			expect(agentManager.getInitialStateForAgent).not.toHaveBeenCalled();
+		}
+	});
+
+	it("rejects updateSessionState when the session is missing", async () => {
+		const sessionService = new InMemorySessionService();
+		const loaded = makeLoaded({ sessionId: "gone" });
+		const service = new SessionsService(
+			{
+				getLoadedAgents: vi.fn(() => new Map([["demo", loaded]])),
+				startAgent: vi.fn(),
+				getInitialStateForAgent: vi.fn(),
+			} as never,
+			sessionService,
+			true,
+		);
+
+		await expect(
+			service.updateSessionState(loaded, "gone", "a.b", 1),
+		).rejects.toThrow(/Session not found/);
+	});
 });

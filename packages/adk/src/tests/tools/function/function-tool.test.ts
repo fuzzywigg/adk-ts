@@ -127,4 +127,57 @@ describe("FunctionTool", () => {
 		expect(missing.error).toContain("value");
 		expect(missing.error).not.toContain("context");
 	});
+
+	it("coerces falsey boolean strings and leaves null/undefined untouched", async () => {
+		function inspect(enabled: boolean, maybe: string | null) {
+			return { enabled, maybe };
+		}
+
+		const tool = new FunctionTool(inspect, {
+			description: "Coercion edges",
+			parameterTypes: {
+				enabled: "boolean" as any,
+				maybe: "string" as any,
+			},
+		});
+
+		await expect(
+			tool.runAsync({ enabled: "FALSE", maybe: null } as any, makeContext()),
+		).resolves.toEqual({ enabled: false, maybe: null });
+
+		await expect(
+			tool.runAsync({ enabled: true, maybe: undefined } as any, makeContext()),
+		).resolves.toEqual({ enabled: true, maybe: undefined });
+	});
+
+	it("honors isLongRunning and returns {} for sync falsy results", async () => {
+		function noop() {
+			return undefined;
+		}
+
+		const tool = new FunctionTool(noop, {
+			name: "noop_tool",
+			description: "Sync noop",
+			isLongRunning: true,
+		});
+
+		expect(tool.name).toBe("noop_tool");
+		expect(tool.isLongRunning).toBe(true);
+		await expect(tool.runAsync({}, makeContext())).resolves.toEqual({});
+	});
+
+	it("stringifies non-string values for string parameters", async () => {
+		function label(name: string) {
+			return { name };
+		}
+
+		const tool = new FunctionTool(label, {
+			description: "Stringify input",
+			parameterTypes: { name: "string" as any },
+		});
+
+		await expect(
+			tool.runAsync({ name: 42 } as any, makeContext()),
+		).resolves.toEqual({ name: "42" });
+	});
 });

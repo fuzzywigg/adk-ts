@@ -77,4 +77,37 @@ describe("isRebuildNeeded", () => {
 			isRebuildNeeded(outFile, sourceFile, tsconfigPath, undefined, true),
 		).toBe(true);
 	});
+
+	it("returns true when tsconfig is newer than output", () => {
+		const root = mkdtempSync(join(tmpdir(), "adk-cli-build-tsconfig-"));
+		const outFile = join(root, "out.cjs");
+		const sourceFile = join(root, "src.ts");
+		const tsconfigPath = join(root, "tsconfig.json");
+
+		writeFileSync(outFile, "module.exports = {}");
+		writeFileSync(sourceFile, "export {}");
+		writeFileSync(tsconfigPath, "{}");
+
+		const now = Date.now() / 1000;
+		utimesSync(outFile, now - 20, now - 20);
+		utimesSync(sourceFile, now - 30, now - 30);
+		utimesSync(tsconfigPath, now - 5, now - 5);
+
+		expect(isRebuildNeeded(outFile, sourceFile, tsconfigPath)).toBe(true);
+	});
+
+	it("keeps allowlisted scoped packages external via prefix", () => {
+		const plugin = createExternalizePlugin([], ["@iqai/"]);
+		const onResolve = vi.fn();
+		plugin.setup({ onResolve } as never);
+		const handler = onResolve.mock.calls[0][1];
+		expect(handler({ path: "@iqai/adk" })).toEqual({
+			path: "@iqai/adk",
+			external: true,
+		});
+		expect(handler({ path: "lodash" })).toEqual({
+			path: "lodash",
+			external: true,
+		});
+	});
 });
