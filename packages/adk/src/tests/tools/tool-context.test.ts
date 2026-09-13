@@ -73,4 +73,61 @@ describe("ToolContext", () => {
 			userId: "user-1",
 		});
 	});
+
+	it("defaults functionCallId and creates default EventActions when omitted", () => {
+		const context = new ToolContext(makeInvocationContext());
+		expect(context.functionCallId).toBeUndefined();
+		expect(context.actions).toBeDefined();
+		expect(context.actions).toBe(context.eventActions);
+	});
+
+	it("forwards empty artifact lists and memory hits unchanged", async () => {
+		const listArtifactKeys = vi.fn().mockResolvedValue([]);
+		const searchMemory = vi
+			.fn()
+			.mockResolvedValue({ memories: [{ text: "hit" }] });
+		const context = new ToolContext(
+			makeInvocationContext({
+				artifactService: { listArtifactKeys } as any,
+				memoryService: { searchMemory } as any,
+			}),
+		);
+
+		await expect(context.listArtifacts()).resolves.toEqual([]);
+		await expect(context.searchMemory("q")).resolves.toEqual({
+			memories: [{ text: "hit" }],
+		});
+	});
+
+	it("propagates artifact and memory service failures", async () => {
+		const context = new ToolContext(
+			makeInvocationContext({
+				artifactService: {
+					listArtifactKeys: vi.fn().mockRejectedValue(new Error("gcs down")),
+				} as any,
+				memoryService: {
+					searchMemory: vi.fn().mockRejectedValue(new Error("rag down")),
+				} as any,
+			}),
+		);
+
+		await expect(context.listArtifacts()).rejects.toThrow("gcs down");
+		await expect(context.searchMemory("q")).rejects.toThrow("rag down");
+	});
+
+	it("uses session.id from the invocation context for listArtifacts", async () => {
+		const listArtifactKeys = vi.fn().mockResolvedValue(["x"]);
+		const context = new ToolContext(
+			makeInvocationContext({
+				session: { id: "custom-session", state: {} } as any,
+				artifactService: { listArtifactKeys } as any,
+			}),
+		);
+		await context.listArtifacts();
+		expect(listArtifactKeys).toHaveBeenCalledWith({
+			appName: "app",
+			userId: "user-1",
+			sessionId: "custom-session",
+		});
+	});
 });

@@ -42,6 +42,69 @@ describe("parseArtifactUri", () => {
 			expect(parseArtifactUri(uri)).toBeNull();
 		}
 	});
+
+	it("returns null for empty, non-artifact, and malformed path shapes", () => {
+		expect(parseArtifactUri("")).toBeNull();
+		expect(parseArtifactUri("artifact://")).toBeNull();
+		expect(
+			parseArtifactUri("artifact:/apps/a/users/u/artifacts/f/versions/1"),
+		).toBeNull();
+		expect(
+			parseArtifactUri(
+				"artifact://apps/a/users/u/sessions/s/artifacts/nested/path/versions/1",
+			),
+		).toBeNull();
+		expect(
+			parseArtifactUri(
+				"artifact://apps/a/users/u/artifacts/f/versions/1/extra",
+			),
+		).toBeNull();
+		expect(
+			parseArtifactUri(
+				"artifact://apps/a/users/u/sessions/s/artifacts/f/versions/not-a-number",
+			),
+		).toBeNull();
+	});
+
+	it("parses version 0 and round-trips with getArtifactUri", () => {
+		const sessionUri = getArtifactUri({
+			appName: "demo",
+			userId: "u1",
+			sessionId: "s1",
+			filename: "note.txt",
+			version: 0,
+		});
+		expect(parseArtifactUri(sessionUri)).toEqual({
+			appName: "demo",
+			userId: "u1",
+			sessionId: "s1",
+			filename: "note.txt",
+			version: 0,
+		});
+
+		const userUri = getArtifactUri({
+			appName: "demo",
+			userId: "u1",
+			filename: "user:profile.json",
+			version: 9,
+		});
+		expect(parseArtifactUri(userUri)).toEqual({
+			appName: "demo",
+			userId: "u1",
+			sessionId: undefined,
+			filename: "user:profile.json",
+			version: 9,
+		});
+	});
+
+	it("does not treat session-shaped URIs as user-scoped", () => {
+		const uri =
+			"artifact://apps/app/users/user/sessions/sess/artifacts/f/versions/2";
+		const parsed = parseArtifactUri(uri);
+		expect(parsed?.sessionId).toBe("sess");
+		expect(parsed?.filename).toBe("f");
+		expect(parsed?.version).toBe(2);
+	});
 });
 
 describe("getArtifactUri", () => {
@@ -68,6 +131,34 @@ describe("getArtifactUri", () => {
 		expect(uri).toBe(
 			"artifact://apps/app2/users/user2/artifacts/file2/versions/456",
 		);
+	});
+
+	it("treats empty sessionId as falsy and emits a user-scoped URI", () => {
+		const uri = getArtifactUri({
+			appName: "app",
+			userId: "user",
+			sessionId: "",
+			filename: "f.txt",
+			version: 1,
+		});
+		expect(uri).toBe(
+			"artifact://apps/app/users/user/artifacts/f.txt/versions/1",
+		);
+		expect(parseArtifactUri(uri)?.sessionId).toBeUndefined();
+	});
+
+	it("preserves special characters in path segments without encoding", () => {
+		const uri = getArtifactUri({
+			appName: "my-app",
+			userId: "user_1",
+			sessionId: "sess-2",
+			filename: "user:data.json",
+			version: 3,
+		});
+		expect(uri).toContain(
+			"/users/user_1/sessions/sess-2/artifacts/user:data.json/",
+		);
+		expect(parseArtifactUri(uri)?.filename).toBe("user:data.json");
 	});
 });
 
@@ -100,5 +191,37 @@ describe("isArtifactRef", () => {
 		for (const part of nonRefParts) {
 			expect(isArtifactRef(part)).toBe(false);
 		}
+	});
+
+	it("is true for any artifact:// prefix even when parse would fail", () => {
+		expect(
+			isArtifactRef({
+				fileData: { fileUri: "artifact://not-valid", mimeType: "text/plain" },
+			}),
+		).toBe(true);
+		expect(
+			isArtifactRef({
+				fileData: { fileUri: "artifact://", mimeType: "text/plain" },
+			}),
+		).toBe(true);
+	});
+
+	it("is false when fileUri is missing, empty, or only whitespace-adjacent schemes", () => {
+		expect(isArtifactRef({ fileData: { mimeType: "text/plain" } as any })).toBe(
+			false,
+		);
+		expect(
+			isArtifactRef({
+				fileData: { fileUri: "", mimeType: "text/plain" },
+			}),
+		).toBe(false);
+		expect(
+			isArtifactRef({
+				fileData: {
+					fileUri: "ARTIFACT://apps/a/users/u/artifacts/f/versions/1",
+					mimeType: "text/plain",
+				},
+			}),
+		).toBe(false);
 	});
 });

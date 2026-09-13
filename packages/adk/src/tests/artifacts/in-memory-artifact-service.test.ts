@@ -251,4 +251,239 @@ describe("InMemoryArtifactService", () => {
 			await service.loadArtifact({ ...base, filename: "alias-user.txt" }),
 		).toEqual({ text: "payload" });
 	});
+
+	it("treats null version as latest and supports negative indexing", async () => {
+		const service = new InMemoryArtifactService();
+		await service.saveArtifact({
+			...base,
+			filename: "idx.txt",
+			artifact: { text: "v0" },
+		});
+		await service.saveArtifact({
+			...base,
+			filename: "idx.txt",
+			artifact: { text: "v1" },
+		});
+		await service.saveArtifact({
+			...base,
+			filename: "idx.txt",
+			artifact: { text: "v2" },
+		});
+
+		expect(
+			await service.loadArtifact({
+				...base,
+				filename: "idx.txt",
+				version: null as unknown as undefined,
+			}),
+		).toEqual({ text: "v2" });
+		expect(
+			await service.loadArtifact({
+				...base,
+				filename: "idx.txt",
+				version: -2,
+			}),
+		).toEqual({ text: "v1" });
+		expect(
+			await service.loadArtifact({
+				...base,
+				filename: "idx.txt",
+				version: -3,
+			}),
+		).toEqual({ text: "v0" });
+	});
+
+	it("returns inlineData artifacts and null for empty inlineData payloads", async () => {
+		const service = new InMemoryArtifactService();
+		await service.saveArtifact({
+			...base,
+			filename: "bin.bin",
+			artifact: {
+				inlineData: { data: "AQID", mimeType: "application/octet-stream" },
+			},
+		});
+		expect(
+			await service.loadArtifact({ ...base, filename: "bin.bin" }),
+		).toEqual({
+			inlineData: { data: "AQID", mimeType: "application/octet-stream" },
+		});
+
+		await service.saveArtifact({
+			...base,
+			filename: "empty-inline.txt",
+			artifact: {
+				inlineData: { data: "", mimeType: "text/plain" },
+			},
+		});
+		expect(
+			await service.loadArtifact({ ...base, filename: "empty-inline.txt" }),
+		).toBeNull();
+	});
+
+	it("follows chained artifact references to the concrete payload", async () => {
+		const service = new InMemoryArtifactService();
+		await service.saveArtifact({
+			...base,
+			filename: "root.txt",
+			artifact: { text: "deep" },
+		});
+		const rootUri = getArtifactUri({
+			...base,
+			filename: "root.txt",
+			version: 0,
+		});
+		await service.saveArtifact({
+			...base,
+			filename: "mid.txt",
+			artifact: {
+				fileData: { fileUri: rootUri, mimeType: "text/plain" },
+			},
+		});
+		const midUri = getArtifactUri({
+			...base,
+			filename: "mid.txt",
+			version: 0,
+		});
+		await service.saveArtifact({
+			...base,
+			filename: "leaf.txt",
+			artifact: {
+				fileData: { fileUri: midUri, mimeType: "text/plain" },
+			},
+		});
+
+		expect(
+			await service.loadArtifact({ ...base, filename: "leaf.txt" }),
+		).toEqual({ text: "deep" });
+	});
+
+	it("deletes user-namespaced artifacts without touching session keys", async () => {
+		const service = new InMemoryArtifactService();
+		await service.saveArtifact({
+			...base,
+			filename: "user:shared.txt",
+			artifact: { text: "shared" },
+		});
+		await service.saveArtifact({
+			...base,
+			filename: "local.txt",
+			artifact: { text: "local" },
+		});
+
+		await service.deleteArtifact({
+			...base,
+			filename: "user:shared.txt",
+		});
+
+		expect(
+			await service.loadArtifact({ ...base, filename: "user:shared.txt" }),
+		).toBeNull();
+		expect(
+			await service.loadArtifact({ ...base, filename: "local.txt" }),
+		).toEqual({ text: "local" });
+		expect(await service.listArtifactKeys(base)).toEqual(["local.txt"]);
+	});
+
+	it("listVersions is empty for missing keys and grows with saves", async () => {
+		const service = new InMemoryArtifactService();
+		expect(
+			await service.listVersions({ ...base, filename: "missing.txt" }),
+		).toEqual([]);
+
+		expect(
+			await service.saveArtifact({
+				...base,
+				filename: "grow.txt",
+				artifact: { text: "a" },
+			}),
+		).toBe(0);
+		expect(
+			await service.saveArtifact({
+				...base,
+				filename: "grow.txt",
+				artifact: { text: "b" },
+			}),
+		).toBe(1);
+		expect(
+			await service.saveArtifact({
+				...base,
+				filename: "grow.txt",
+				artifact: { text: "c" },
+			}),
+		).toBe(2);
+		expect(
+			await service.listVersions({ ...base, filename: "grow.txt" }),
+		).toEqual([0, 1, 2]);
+	});
+
+	it("isolates artifacts across apps and users", async () => {
+		const service = new InMemoryArtifactService();
+		await service.saveArtifact({
+			...base,
+			filename: "note.txt",
+			artifact: { text: "app-user" },
+		});
+		await service.saveArtifact({
+			appName: "other-app",
+			userId: base.userId,
+			sessionId: base.sessionId,
+			filename: "note.txt",
+			artifact: { text: "other-app" },
+		});
+		await service.saveArtifact({
+			appName: base.appName,
+			userId: "other-user",
+			sessionId: base.sessionId,
+			filename: "note.txt",
+			artifact: { text: "other-user" },
+		});
+
+		expect(
+			await service.loadArtifact({ ...base, filename: "note.txt" }),
+		).toEqual({ text: "app-user" });
+		expect(
+			await service.loadArtifact({
+				appName: "other-app",
+				userId: base.userId,
+				sessionId: base.sessionId,
+				filename: "note.txt",
+			}),
+		).toEqual({ text: "other-app" });
+		expect(await service.listArtifactKeys(base)).toEqual(["note.txt"]);
+	});
+
+	it("throws when a ref URI is present but fileData.fileUri is missing", async () => {
+		const service = new InMemoryArtifactService();
+		await service.saveArtifact({
+			...base,
+			filename: "broken-ref.txt",
+			artifact: {
+				fileData: {
+					fileUri: "artifact://",
+					mimeType: "text/plain",
+				},
+			},
+		});
+		await expect(
+			service.loadArtifact({ ...base, filename: "broken-ref.txt" }),
+		).rejects.toThrow(/Invalid artifact reference URI/);
+	});
+
+	it("keeps text artifacts even when other fields are empty-ish", async () => {
+		const service = new InMemoryArtifactService();
+		await service.saveArtifact({
+			...base,
+			filename: "text-wins.txt",
+			artifact: {
+				text: "keep me",
+				inlineData: { data: "", mimeType: "text/plain" },
+			},
+		});
+		expect(
+			await service.loadArtifact({ ...base, filename: "text-wins.txt" }),
+		).toEqual({
+			text: "keep me",
+			inlineData: { data: "", mimeType: "text/plain" },
+		});
+	});
 });

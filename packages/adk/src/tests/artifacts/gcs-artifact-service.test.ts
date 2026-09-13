@@ -242,4 +242,146 @@ describe("GcsArtifactService", () => {
 			service.listVersions({ ...base, filename: "note.txt" }),
 		).resolves.toEqual([0, 2]);
 	});
+
+	it("constructs Storage without options", () => {
+		new GcsArtifactService("bare-bucket");
+		expect(StorageMock).toHaveBeenCalledWith(undefined);
+		expect(bucketMock).toHaveBeenCalledWith("bare-bucket");
+	});
+
+	it("loadArtifact with explicit version uses metadata contentType", async () => {
+		getMetadataMock.mockResolvedValue([{ contentType: "application/json" }]);
+		downloadMock.mockResolvedValue([Buffer.from('{"ok":true}')]);
+		const service = new GcsArtifactService("b");
+		const part = await service.loadArtifact({
+			...base,
+			filename: "note.txt",
+			version: 2,
+		});
+		expect(fileMock).toHaveBeenCalledWith("app/user-1/sess-1/note.txt/2");
+		expect(getFilesMock).not.toHaveBeenCalled();
+		expect(part).toEqual({
+			inlineData: {
+				data: '{"ok":true}',
+				mimeType: "application/json",
+			},
+		});
+	});
+
+	it("loadArtifact treats null version like latest", async () => {
+		getFilesMock.mockResolvedValue([
+			[
+				{ name: "app/user-1/sess-1/note.txt/0" },
+				{ name: "app/user-1/sess-1/note.txt/4" },
+			],
+		]);
+		getMetadataMock.mockResolvedValue([{ contentType: "text/plain" }]);
+		downloadMock.mockResolvedValue([Buffer.from("v4")]);
+		const service = new GcsArtifactService("b");
+		const part = await service.loadArtifact({
+			...base,
+			filename: "note.txt",
+			version: null as unknown as undefined,
+		});
+		expect(fileMock).toHaveBeenCalledWith("app/user-1/sess-1/note.txt/4");
+		expect(part?.inlineData?.data).toBe("v4");
+	});
+
+	it("loadArtifact returns null for empty-string download buffer", async () => {
+		getMetadataMock.mockResolvedValue([{ contentType: "text/plain" }]);
+		downloadMock.mockResolvedValue([Buffer.from("")]);
+		const service = new GcsArtifactService("b");
+		const part = await service.loadArtifact({
+			...base,
+			filename: "note.txt",
+			version: 0,
+		});
+		// empty Buffer is truthy; toString() yields ""
+		expect(part).toEqual({
+			inlineData: {
+				data: "",
+				mimeType: "text/plain",
+			},
+		});
+	});
+
+	it("deleteArtifact is a no-op when there are no versions", async () => {
+		getFilesMock.mockResolvedValue([[]]);
+		const service = new GcsArtifactService("b");
+		await service.deleteArtifact({ ...base, filename: "ghost.txt" });
+		expect(deleteMock).not.toHaveBeenCalled();
+	});
+
+	it("listVersions and delete use user-namespace paths for user: files", async () => {
+		getFilesMock.mockResolvedValue([
+			[
+				{ name: "app/user-1/user/user:profile.json/0" },
+				{ name: "app/user-1/user/user:profile.json/1" },
+			],
+		]);
+		const service = new GcsArtifactService("b");
+		await expect(
+			service.listVersions({ ...base, filename: "user:profile.json" }),
+		).resolves.toEqual([0, 1]);
+		expect(getFilesMock).toHaveBeenCalledWith({
+			prefix: "app/user-1/user/user:profile.json/",
+		});
+
+		await service.deleteArtifact({
+			...base,
+			filename: "user:profile.json",
+		});
+		expect(fileMock).toHaveBeenCalledWith(
+			"app/user-1/user/user:profile.json/0",
+		);
+		expect(fileMock).toHaveBeenCalledWith(
+			"app/user-1/user/user:profile.json/1",
+		);
+		expect(deleteMock).toHaveBeenCalledTimes(2);
+	});
+
+	it("listArtifactKeys returns empty when both prefixes are empty", async () => {
+		getFilesMock.mockResolvedValueOnce([[]]).mockResolvedValueOnce([[]]);
+		const service = new GcsArtifactService("b");
+		await expect(service.listArtifactKeys(base)).resolves.toEqual([]);
+	});
+
+	it("saveArtifact after sparse versions continues from max+1", async () => {
+		getFilesMock.mockResolvedValue([
+			[
+				{ name: "app/user-1/sess-1/sparse.txt/0" },
+				{ name: "app/user-1/sess-1/sparse.txt/5" },
+			],
+		]);
+		const service = new GcsArtifactService("b");
+		const next = await service.saveArtifact({
+			...base,
+			filename: "sparse.txt",
+			artifact: {
+				inlineData: { data: "x", mimeType: "text/plain" },
+			},
+		});
+		expect(next).toBe(6);
+		expect(fileMock).toHaveBeenCalledWith("app/user-1/sess-1/sparse.txt/6");
+	});
+
+	it("loadArtifact for user: files reads the user-namespace blob", async () => {
+		getMetadataMock.mockResolvedValue([{ contentType: "application/json" }]);
+		downloadMock.mockResolvedValue([Buffer.from("{}")]);
+		const service = new GcsArtifactService("b");
+		const part = await service.loadArtifact({
+			...base,
+			filename: "user:profile.json",
+			version: 0,
+		});
+		expect(fileMock).toHaveBeenCalledWith(
+			"app/user-1/user/user:profile.json/0",
+		);
+		expect(part).toEqual({
+			inlineData: {
+				data: "{}",
+				mimeType: "application/json",
+			},
+		});
+	});
 });
