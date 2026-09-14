@@ -2014,7 +2014,7 @@ describe("contents requestProcessor", () => {
 		).toBe(false);
 	});
 
-	it("starts current_turn from mid-history user and keeps in-turn tool call", async () => {
+	it("starts current_turn from mid-history user and keeps in-turn tool pair", async () => {
 		const llmRequest = new LlmRequest();
 		const events = [
 			userEvent("ancient", { timestamp: 1 }),
@@ -2036,7 +2036,23 @@ describe("contents requestProcessor", () => {
 					],
 				},
 			}),
-			agentEvent("assistant", "turn-answer", { timestamp: 5 }),
+			new Event({
+				author: "assistant",
+				timestamp: 5,
+				content: {
+					role: "user",
+					parts: [
+						{
+							functionResponse: {
+								id: "turn-fc",
+								name: "lookup",
+								response: { value: 42 },
+							},
+						},
+					],
+				},
+			}),
+			agentEvent("assistant", "turn-answer", { timestamp: 6 }),
 		];
 
 		await drain(
@@ -2063,6 +2079,11 @@ describe("contents requestProcessor", () => {
 		expect(
 			llmRequest.contents.some((c) =>
 				c.parts?.some((p) => p.functionCall?.id === "turn-fc"),
+			),
+		).toBe(true);
+		expect(
+			llmRequest.contents.some((c) =>
+				c.parts?.some((p) => p.functionResponse?.id === "turn-fc"),
 			),
 		).toBe(true);
 	});
