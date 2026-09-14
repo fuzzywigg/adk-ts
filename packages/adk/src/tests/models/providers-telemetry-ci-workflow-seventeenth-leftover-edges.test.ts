@@ -4,8 +4,8 @@ import { describe, expect, it } from "vitest";
 
 /**
  * Seventeenth leftover: reversible workflow assertions for the providers /
- * telemetry Vitest slice. Softened after nineteenth leftover gate retarget —
- * pins lint/build/test only; nineteenth owns the focused filter pin.
+ * telemetry Vitest slice. Softened after eighteenth leftover gate retarget —
+ * pins lint/build/test only; eighteenth owns the focused filter pin.
  */
 describe("providers/telemetry ci workflow seventeenth leftover edges", () => {
 	const root = resolve(__dirname, "../../../../..");
