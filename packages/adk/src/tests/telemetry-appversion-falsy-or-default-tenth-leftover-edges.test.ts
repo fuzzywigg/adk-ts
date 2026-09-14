@@ -1,22 +1,28 @@
+import { ATTR_SERVICE_VERSION } from "@opentelemetry/semantic-conventions";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { TelemetryService } from "../telemetry";
 
-const { startMock, shutdownMock, NodeSDKMock, getTracerSpy } = vi.hoisted(
-	() => {
-		const startMock = vi.fn();
-		const shutdownMock = vi.fn().mockResolvedValue(undefined);
-		const NodeSDKMock = vi.fn(function NodeSDK(this: any) {
-			this.start = startMock;
-			this.shutdown = shutdownMock;
-		});
-		return {
-			startMock,
-			shutdownMock,
-			NodeSDKMock,
-			getTracerSpy: vi.fn(() => ({ startSpan: vi.fn() })),
-		};
-	},
-);
+const {
+	startMock,
+	shutdownMock,
+	NodeSDKMock,
+	getTracerSpy,
+	resourceFromAttributesMock,
+} = vi.hoisted(() => {
+	const startMock = vi.fn();
+	const shutdownMock = vi.fn().mockResolvedValue(undefined);
+	const NodeSDKMock = vi.fn(function NodeSDK(this: any) {
+		this.start = startMock;
+		this.shutdown = shutdownMock;
+	});
+	return {
+		startMock,
+		shutdownMock,
+		NodeSDKMock,
+		getTracerSpy: vi.fn(() => ({ startSpan: vi.fn() })),
+		resourceFromAttributesMock: vi.fn((attrs: any) => attrs),
+	};
+});
 
 vi.mock("@opentelemetry/sdk-node", () => ({
 	NodeSDK: NodeSDKMock,
@@ -31,7 +37,7 @@ vi.mock("@opentelemetry/auto-instrumentations-node", () => ({
 }));
 
 vi.mock("@opentelemetry/resources", () => ({
-	resourceFromAttributes: vi.fn((attrs) => attrs),
+	resourceFromAttributes: resourceFromAttributesMock,
 }));
 
 vi.mock("@opentelemetry/api", async () => {
@@ -64,6 +70,7 @@ afterEach(() => {
 	shutdownMock.mockReset().mockResolvedValue(undefined);
 	NodeSDKMock.mockClear();
 	getTracerSpy.mockClear().mockReturnValue({ startSpan: vi.fn() });
+	resourceFromAttributesMock.mockClear().mockImplementation((attrs) => attrs);
 });
 
 /**
@@ -123,5 +130,55 @@ describe("telemetry appVersion falsy-or-default tenth leftover edges", () => {
 		expect(after.some((c) => c[0] === "iqai-adk" && c[1] === appVersion)).toBe(
 			true,
 		);
+	});
+
+	/**
+	 * Residual: resource ATTR_SERVICE_VERSION keeps falsy appVersion as-is,
+	 * while getTracer still coalesces via || "0.1.0".
+	 */
+	it.each([
+		{ label: "empty string", appVersion: "" },
+		{ label: "null", appVersion: null as any },
+		{ label: "0", appVersion: 0 as any },
+		{ label: "false", appVersion: false as any },
+	])("resource keeps falsy appVersion ($label) while tracer defaults", ({
+		appVersion,
+	}) => {
+		const service = new TelemetryService();
+		const resourceBefore = resourceFromAttributesMock.mock.calls.length;
+		const tracerBefore = getTracerSpy.mock.calls.length;
+		service.initialize({
+			appName: "app-ver-asym",
+			appVersion,
+			otlpEndpoint: "http://localhost:4318/v1/traces",
+		});
+		const resourceAttrs =
+			resourceFromAttributesMock.mock.calls[resourceBefore][0];
+		expect(resourceAttrs[ATTR_SERVICE_VERSION]).toBe(appVersion);
+		const tracerAfter = getTracerSpy.mock.calls.slice(tracerBefore);
+		expect(
+			tracerAfter.some((c) => c[0] === "iqai-adk" && c[1] === "0.1.0"),
+		).toBe(true);
+	});
+
+	it("resource and tracer both keep truthy appVersion", () => {
+		const service = new TelemetryService();
+		const resourceBefore = resourceFromAttributesMock.mock.calls.length;
+		const tracerBefore = getTracerSpy.mock.calls.length;
+		service.initialize({
+			appName: "app-ver-asym",
+			appVersion: "2.0.0",
+			otlpEndpoint: "http://localhost:4318/v1/traces",
+		});
+		expect(
+			resourceFromAttributesMock.mock.calls[resourceBefore][0][
+				ATTR_SERVICE_VERSION
+			],
+		).toBe("2.0.0");
+		expect(
+			getTracerSpy.mock.calls
+				.slice(tracerBefore)
+				.some((c) => c[0] === "iqai-adk" && c[1] === "2.0.0"),
+		).toBe(true);
 	});
 });

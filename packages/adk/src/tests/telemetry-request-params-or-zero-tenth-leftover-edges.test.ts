@@ -76,4 +76,51 @@ describe("telemetry request-params or-zero tenth leftover edges", () => {
 		expect(attrs["gen_ai.request.temperature"]).toBe(expected.temp);
 		expect(attrs["gen_ai.request.top_p"]).toBe(expected.topP);
 	});
+
+	/**
+	 * Residual: span readers only use camelCase maxOutputTokens/temperature/topP;
+	 * snake_case near-miss keys are ignored → || 0.
+	 */
+	it("snake_case request params are ignored (attrs stay 0); camel control keeps values", async () => {
+		const { setAttributes } = await withActiveSpan();
+		const service = new TelemetryService();
+		service.traceLlmCall(
+			invocation,
+			"e-snake",
+			{
+				model: "m",
+				config: {
+					max_output_tokens: 128,
+					temperature: 0.5,
+					top_p: 0.9,
+				} as any,
+				contents: [],
+			} as LlmRequest,
+			{ content: { role: "model", parts: [{ text: "x" }] } } as LlmResponse,
+		);
+		const snakeAttrs = setAttributes.mock.calls[0][0];
+		expect(snakeAttrs["gen_ai.request.max_tokens"]).toBe(0);
+		expect(snakeAttrs["gen_ai.request.temperature"]).toBe(0.5);
+		expect(snakeAttrs["gen_ai.request.top_p"]).toBe(0);
+
+		setAttributes.mockClear();
+		service.traceLlmCall(
+			invocation,
+			"e-camel",
+			{
+				model: "m",
+				config: {
+					maxOutputTokens: 128,
+					temperature: 0.5,
+					topP: 0.9,
+				},
+				contents: [],
+			} as LlmRequest,
+			{ content: { role: "model", parts: [{ text: "x" }] } } as LlmResponse,
+		);
+		const camelAttrs = setAttributes.mock.calls[0][0];
+		expect(camelAttrs["gen_ai.request.max_tokens"]).toBe(128);
+		expect(camelAttrs["gen_ai.request.temperature"]).toBe(0.5);
+		expect(camelAttrs["gen_ai.request.top_p"]).toBe(0.9);
+	});
 });

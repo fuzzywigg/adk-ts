@@ -55,6 +55,9 @@ describe("telemetry functions sparse-map leftover edges", () => {
 		{ label: "object", value: { name: "x" } },
 		{ label: "number", value: 3 },
 		{ label: "null", value: null },
+		{ label: "false", value: false },
+		{ label: "empty string", value: "" },
+		{ label: "0", value: 0 },
 	])("non-array functions ($label) is not remapped", ({ label, value }) => {
 		if (value === null) {
 			expect(exclude({ functions: null, temperature: 0.1 })).toEqual({

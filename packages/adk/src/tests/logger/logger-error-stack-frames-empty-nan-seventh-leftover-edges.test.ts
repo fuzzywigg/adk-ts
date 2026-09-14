@@ -151,4 +151,42 @@ describe("Logger seventh leftover — ADK_ERROR_STACK_FRAMES empty/NaN Number() 
 		expect(rendered).toContain("↳ third");
 		expect(rendered).not.toContain("more frames");
 	});
+
+	/**
+	 * Residual: filter(Boolean) drops blank frames from display, but totalFrames
+	 * still counts blank lines via split(/\n/).length - 1, so capped ellipsis
+	 * over-counts remaining frames.
+	 */
+	it("blank frames inflate totalFrames under ADK_ERROR_STACK_FRAMES=1", () => {
+		process.env.ADK_ERROR_STACK_FRAMES = "1";
+		const logger = new Logger({ name: "stack-blank-inflate" });
+		const err = new Error("gap");
+		err.name = "GapError";
+		err.stack = [
+			"GapError: gap",
+			"    at first (a.ts:1:1)",
+			"",
+			"   ",
+			"    at second (b.ts:2:2)",
+		].join("\n");
+		logger.error("failed", err);
+		const rendered = stripAnsi(String(errorSpy.mock.calls[0][0]));
+		expect(rendered).toContain("• Stack:");
+		expect(rendered).toContain("↳ first");
+		expect(rendered).not.toContain("↳ second");
+		// 4 post-message lines (2 real + 2 blank) - maxFrames 1 → … 3 more
+		expect(rendered).toContain("↳ … 3 more frames");
+	});
+
+	it("Error.stack='' is falsy so Stack section is skipped (includeStack && arg.stack)", () => {
+		delete process.env.ADK_ERROR_STACK_FRAMES;
+		const logger = new Logger({ name: "stack-empty-string" });
+		const err = new Error("nostack");
+		err.name = "NoStack";
+		err.stack = "";
+		logger.error("failed", err);
+		const rendered = stripAnsi(String(errorSpy.mock.calls[0][0]));
+		expect(rendered).toContain("NoStack: nostack");
+		expect(rendered).not.toContain("• Stack:");
+	});
 });

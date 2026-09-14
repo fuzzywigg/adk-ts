@@ -257,4 +257,63 @@ describe("telemetry sixth leftover deepen edges", () => {
 			"gen_ai.usage.output_tokens": 0,
 		});
 	});
+
+	/**
+	 * Residual usage || 0: false/NaN coalesce; whitespace/"0" stay truthy as-is.
+	 */
+	it.each([
+		{
+			label: "false",
+			prompt: false as any,
+			candidates: false as any,
+			expectedIn: 0,
+			expectedOut: 0,
+		},
+		{
+			label: "NaN",
+			prompt: Number.NaN as any,
+			candidates: Number.NaN as any,
+			expectedIn: 0,
+			expectedOut: 0,
+		},
+		{
+			label: "whitespace / zero-string",
+			prompt: " " as any,
+			candidates: "0" as any,
+			expectedIn: " ",
+			expectedOut: "0",
+		},
+	])("traceLlmCall usage token residual ($label)", async ({
+		prompt,
+		candidates,
+		expectedIn,
+		expectedOut,
+	}) => {
+		const setAttributes = vi.fn();
+		const addEvent = vi.fn();
+		const { trace } = await import("@opentelemetry/api");
+		vi.spyOn(trace, "getActiveSpan").mockReturnValue({
+			setAttributes,
+			addEvent,
+		} as any);
+
+		const service = new TelemetryService();
+		service.traceLlmCall(
+			{ invocationId: "i", userId: "u", session: { id: "s" } } as any,
+			"e",
+			{ model: "m", config: {}, contents: [] } as LlmRequest,
+			{
+				usageMetadata: {
+					promptTokenCount: prompt,
+					candidatesTokenCount: candidates,
+				},
+			} as LlmResponse,
+		);
+
+		const usageCall = setAttributes.mock.calls.find(
+			(c) => "gen_ai.usage.input_tokens" in c[0],
+		);
+		expect(usageCall?.[0]["gen_ai.usage.input_tokens"]).toBe(expectedIn);
+		expect(usageCall?.[0]["gen_ai.usage.output_tokens"]).toBe(expectedOut);
+	});
 });

@@ -83,4 +83,31 @@ describe("telemetry inlineData falsy-keep leftover edges", () => {
 			{ role: "user", parts: [{ text: "survives" }] },
 		]);
 	});
+
+	/**
+	 * Residual: whitespace strings are truthy under !part.inlineData, so they
+	 * are filtered — unlike "" which is falsy and kept.
+	 */
+	it.each([
+		{ label: "single space", inlineData: " " },
+		{ label: "tab", inlineData: "\t" },
+		{ label: "newline", inlineData: "\n" },
+	])("truthy whitespace inlineData ($label) is filtered unlike empty string", ({
+		inlineData,
+	}) => {
+		const built = build([
+			{
+				role: "user",
+				parts: [
+					{ text: "ws", inlineData },
+					{ text: "empty-kept", inlineData: "" },
+					{ text: "keep-always" },
+				],
+			},
+		]);
+		expect(built.contents[0].parts).toEqual([
+			{ text: "empty-kept", inlineData: "" },
+			{ text: "keep-always" },
+		]);
+	});
 });
