@@ -463,6 +463,25 @@ describe("InMemorySessionService", () => {
 		warn.mockRestore();
 	});
 
+	it("stores null app:/user: delta values into app/user state maps", async () => {
+		const service = new InMemorySessionService();
+		const session = await service.createSession("app", "user", {}, "s-null");
+		await service.appendEvent(session, {
+			author: "agent",
+			timestamp: 1,
+			actions: {
+				stateDelta: {
+					[`${State.APP_PREFIX}flag`]: null,
+					[`${State.USER_PREFIX}pref`]: null,
+				},
+			},
+		} as any);
+
+		const sibling = await service.createSession("app", "user", {}, "s-sibling");
+		expect(sibling.state[`${State.APP_PREFIX}flag`]).toBeNull();
+		expect(sibling.state[`${State.USER_PREFIX}pref`]).toBeNull();
+	});
+
 	it("createSession with the same id overwrites the stored session", async () => {
 		const service = new InMemorySessionService();
 		const first = await service.createSession(

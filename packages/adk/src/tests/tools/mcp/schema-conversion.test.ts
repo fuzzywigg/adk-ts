@@ -305,4 +305,25 @@ describe("schema-conversion", () => {
 			},
 		});
 	});
+
+	it("infers number types from exclusiveMinimum/exclusiveMaximum alone", () => {
+		expect(normalizeJsonSchema({ exclusiveMinimum: 0 })).toEqual({
+			type: Type.INTEGER,
+			exclusiveMinimum: 0,
+		});
+		expect(
+			normalizeJsonSchema({ exclusiveMaximum: 1, multipleOf: 0.25 }),
+		).toEqual({
+			type: Type.NUMBER,
+			exclusiveMaximum: 1,
+			multipleOf: 0.25,
+		});
+	});
+
+	it("passes through unknown explicit types unchanged during normalize", () => {
+		expect(normalizeJsonSchema({ type: "custom-type", title: "x" })).toEqual({
+			type: "custom-type",
+			title: "x",
+		});
+	});
 });

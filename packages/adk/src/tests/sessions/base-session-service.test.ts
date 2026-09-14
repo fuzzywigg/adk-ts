@@ -116,6 +116,24 @@ describe("BaseSessionService.appendEvent", () => {
 		expect(session.state.keep).toBe(true);
 	});
 
+	it("does not skip State.TEMP_PREFIX (temp:) keys — only temp_ is filtered", async () => {
+		const service = new InMemoryStubSessionService();
+		const session = await service.createSession("app", "user", {}, "s1");
+		const event = {
+			author: "agent",
+			actions: {
+				stateDelta: {
+					"temp:colon": "applied",
+					temp_underscore: "skipped",
+				},
+			},
+		} as Event;
+
+		await service.appendEvent(session, event);
+		expect(session.state["temp:colon"]).toBe("applied");
+		expect(session.state.temp_underscore).toBeUndefined();
+	});
+
 	it("appendEvent without actions leaves state untouched", async () => {
 		const service = new InMemoryStubSessionService();
 		const session = await service.createSession("app", "user", { a: 1 }, "s1");

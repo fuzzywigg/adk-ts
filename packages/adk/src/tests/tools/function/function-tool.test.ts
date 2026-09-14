@@ -39,6 +39,22 @@ describe("FunctionTool", () => {
 		expect(result.error).toContain("name");
 	});
 
+	it("still runs when only the word context appears in the function body", async () => {
+		function echo(message: string) {
+			// local context note should not break invocation
+			return { message, contextMention: true };
+		}
+
+		const tool = new FunctionTool(echo, { description: "Echoes a message" });
+		await expect(
+			tool.runAsync({ message: "hi" }, makeContext()),
+		).resolves.toEqual({ message: "hi", contextMention: true });
+		expect(tool.getDeclaration().parameters?.properties?.message).toBeDefined();
+		expect(
+			tool.getDeclaration().parameters?.properties?.toolContext,
+		).toBeUndefined();
+	});
+
 	it("injects toolContext and coerces primitive types", async () => {
 		function inspect(
 			count: number,
