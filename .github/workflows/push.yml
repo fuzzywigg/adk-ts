@@ -34,9 +34,9 @@ jobs:
         run: pnpm lint
       - name: Build ADK package
         run: pnpm --filter @iqai/adk build
-      - name: ADK tools/mcp/sessions fourteenth leftover slice
+      - name: ADK tools/mcp/sessions fifteenth leftover slice
         # Reversible focused gate for TOKENMAXX leftover deepen on this module slice.
-        run: pnpm --filter @iqai/adk exec vitest run fourteenth-leftover-edges
+        run: pnpm --filter @iqai/adk exec vitest run fifteenth-leftover-edges
       - name: ADK + CLI tests
         # Matches root `pnpm test` filters; avoids accidental full-monorepo expansion.
         run: pnpm test
