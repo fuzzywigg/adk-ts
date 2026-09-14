@@ -390,19 +390,25 @@ describe("LangGraphAgent leftover matrix edges (TOKENMAXX deepen)", () => {
 		});
 
 		it("yields root-not-found event when root is deleted after construction", async () => {
-			const only = new MockAgent("only");
+			const root = new MockAgent("root_only");
+			const spare = new MockAgent("spare");
 			const graph = new LangGraphAgent({
 				name: "runtime_root",
 				description: "desc",
-				nodes: [{ name: "only", agent: only, targets: [] }],
-				rootNode: "only",
+				nodes: [
+					{ name: "root_only", agent: root, targets: [] },
+					{ name: "spare", agent: spare, targets: [] },
+				],
+				rootNode: "root_only",
 			});
-			(graph as { nodes: Map<string, LangGraphNode> }).nodes.delete("only");
+			(graph as { nodes: Map<string, LangGraphNode> }).nodes.delete(
+				"root_only",
+			);
 
 			const events = await drainGraph(graph, mockContext);
 			expect(events).toHaveLength(1);
 			expect(events[0].content?.parts?.[0]?.text).toBe(
-				'Root node "only" not found.',
+				'Root node "root_only" not found.',
 			);
 		});
 	});

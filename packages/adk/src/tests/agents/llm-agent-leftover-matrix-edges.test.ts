@@ -168,9 +168,12 @@ describe("LlmAgent leftover matrix edges (TOKENMAXX deepen)", () => {
 		});
 
 		it("preserves non-empty model/instruction/tools when provided", () => {
-			const tool = new FunctionTool(async function probe() {
-				return "ok";
-			});
+			const tool = new FunctionTool(
+				async function probe() {
+					return "ok";
+				},
+				{ description: "Probe tool for populated agent" },
+			);
 			const agent = new LlmAgent({
 				name: "populated",
 				model: "gemini-2.5-flash",
@@ -224,9 +227,12 @@ describe("LlmAgent leftover matrix edges (TOKENMAXX deepen)", () => {
 		it("does not warn when outputSchema is absent regardless of tools/subs/flags", () => {
 			const warn = vi.fn();
 			const child = new LlmAgent({ name: "child_no_schema" });
-			const tool = new FunctionTool(async function t() {
-				return 1;
-			});
+			const tool = new FunctionTool(
+				async function t() {
+					return 1;
+				},
+				{ description: "Tiny tool for no-schema warn check" },
+			);
 			const agent = new LlmAgent({
 				name: "no_schema",
 				tools: [tool],
@@ -281,9 +287,12 @@ describe("LlmAgent leftover matrix edges (TOKENMAXX deepen)", () => {
 					disallowTransferToParent: true,
 					disallowTransferToPeers: true,
 					tools: [
-						new FunctionTool(async function only() {
-							return "x";
-						}),
+						new FunctionTool(
+							async function only() {
+								return "x";
+							},
+							{ description: "Only tool for locked schema warn" },
+						),
 					],
 				},
 				expectTransfer: false,
@@ -310,9 +319,12 @@ describe("LlmAgent leftover matrix edges (TOKENMAXX deepen)", () => {
 					disallowTransferToPeers: true,
 					subAgents: [new LlmAgent({ name: "mix_child" })],
 					tools: [
-						new FunctionTool(async function mix() {
-							return "y";
-						}),
+						new FunctionTool(
+							async function mix() {
+								return "y";
+							},
+							{ description: "Mixed tools warn matrix helper" },
+						),
 					],
 				},
 				expectTransfer: true,
