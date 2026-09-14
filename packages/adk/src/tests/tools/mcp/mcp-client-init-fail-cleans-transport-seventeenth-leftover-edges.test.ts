@@ -24,6 +24,15 @@ const {
 	};
 });
 
+vi.mock("@adk/logger", () => ({
+	Logger: vi.fn(() => ({
+		debug: vi.fn(),
+		error: vi.fn(),
+		warn: vi.fn(),
+		info: vi.fn(),
+	})),
+}));
+
 vi.mock("@modelcontextprotocol/sdk/client/index.js", () => ({
 	Client: vi.fn(function Client() {
 		return {

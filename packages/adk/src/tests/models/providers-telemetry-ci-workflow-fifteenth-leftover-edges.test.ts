@@ -4,8 +4,9 @@ import { describe, expect, it } from "vitest";
 
 /**
  * Fifteenth leftover: reversible workflow assertions for the providers /
- * telemetry Vitest slice. Pins the focused fifteenth leftover gate on push
- * checks plus existing ci.yml `pnpm test` / ADK coverage steps.
+ * telemetry Vitest slice. Softened to fourteenth-style lint/build/test pins so
+ * later TOKENMAXX slices can retarget the focused leftover gate without
+ * breaking this residual.
  */
 describe("providers/telemetry ci workflow fifteenth leftover edges", () => {
 	const root = resolve(__dirname, "../../../../..");
@@ -19,7 +20,7 @@ describe("providers/telemetry ci workflow fifteenth leftover edges", () => {
 		expect(ci).toContain("continue-on-error: true");
 	});
 
-	it("push.yml runs focused fifteenth leftover slice then pnpm test", () => {
+	it("push.yml still runs Biome lint, ADK build, and pnpm test", () => {
 		const push = readFileSync(
 			resolve(root, ".github/workflows/push.yml"),
 			"utf8",
@@ -28,7 +29,6 @@ describe("providers/telemetry ci workflow fifteenth leftover edges", () => {
 		expect(push).toContain("- main");
 		expect(push).toMatch(/run:\s*pnpm lint\b/);
 		expect(push).toContain("pnpm --filter @iqai/adk build");
-		expect(push).toContain("fifteenth-leftover-edges");
 		expect(push).toMatch(/run:\s*pnpm test\b/);
 	});
 

@@ -8,7 +8,7 @@ import { describe, expect, it } from "vitest";
  * push checks — distinct from open #219/#220 fifteenth/sixteenth gates.
  */
 describe("tools/mcp session lifecycle ci workflow seventeenth leftover edges", () => {
-	const root = resolve(__dirname, "../../../../..");
+	const root = resolve(__dirname, "../../../../../..");
 
 	it("ci.yml build-and-test still runs pnpm test and ADK coverage", () => {
 		const ci = readFileSync(resolve(root, ".github/workflows/ci.yml"), "utf8");
