@@ -460,4 +460,41 @@ function cased(a, b, c) { return {}; }`,
 		expect(declaration.parameters?.properties?.label).toBeDefined();
 		expect(declaration.parameters?.required).toBeUndefined();
 	});
+
+	it("defaults missing JSDoc/typescript types to string across multiple params", () => {
+		const multi = withSource(
+			(a: any, b: any, c: any) => ({ a, b, c }),
+			`/**
+ * Multi param helper
+ * @param a first
+ * @param b second
+ * @param c third
+ */
+function multi(a, b, c) { return { a, b, c }; }`,
+		);
+		Object.defineProperty(multi, "name", { value: "multi" });
+		const declaration = buildFunctionDeclaration(multi);
+		expect(declaration.parameters?.properties?.a?.type).toBe("string");
+		expect(declaration.parameters?.properties?.b?.type).toBe("string");
+		expect(declaration.parameters?.properties?.c?.type).toBe("string");
+		expect(declaration.parameters?.properties?.a?.description).toContain(
+			"first",
+		);
+		expect(declaration.parameters?.properties?.b?.description).toContain(
+			"second",
+		);
+		expect(declaration.parameters?.properties?.c?.description).toContain(
+			"third",
+		);
+		expect(declaration.parameters?.required).toEqual(["a", "b", "c"]);
+	});
+
+	it("returns empty properties when the function has no parameter list", () => {
+		const bare = withSource(() => 1, "function bare(){ return 1; }");
+		Object.defineProperty(bare, "name", { value: "bare" });
+		expect(buildFunctionDeclaration(bare).parameters).toEqual({
+			type: Type.OBJECT,
+			properties: {},
+		});
+	});
 });

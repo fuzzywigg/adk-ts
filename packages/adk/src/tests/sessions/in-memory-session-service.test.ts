@@ -584,4 +584,110 @@ describe("InMemorySessionService", () => {
 		).resolves.toBeUndefined();
 		expect((await service.getSession("app", "user", "s1"))?.id).toBe("s1");
 	});
+
+	it("numRecentEvents:0 does not slice events", async () => {
+		const service = new InMemorySessionService();
+		const session = await service.createSession("app", "user", {}, "s-zero");
+		for (const [ts, text] of [
+			[100, "a"],
+			[200, "b"],
+			[300, "c"],
+		] as const) {
+			await service.appendEvent(session, {
+				author: "agent",
+				timestamp: ts,
+				content: { parts: [{ text }] },
+			} as any);
+		}
+
+		const fetched = await service.getSession("app", "user", "s-zero", {
+			numRecentEvents: 0,
+		});
+		expect(fetched?.events.map((e) => e.content?.parts?.[0]?.text)).toEqual([
+			"a",
+			"b",
+			"c",
+		]);
+	});
+
+	it("propagates structuredClone failures from getSession", async () => {
+		const service = new InMemorySessionService();
+		await service.createSession("app", "user", {}, "s-clone");
+		const clone = vi
+			.spyOn(globalThis, "structuredClone")
+			.mockImplementationOnce(() => {
+				throw new Error("structuredClone boom");
+			});
+
+		await expect(service.getSession("app", "user", "s-clone")).rejects.toThrow(
+			"structuredClone boom",
+		);
+		clone.mockRestore();
+	});
+
+	it("warn matrix covers missing app, user, and session on append", async () => {
+		const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+		const service = new InMemorySessionService();
+
+		await service.appendEvent(
+			{
+				appName: "missing-app",
+				userId: "u",
+				id: "s",
+				state: {},
+				events: [],
+				lastUpdateTime: 0,
+			} as any,
+			{
+				author: "agent",
+				timestamp: 1,
+				content: { parts: [{ text: "x" }] },
+			} as any,
+		);
+		expect(warn).toHaveBeenCalledWith(
+			"Failed to append event to session s: appName missing-app not in sessions",
+		);
+		warn.mockClear();
+
+		await service.createSession("app", "user", {}, "s1");
+		await service.appendEvent(
+			{
+				appName: "app",
+				userId: "missing-user",
+				id: "s1",
+				state: {},
+				events: [],
+				lastUpdateTime: 0,
+			} as any,
+			{
+				author: "agent",
+				timestamp: 1,
+				content: { parts: [{ text: "x" }] },
+			} as any,
+		);
+		expect(warn).toHaveBeenCalledWith(
+			"Failed to append event to session s1: userId missing-user not in sessions[appName]",
+		);
+		warn.mockClear();
+
+		await service.appendEvent(
+			{
+				appName: "app",
+				userId: "user",
+				id: "missing-session",
+				state: {},
+				events: [],
+				lastUpdateTime: 0,
+			} as any,
+			{
+				author: "agent",
+				timestamp: 1,
+				content: { parts: [{ text: "x" }] },
+			} as any,
+		);
+		expect(warn).toHaveBeenCalledWith(
+			"Failed to append event to session missing-session: sessionId missing-session not in sessions[appName][userId]",
+		);
+		warn.mockRestore();
+	});
 });

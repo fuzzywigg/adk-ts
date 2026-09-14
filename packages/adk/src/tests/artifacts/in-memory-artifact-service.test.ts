@@ -644,4 +644,106 @@ describe("InMemoryArtifactService", () => {
 			}),
 		).resolves.toEqual([]);
 	});
+
+	it("negative version -N boundary maps to first version; -N-1 returns null", async () => {
+		const service = new InMemoryArtifactService();
+		await service.saveArtifact({
+			...base,
+			filename: "bound.txt",
+			artifact: { text: "v0" },
+		});
+		await service.saveArtifact({
+			...base,
+			filename: "bound.txt",
+			artifact: { text: "v1" },
+		});
+		await service.saveArtifact({
+			...base,
+			filename: "bound.txt",
+			artifact: { text: "v2" },
+		});
+
+		expect(
+			await service.loadArtifact({
+				...base,
+				filename: "bound.txt",
+				version: -3,
+			}),
+		).toEqual({ text: "v0" });
+		expect(
+			await service.loadArtifact({
+				...base,
+				filename: "bound.txt",
+				version: -4,
+			}),
+		).toBeNull();
+	});
+
+	it("circular artifact refs overflow the load stack", async () => {
+		const service = new InMemoryArtifactService();
+		const uriA = getArtifactUri({
+			appName: base.appName,
+			userId: base.userId,
+			sessionId: base.sessionId,
+			filename: "cycle-a.txt",
+			version: 0,
+		});
+		const uriB = getArtifactUri({
+			appName: base.appName,
+			userId: base.userId,
+			sessionId: base.sessionId,
+			filename: "cycle-b.txt",
+			version: 0,
+		});
+		await service.saveArtifact({
+			...base,
+			filename: "cycle-a.txt",
+			artifact: {
+				fileData: { fileUri: uriB, mimeType: "text/plain" },
+			},
+		});
+		await service.saveArtifact({
+			...base,
+			filename: "cycle-b.txt",
+			artifact: {
+				fileData: { fileUri: uriA, mimeType: "text/plain" },
+			},
+		});
+
+		await expect(
+			service.loadArtifact({ ...base, filename: "cycle-a.txt" }),
+		).rejects.toThrow(/Maximum call stack|too much recursion/i);
+	});
+
+	it("falls back to caller sessionId when artifact URI omits sessionId", async () => {
+		const service = new InMemoryArtifactService();
+		await service.saveArtifact({
+			...base,
+			filename: "user:shared.txt",
+			artifact: { text: "shared-payload" },
+		});
+		const userUri = getArtifactUri({
+			appName: base.appName,
+			userId: base.userId,
+			filename: "user:shared.txt",
+			version: 0,
+		});
+		expect(userUri).not.toContain("/sessions/");
+
+		await service.saveArtifact({
+			...base,
+			filename: "alias.txt",
+			artifact: {
+				fileData: { fileUri: userUri, mimeType: "text/plain" },
+			},
+		});
+
+		expect(
+			await service.loadArtifact({
+				...base,
+				sessionId: "fallback-session",
+				filename: "alias.txt",
+			}),
+		).toEqual({ text: "shared-payload" });
+	});
 });

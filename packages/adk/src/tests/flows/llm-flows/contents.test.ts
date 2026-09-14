@@ -1765,4 +1765,268 @@ describe("contents requestProcessor leftover edges", () => {
 		expect(llmRequest.contents[0].role).toBe("user");
 		expect(llmRequest.contents[0].parts?.[1]?.text).toContain("peer-agent");
 	});
+
+	it("throws when merging functionResponses whose first event has non-enumerable parts", async () => {
+		const llmRequest = new LlmRequest();
+		const call = new Event({
+			author: "assistant",
+			content: {
+				role: "model",
+				parts: [
+					{ functionCall: { id: "c1", name: "tool_a", args: {} } },
+					{ functionCall: { id: "c2", name: "tool_b", args: {} } },
+				],
+			},
+		});
+		const fr1Content: { role: string; parts?: unknown } = { role: "user" };
+		Object.defineProperty(fr1Content, "parts", {
+			value: [
+				{
+					functionResponse: {
+						id: "c1",
+						name: "tool_a",
+						response: { a: 1 },
+					},
+				},
+			],
+			enumerable: false,
+			configurable: true,
+		});
+		const fr1 = new Event({
+			author: "user",
+			content: fr1Content as any,
+		});
+		const fr2 = new Event({
+			author: "user",
+			content: {
+				role: "user",
+				parts: [
+					{
+						functionResponse: {
+							id: "c2",
+							name: "tool_b",
+							response: { b: 2 },
+						},
+					},
+				],
+			},
+		});
+
+		await expect(
+			drain(
+				requestProcessor.runAsync(
+					ctx(duckAgent("assistant", "default"), [call, fr1, fr2]),
+					llmRequest,
+				),
+			),
+		).rejects.toThrow("There should be at least one function_response part.");
+	});
+
+	it("throws when an intermediate merge candidate loses content.parts after collection", async () => {
+		const llmRequest = new LlmRequest();
+		const call = new Event({
+			author: "assistant",
+			content: {
+				role: "model",
+				parts: [
+					{ functionCall: { id: "c1", name: "tool_a", args: {} } },
+					{ functionCall: { id: "c2", name: "tool_b", args: {} } },
+				],
+			},
+		});
+		const fr1 = new Event({
+			author: "user",
+			content: {
+				role: "user",
+				parts: [
+					{
+						functionResponse: {
+							id: "c1",
+							name: "tool_a",
+							response: { a: 1 },
+						},
+					},
+				],
+			},
+		});
+		const fr2Parts = [
+			{
+				functionResponse: {
+					id: "c2",
+					name: "tool_b",
+					response: { b: 2 },
+				},
+			},
+		];
+		let collected = false;
+		const fr2Content: { role: string } = { role: "user" };
+		Object.defineProperty(fr2Content, "parts", {
+			enumerable: true,
+			configurable: true,
+			get() {
+				if (collected) {
+					return undefined;
+				}
+				return fr2Parts;
+			},
+		});
+		const fr2 = new Event({
+			author: "user",
+			content: fr2Content as any,
+		});
+		const originalGetFr = fr2.getFunctionResponses.bind(fr2);
+		fr2.getFunctionResponses = () => {
+			const responses = originalGetFr();
+			collected = true;
+			return responses;
+		};
+
+		await expect(
+			drain(
+				requestProcessor.runAsync(
+					ctx(duckAgent("assistant", "default"), [call, fr1, fr2]),
+					llmRequest,
+				),
+			),
+		).rejects.toThrow("There should be at least one function_response part.");
+	});
+
+	it("includes undefined when foreign functionCall omits args", async () => {
+		const llmRequest = new LlmRequest();
+		const foreign = new Event({
+			author: "other-agent",
+			content: {
+				role: "model",
+				parts: [
+					{
+						functionCall: {
+							id: "fc-no-args",
+							name: "lookup",
+						} as any,
+					},
+				],
+			},
+		});
+
+		await drain(
+			requestProcessor.runAsync(
+				ctx(duckAgent("assistant", "default"), [
+					foreign,
+					userEvent("continue"),
+				]),
+				llmRequest,
+			),
+		);
+
+		expect(llmRequest.contents[0].parts?.[0]).toEqual({ text: "For context:" });
+		expect(llmRequest.contents[0].parts?.[1]?.text).toBe(
+			"[other-agent] called tool `lookup` with parameters: undefined",
+		);
+	});
+
+	it("includes undefined when foreign functionResponse omits response body", async () => {
+		const llmRequest = new LlmRequest();
+		const foreign = new Event({
+			author: "peer",
+			content: {
+				role: "model",
+				parts: [
+					{
+						functionResponse: {
+							id: "fr-no-body",
+							name: "lookup",
+						} as any,
+					},
+				],
+			},
+		});
+
+		await drain(
+			requestProcessor.runAsync(
+				ctx(duckAgent("assistant", "default"), [foreign, userEvent("next")]),
+				llmRequest,
+			),
+		);
+
+		expect(llmRequest.contents[0].parts?.[1]?.text).toBe(
+			"[peer] `lookup` tool returned result: undefined",
+		);
+	});
+
+	it("skips mixed auth events that only contain EUC functionCalls", async () => {
+		const llmRequest = new LlmRequest();
+		const eucOnly = new Event({
+			author: "assistant",
+			content: {
+				role: "model",
+				parts: [
+					{
+						functionCall: {
+							id: "euc-only",
+							name: REQUEST_EUC_FUNCTION_CALL_NAME,
+							args: { x: 1 },
+						},
+					},
+				],
+			},
+		});
+
+		await drain(
+			requestProcessor.runAsync(
+				ctx(duckAgent("assistant", "default"), [
+					userEvent("before"),
+					eucOnly,
+					userEvent("after"),
+				]),
+				llmRequest,
+			),
+		);
+
+		expect(llmRequest.contents.map((c) => c.parts?.[0]?.text)).toEqual([
+			"before",
+			"after",
+		]);
+		expect(
+			llmRequest.contents.some((c) =>
+				c.parts?.some(
+					(p) => p.functionCall?.name === REQUEST_EUC_FUNCTION_CALL_NAME,
+				),
+			),
+		).toBe(false);
+	});
+
+	it("skips auth functionResponse-only events while keeping surrounding turns", async () => {
+		const llmRequest = new LlmRequest();
+		const eucResponse = new Event({
+			author: "user",
+			content: {
+				role: "user",
+				parts: [
+					{
+						functionResponse: {
+							id: "euc-r",
+							name: REQUEST_EUC_FUNCTION_CALL_NAME,
+							response: "{}",
+						},
+					},
+				],
+			},
+		});
+
+		await drain(
+			requestProcessor.runAsync(
+				ctx(duckAgent("assistant", "default"), [
+					userEvent("before"),
+					eucResponse,
+					userEvent("after"),
+				]),
+				llmRequest,
+			),
+		);
+
+		expect(llmRequest.contents.map((c) => c.parts?.[0]?.text)).toEqual([
+			"before",
+			"after",
+		]);
+	});
 });

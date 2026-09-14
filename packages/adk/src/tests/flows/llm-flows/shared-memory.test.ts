@@ -397,4 +397,106 @@ describe("sharedMemoryRequestProcessor", () => {
 			expect.objectContaining({ query: "latest query" }),
 		);
 	});
+
+	it("treats contents entries missing parts as empty for dedupe", async () => {
+		const searchMemory = vi.fn(async () => ({
+			memories: [
+				{
+					author: "past",
+					content: { role: "user", parts: [{ text: "fresh" }] },
+				},
+			],
+		}));
+		const { context, llmRequest } = makeContext({
+			memoryService: { searchMemory } as any,
+			events: [
+				new Event({
+					author: "user",
+					content: { role: "user", parts: [{ text: "q" }] },
+				}),
+			],
+			contents: [{ role: "user" } as any, { role: "model", parts: undefined }],
+		});
+
+		await drain(sharedMemoryRequestProcessor.runAsync(context, llmRequest));
+		expect(llmRequest.contents?.map((c) => c.parts?.[0]?.text)).toEqual([
+			undefined,
+			undefined,
+			"[past] said: fresh",
+		]);
+	});
+
+	it("puts undefined into the dedupe set for non-text content parts", async () => {
+		const searchMemory = vi.fn(async () => ({
+			memories: [
+				{
+					author: "past",
+					content: {
+						role: "user",
+						parts: [
+							{ inlineData: { mimeType: "image/png", data: "x" } } as any,
+						],
+					},
+				},
+				{
+					author: "past2",
+					content: { role: "user", parts: [{ text: "" }] },
+				},
+			],
+		}));
+		const { context, llmRequest } = makeContext({
+			memoryService: { searchMemory } as any,
+			events: [
+				new Event({
+					author: "user",
+					content: { role: "user", parts: [{ text: "q" }] },
+				}),
+			],
+			contents: [
+				{
+					role: "user",
+					parts: [{ inlineData: { mimeType: "image/png", data: "y" } } as any],
+				},
+			],
+		});
+
+		await drain(sharedMemoryRequestProcessor.runAsync(context, llmRequest));
+		expect(llmRequest.contents?.map((c) => c.parts?.[0]?.text)).toEqual([
+			undefined,
+			"[past] said: ",
+			"[past2] said: ",
+		]);
+	});
+
+	it("injects memories whose parts are missing or only empty text", async () => {
+		const searchMemory = vi.fn(async () => ({
+			memories: [
+				{
+					author: "empty-parts",
+					content: { role: "user", parts: [] },
+				},
+				{
+					author: "blank",
+					content: { role: "user", parts: [{ text: "" }, { text: "" }] },
+				},
+			],
+		}));
+		const { context, llmRequest } = makeContext({
+			memoryService: { searchMemory } as any,
+			events: [
+				new Event({
+					author: "user",
+					content: { role: "user", parts: [{ text: "q" }] },
+				}),
+			],
+			contents: [{ role: "user", parts: [{ text: "already" }] }],
+		});
+
+		await drain(sharedMemoryRequestProcessor.runAsync(context, llmRequest));
+		expect(llmRequest.contents?.map((c) => c.parts?.[0]?.text)).toEqual([
+			"already",
+			"[empty-parts] said: ",
+			"[blank] said:  ",
+		]);
+	});
 });

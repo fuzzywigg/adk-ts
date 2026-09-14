@@ -1701,4 +1701,213 @@ describe("auth requestProcessor.parseAndStoreAuthResponse leftover edges", () =>
 		callStore(authHandler, baseCtx({ state }));
 		expect(state["temp:http-cred"]).toEqual({ token: "bearer-x" });
 	});
+
+	it("warns Failed to store auth response when state setter throws via callStore", () => {
+		const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+		const state: Record<string, unknown> = {};
+		Object.defineProperty(state, "temp:store-fail", {
+			configurable: true,
+			enumerable: true,
+			get() {
+				return undefined;
+			},
+			set() {
+				throw new TypeError("cannot assign auth");
+			},
+		});
+		const authHandler = new AuthHandler({
+			authConfig: new AuthConfig({
+				authScheme: { type: "apiKey" } as any,
+				context: { credentialKey: "temp:store-fail" },
+			}),
+			credential: { apiKey: "secret" } as any,
+		});
+
+		expect(() => callStore(authHandler, baseCtx({ state }))).not.toThrow();
+		expect(warn).toHaveBeenCalledWith(
+			"Failed to store auth response:",
+			expect.objectContaining({ message: "cannot assign auth" }),
+		);
+		warn.mockRestore();
+	});
+});
+
+describe("auth requestProcessor trailing scan leftovers", () => {
+	it("skips trailing non-user and falsy-author events after user EUC then resumes", async () => {
+		const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+		handleFunctionCallsAsyncMock.mockResolvedValue(null);
+
+		const originalCall = new Event({
+			author: "auth-agent",
+			content: {
+				role: "model",
+				parts: [
+					{
+						functionCall: {
+							id: "tool-trailing",
+							name: "secure_api",
+							args: {},
+						},
+					},
+				],
+			},
+		});
+		const eucCall = new Event({
+			author: "auth-agent",
+			content: {
+				role: "model",
+				parts: [
+					{
+						functionCall: {
+							id: "euc-trailing",
+							name: REQUEST_EUC_FUNCTION_CALL_NAME,
+							args: JSON.stringify({
+								function_call_id: "tool-trailing",
+							}) as any,
+						},
+					},
+				],
+			},
+		});
+		const eucResponse = new Event({
+			author: "user",
+			content: {
+				role: "user",
+				parts: [
+					{
+						functionResponse: {
+							id: "euc-trailing",
+							name: REQUEST_EUC_FUNCTION_CALL_NAME,
+							response: JSON.stringify({
+								authScheme: { type: "apiKey" },
+								rawAuthCredential: { apiKey: "k" },
+							}),
+						},
+					},
+				],
+			},
+		});
+		const trailingAgent = new Event({
+			author: "auth-agent",
+			content: {
+				role: "model",
+				parts: [{ text: "trailing-model-noise" }],
+			},
+		});
+		const trailingFalsy = new Event({
+			author: "user",
+			content: {
+				role: "user",
+				parts: [{ text: "trailing-falsy" }],
+			},
+		});
+		(trailingFalsy as { author: string }).author = "";
+
+		const tool = { name: "secure_api" };
+		const events = await collect(
+			requestProcessor.runAsync(
+				baseCtx({
+					agent: {
+						name: "auth-agent",
+						canonicalTools: async () => [tool],
+					},
+					events: [
+						originalCall,
+						eucCall,
+						eucResponse,
+						trailingAgent,
+						trailingFalsy,
+					],
+				}),
+				new LlmRequest(),
+			),
+		);
+
+		expect(events).toEqual([]);
+		expect(handleFunctionCallsAsyncMock).toHaveBeenCalledWith(
+			expect.anything(),
+			originalCall,
+			{ secure_api: tool },
+			new Set(["tool-trailing"]),
+		);
+		expect(warn).toHaveBeenCalledWith(
+			"Failed to parse auth response:",
+			expect.any(Error),
+		);
+		warn.mockRestore();
+	});
+
+	it("warns on EnhancedAuthConfig parse failure when EUC response JSON is malformed", async () => {
+		const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+		handleFunctionCallsAsyncMock.mockResolvedValue(null);
+
+		const originalCall = new Event({
+			author: "auth-agent",
+			content: {
+				role: "model",
+				parts: [
+					{
+						functionCall: {
+							id: "tool-bad-json",
+							name: "secure_api",
+							args: {},
+						},
+					},
+				],
+			},
+		});
+		const eucCall = new Event({
+			author: "auth-agent",
+			content: {
+				role: "model",
+				parts: [
+					{
+						functionCall: {
+							id: "euc-bad-json",
+							name: REQUEST_EUC_FUNCTION_CALL_NAME,
+							args: JSON.stringify({
+								function_call_id: "tool-bad-json",
+							}) as any,
+						},
+					},
+				],
+			},
+		});
+		const eucResponse = new Event({
+			author: "user",
+			content: {
+				role: "user",
+				parts: [
+					{
+						functionResponse: {
+							id: "euc-bad-json",
+							name: REQUEST_EUC_FUNCTION_CALL_NAME,
+							response: "{not-valid-json",
+						},
+					},
+				],
+			},
+		});
+
+		const events = await collect(
+			requestProcessor.runAsync(
+				baseCtx({
+					agent: {
+						name: "auth-agent",
+						canonicalTools: async () => [{ name: "secure_api" }],
+					},
+					events: [originalCall, eucCall, eucResponse],
+				}),
+				new LlmRequest(),
+			),
+		);
+
+		expect(events).toEqual([]);
+		expect(warn).toHaveBeenCalledWith(
+			"Failed to parse auth response:",
+			expect.any(SyntaxError),
+		);
+		expect(handleFunctionCallsAsyncMock).toHaveBeenCalled();
+		warn.mockRestore();
+	});
 });

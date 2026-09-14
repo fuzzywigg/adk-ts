@@ -576,4 +576,68 @@ describe("GcsArtifactService", () => {
 		expect(fileMock).toHaveBeenCalledWith("app/user-1/sess-1/max.txt/4");
 		expect(part?.inlineData?.data).toBe("latest");
 	});
+
+	it("saveArtifact passes through undefined mimeType as contentType", async () => {
+		getFilesMock.mockResolvedValue([[]]);
+		const service = new GcsArtifactService("b");
+		await service.saveArtifact({
+			...base,
+			filename: "no-mime.bin",
+			artifact: {
+				inlineData: { data: "raw", mimeType: undefined as any },
+			},
+		});
+		expect(saveMock).toHaveBeenCalledWith("raw", {
+			contentType: undefined,
+			preconditionOpts: { ifGenerationMatch: 0 },
+		});
+	});
+
+	it("saveArtifact propagates non-412 blob.save errors", async () => {
+		getFilesMock.mockResolvedValue([[]]);
+		saveMock.mockRejectedValueOnce(
+			Object.assign(new Error("quota"), { code: 429 }),
+		);
+		const service = new GcsArtifactService("b");
+		await expect(
+			service.saveArtifact({
+				...base,
+				filename: "quota.bin",
+				artifact: {
+					inlineData: { data: "x", mimeType: "text/plain" },
+				},
+			}),
+		).rejects.toMatchObject({ code: 429, message: "quota" });
+	});
+
+	it("loadArtifact returns null for numeric 404 and rethrows string code 404", async () => {
+		getMetadataMock.mockRejectedValueOnce(
+			Object.assign(new Error("missing"), { code: 404 }),
+		);
+		const service = new GcsArtifactService("b");
+		await expect(
+			service.loadArtifact({ ...base, filename: "a.txt", version: 0 }),
+		).resolves.toBeNull();
+
+		getMetadataMock.mockRejectedValueOnce(
+			Object.assign(new Error("string-code"), { code: "404" }),
+		);
+		await expect(
+			service.loadArtifact({ ...base, filename: "a.txt", version: 0 }),
+		).rejects.toThrow("string-code");
+	});
+
+	it("deleteArtifact deletes sparse version blobs returned by listVersions", async () => {
+		getFilesMock.mockResolvedValue([
+			[
+				{ name: "app/user-1/sess-1/sparse-del.txt/0" },
+				{ name: "app/user-1/sess-1/sparse-del.txt/5" },
+			],
+		]);
+		const service = new GcsArtifactService("b");
+		await service.deleteArtifact({ ...base, filename: "sparse-del.txt" });
+		expect(fileMock).toHaveBeenCalledWith("app/user-1/sess-1/sparse-del.txt/0");
+		expect(fileMock).toHaveBeenCalledWith("app/user-1/sess-1/sparse-del.txt/5");
+		expect(deleteMock).toHaveBeenCalledTimes(2);
+	});
 });

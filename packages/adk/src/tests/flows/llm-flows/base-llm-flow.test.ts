@@ -1437,4 +1437,117 @@ describe("BaseLlmFlow leftover edges", () => {
 		expect(ids).toHaveLength(2);
 		expect(new Set(ids).size).toBe(2);
 	});
+
+	it("_postprocessHandleFunctionCallsAsync uses {} when toolsDict is undefined", async () => {
+		const flow = new InspectableFlow();
+		const llmRequest = new LlmRequest();
+		delete (llmRequest as any).toolsDict;
+		handleFunctionCallsAsyncMock.mockResolvedValue(null);
+
+		await collect(
+			flow._postprocessHandleFunctionCallsAsync(
+				mockContext,
+				new Event({
+					author: "agent",
+					content: {
+						role: "model",
+						parts: [{ functionCall: { name: "t", args: {}, id: "1" } }],
+					},
+				}),
+				llmRequest,
+			),
+		);
+
+		expect(handleFunctionCallsAsyncMock).toHaveBeenCalledWith(
+			mockContext,
+			expect.any(Event),
+			{},
+		);
+	});
+
+	it("finalizes and yields model responses that omit content.parts", async () => {
+		const flow = new InspectableFlow();
+		flow.requestProcessors = [];
+		flow.responseProcessors = [];
+		const agent = {
+			name: "no-parts",
+			canonicalTools: async () => [],
+			canonicalModel: {
+				model: "fake",
+				generateContentAsync: vi.fn(async function* () {
+					yield {
+						content: { role: "model" },
+						finishReason: "STOP",
+					};
+				}),
+			},
+		};
+
+		const events = await collect(flow._runOneStepAsync(makeCtx({ agent })));
+		expect(events).toHaveLength(1);
+		expect(events[0].content).toEqual({ role: "model" });
+		expect(events[0].content?.parts).toBeUndefined();
+	});
+
+	it("calls the model when every before-model callback returns nullish", async () => {
+		const flow = new InspectableFlow();
+		const generateContentAsync = vi.fn(async function* () {
+			yield { content: { parts: [{ text: "from-model" }] } };
+		});
+		const agent = {
+			name: "nullish-before",
+			canonicalBeforeModelCallbacks: [
+				() => undefined,
+				() => null,
+				async () => undefined,
+			],
+			canonicalModel: {
+				model: "m",
+				generateContentAsync,
+			},
+		};
+
+		const responses = await collect(
+			flow._callLlmAsync(
+				makeCtx({ agent }),
+				new LlmRequest(),
+				new Event({ author: "nullish-before" }),
+			),
+		);
+
+		expect(generateContentAsync).toHaveBeenCalledTimes(1);
+		expect(responses).toHaveLength(1);
+		expect((responses[0] as LlmResponse).content?.parts?.[0]).toEqual({
+			text: "from-model",
+		});
+	});
+
+	it("yields the original response when every after-model callback returns nullish", async () => {
+		const flow = new InspectableFlow();
+		const original = { content: { parts: [{ text: "original" }] } };
+		const agent = {
+			name: "nullish-after",
+			canonicalAfterModelCallbacks: [
+				() => undefined,
+				() => null,
+				async () => undefined,
+			],
+			canonicalModel: {
+				model: "m",
+				generateContentAsync: vi.fn(async function* () {
+					yield original;
+				}),
+			},
+		};
+
+		const responses = await collect(
+			flow._callLlmAsync(
+				makeCtx({ agent }),
+				new LlmRequest(),
+				new Event({ author: "nullish-after" }),
+			),
+		);
+
+		expect(responses).toEqual([original]);
+	});
 });

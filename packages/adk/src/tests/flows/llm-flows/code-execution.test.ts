@@ -2556,4 +2556,50 @@ describe("code-execution processors leftover edges", () => {
 		expect(files).toHaveLength(0);
 		expect(llmRequest.contents?.[0].parts?.[0]?.inlineData?.data).toBe("hello");
 	});
+
+	it("preprocess with undefined contents and pre-seeded CSV initializes contents", async () => {
+		const executor = new StubExecutor({
+			optimizeDataFile: true,
+			codeBlockDelimiters: [["```python\n", "\n```"]],
+			executionResultDelimiters: ["```tool_outputs\n", "\n```"],
+		});
+		executor.executeCode.mockResolvedValue({
+			stdout: "explored",
+			stderr: "",
+			outputFiles: [],
+		});
+		const state = State.create({}, {});
+		const cex = new CodeExecutorContext(state);
+		cex.addInputFiles([
+			{ name: "seed.csv", content: btoa("a,b\n1,2"), mimeType: "text/csv" },
+		]);
+		const llmRequest = new LlmRequest({ model: "gpt-4o" });
+		delete (llmRequest as any).contents;
+
+		const events = await collect(
+			requestProcessor.runAsync(
+				{
+					agent: new LlmAgent({
+						name: "coder",
+						model: "gpt-4o",
+						codeExecutor: executor,
+					}),
+					invocationId: "inv-undef-contents",
+					appName: "app",
+					userId: "u",
+					branch: "root",
+					session: { id: "s1", state, events: [] },
+					artifactService: { saveArtifact: vi.fn(async () => 1) },
+				} as unknown as InvocationContext,
+				llmRequest,
+			),
+		);
+
+		expect(events.length).toBeGreaterThanOrEqual(2);
+		expect(Array.isArray(llmRequest.contents)).toBe(true);
+		expect(llmRequest.contents!.length).toBeGreaterThanOrEqual(2);
+		expect(llmRequest.contents![0].parts?.[0]?.text).toContain("seed.csv");
+		expect(executor.executeCode).toHaveBeenCalledTimes(1);
+		expect(cex.getProcessedFileNames()).toContain("seed.csv");
+	});
 });

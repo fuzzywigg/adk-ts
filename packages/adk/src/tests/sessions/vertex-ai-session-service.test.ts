@@ -954,6 +954,113 @@ describe("VertexAiSessionService", () => {
 		expect(asyncRequest).toHaveBeenCalledTimes(5);
 	});
 
+	it("createSession propagates GET failures after LRO completes", async () => {
+		const { service, asyncRequest } = createService({
+			agentEngineId: "9",
+			project: "p",
+			location: "l",
+		});
+		asyncRequest
+			.mockResolvedValueOnce({
+				name: "projects/p/locations/l/reasoningEngines/9/sessions/s-get-fail/operations/op",
+			})
+			.mockResolvedValueOnce({ done: true })
+			.mockRejectedValueOnce(new Error("session GET exploded"));
+
+		await expect(service.createSession("app", "user", {})).rejects.toThrow(
+			"session GET exploded",
+		);
+	});
+
+	it("createSession derives session id from malformed operation names", async () => {
+		const { service, asyncRequest } = createService({
+			agentEngineId: "9",
+		});
+		asyncRequest
+			.mockResolvedValueOnce({
+				name: "weird-op-name-without-enough-segments",
+			})
+			.mockResolvedValueOnce({ done: true })
+			.mockResolvedValueOnce({
+				name: "sessions/derived-from-get",
+				updateTime: "2024-01-01T00:00:00.000Z",
+				sessionState: {},
+			});
+
+		const session = await service.createSession("app", "user", {});
+		// slice(-3,-2) on a single-segment name yields undefined
+		expect(session.id).toBe("derived-from-get");
+		expect(asyncRequest).toHaveBeenNthCalledWith(3, {
+			http_method: "GET",
+			path: "reasoningEngines/9/sessions/undefined",
+			request_dict: {},
+		});
+	});
+
+	it("listSessions maps empty and slash-heavy weird names", async () => {
+		const { service, asyncRequest } = createService();
+		asyncRequest.mockResolvedValueOnce({
+			sessions: [
+				{
+					name: "",
+					updateTime: "2024-01-01T00:00:00.000Z",
+				},
+				{
+					name: "////",
+					updateTime: "2024-01-01T00:00:01.000Z",
+				},
+				{
+					name: "a/b/c",
+					updateTime: "2024-01-01T00:00:02.000Z",
+				},
+			],
+		});
+		const listed = await service.listSessions("app", "u");
+		expect(listed.sessions.map((s) => s.id)).toEqual(["", "", "c"]);
+	});
+
+	it("getSession returns undefined when events page throws after session GET", async () => {
+		const { service, asyncRequest } = createService();
+		asyncRequest
+			.mockResolvedValueOnce({
+				name: "projects/p/locations/l/reasoningEngines/9/sessions/s-page",
+				updateTime: "2024-01-01T00:00:10.000Z",
+				sessionState: { ok: true },
+			})
+			.mockRejectedValueOnce(new Error("events list failed"));
+
+		await expect(
+			service.getSession("app", "u", "s-page"),
+		).resolves.toBeUndefined();
+	});
+
+	it("getSession returns undefined when a paginated events page throws", async () => {
+		const { service, asyncRequest } = createService();
+		asyncRequest
+			.mockResolvedValueOnce({
+				name: "projects/p/locations/l/reasoningEngines/9/sessions/s-page2",
+				updateTime: "2024-01-01T00:00:10.000Z",
+				sessionState: {},
+			})
+			.mockResolvedValueOnce({
+				sessionEvents: [
+					{
+						name: "projects/p/locations/l/reasoningEngines/9/sessions/s-page2/events/e1",
+						author: "user",
+						invocationId: "inv-1",
+						content: { parts: [{ text: "a" }] },
+						timestamp: "2024-01-01T00:00:01.000Z",
+					},
+				],
+				nextPageToken: "tok-2",
+			})
+			.mockRejectedValueOnce(new Error("page 2 boom"));
+
+		await expect(
+			service.getSession("app", "u", "s-page2"),
+		).resolves.toBeUndefined();
+	});
+
 	it("fromApiEvent handles empty metadata and empty longRunningToolIds list", () => {
 		const { service } = createService();
 		const event = (service as any).fromApiEvent({

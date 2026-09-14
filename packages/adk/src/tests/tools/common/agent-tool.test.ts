@@ -326,6 +326,20 @@ describe("AgentTool", () => {
 		expect(tool.getDeclaration().description).toBe("Tool description");
 	});
 
+	it("falls back to tool description when instruction is a plain function", () => {
+		const agent = makeStubAgent({
+			description: "Agent description",
+		});
+		(agent as { instruction: unknown }).instruction = () => "fn-instruction";
+		const tool = new AgentTool({
+			name: "fn_instruction_tool",
+			description: "Tool-level description",
+			agent,
+		});
+
+		expect(tool.getDeclaration().description).toBe("Tool-level description");
+	});
+
 	it("stringifies non-Error throws from agent.runAsync", async () => {
 		const agent = makeStubAgent({
 			runAsync: async function* () {

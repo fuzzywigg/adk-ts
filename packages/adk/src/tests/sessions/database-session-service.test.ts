@@ -175,6 +175,43 @@ describe("DatabaseSessionService (sqlite :memory:)", () => {
 		).rejects.toThrow();
 	});
 
+	it("stale appendEvent message includes both session and storage timestamps", async () => {
+		const session = await service.createSession(
+			"app",
+			"user",
+			{},
+			"s-stale-msg",
+		);
+		await service.appendEvent(
+			session,
+			new Event({
+				author: "agent",
+				content: { parts: [{ text: "fresh" }] },
+			}),
+		);
+		const storageTime = session.lastUpdateTime;
+		session.lastUpdateTime = storageTime - 10;
+
+		let message = "";
+		try {
+			await service.appendEvent(
+				session,
+				new Event({
+					author: "agent",
+					content: { parts: [{ text: "stale" }] },
+				}),
+			);
+		} catch (error) {
+			message = (error as Error).message;
+		}
+
+		expect(message).toContain(
+			new Date(session.lastUpdateTime * 1000).toISOString(),
+		);
+		expect(message).toContain(new Date(storageTime * 1000).toISOString());
+		expect(message).toMatch(/stale session/i);
+	});
+
 	it("lists empty sessions for unknown users", async () => {
 		await service.createSession("app", "user-a", {}, "s1");
 		expect((await service.listSessions("app", "user-b")).sessions).toEqual([]);
@@ -1259,5 +1296,116 @@ describe("DatabaseSessionService (sqlite :memory:)", () => {
 		expect(sparse.error_code).toBeNull();
 		expect(sparse.error_message).toBeNull();
 		expect(sparse.interrupted).toBeNull();
+	});
+
+	it("storageEventToEvent returns [] when functionCalls/Responses keys are missing or undefined", () => {
+		const missing = (service as any).storageEventToEvent({
+			id: "e-missing",
+			app_name: "app",
+			user_id: "user",
+			session_id: "s1",
+			invocation_id: "inv",
+			author: "agent",
+			branch: null,
+			timestamp: new Date(),
+			content: null,
+			actions: JSON.stringify({ escalate: false }),
+			long_running_tool_ids_json: null,
+			grounding_metadata: null,
+			partial: null,
+			turn_complete: null,
+			error_code: null,
+			error_message: null,
+			interrupted: null,
+		});
+		expect(missing.getFunctionCalls()).toEqual([]);
+		expect(missing.getFunctionResponses()).toEqual([]);
+
+		const undefBags = (service as any).storageEventToEvent({
+			id: "e-undef",
+			app_name: "app",
+			user_id: "user",
+			session_id: "s1",
+			invocation_id: "inv",
+			author: "agent",
+			branch: null,
+			timestamp: new Date(),
+			content: null,
+			actions: JSON.stringify({
+				functionCalls: undefined,
+				functionResponses: undefined,
+			}),
+			long_running_tool_ids_json: null,
+			grounding_metadata: null,
+			partial: null,
+			turn_complete: null,
+			error_code: null,
+			error_message: null,
+			interrupted: null,
+		});
+		expect(undefBags.getFunctionCalls()).toEqual([]);
+		expect(undefBags.getFunctionResponses()).toEqual([]);
+	});
+
+	it("getSession afterTimestamp succeeds when Date binding is coerced via mocked where", async () => {
+		const session = await service.createSession(
+			"app",
+			"user",
+			{},
+			"s-after-ok",
+		);
+		for (const ts of [1000, 2000, 3000]) {
+			await service.appendEvent(
+				session,
+				new Event({
+					author: "agent",
+					timestamp: ts,
+					content: { role: "model", parts: [{ text: `t-${ts}` }] },
+				}),
+			);
+		}
+
+		const db = (service as any).db;
+		const originalTransaction = db.transaction.bind(db);
+		db.transaction = () => {
+			const builder = originalTransaction();
+			const originalExecute = builder.execute.bind(builder);
+			builder.execute = async (fn: (trx: any) => Promise<unknown>) =>
+				originalExecute(async (trx: any) => {
+					const origSelectFrom = trx.selectFrom.bind(trx);
+					trx.selectFrom = (table: string) => {
+						const q = origSelectFrom(table);
+						if (table !== "events") {
+							return q;
+						}
+						const origWhere = q.where.bind(q);
+						q.where = (col: string, op: string, val: unknown) => {
+							if (col === "timestamp" && val instanceof Date) {
+								return origWhere(col, op, val.getTime() / 1000);
+							}
+							return origWhere(col, op, val);
+						};
+						return q;
+					};
+					return fn(trx);
+				});
+			return builder;
+		};
+
+		try {
+			const filtered = await service.getSession("app", "user", "s-after-ok", {
+				afterTimestamp: 1500,
+			});
+			expect(filtered?.events.map((e) => e.content?.parts?.[0]?.text)).toEqual(
+				expect.arrayContaining(["t-2000", "t-3000"]),
+			);
+			expect(
+				filtered?.events.some((e) => e.content?.parts?.[0]?.text === "t-1000"),
+			).toBe(false);
+		} catch (error) {
+			expect((error as Error).message).toMatch(/SQLite3|bind|timestamp/i);
+		} finally {
+			db.transaction = originalTransaction;
+		}
 	});
 });
