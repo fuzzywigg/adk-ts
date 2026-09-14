@@ -1,33 +1,30 @@
 import { BaseLlm, type LlmRequest, type LlmResponse } from "@adk/models";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const { mockLogger, mockSetAttributes, mockSpan, mockTracer } = vi.hoisted(
-	() => {
-		const mockSetAttributes = vi.fn();
-		const mockSpan = {
-			setAttributes: mockSetAttributes,
-			recordException: vi.fn(),
-			setStatus: vi.fn(),
-			end: vi.fn(),
-		};
-		const mockTracer = {
-			startActiveSpan: vi.fn(
-				(_name: string, fn: (span: typeof mockSpan) => unknown) => fn(mockSpan),
-			),
-		};
-		return {
-			mockLogger: {
-				debug: vi.fn(),
-				error: vi.fn(),
-				warn: vi.fn(),
-				info: vi.fn(),
-			},
-			mockSetAttributes,
-			mockSpan,
-			mockTracer,
-		};
-	},
-);
+const { mockLogger, mockSetAttributes, mockTracer } = vi.hoisted(() => {
+	const mockSetAttributes = vi.fn();
+	const mockSpan = {
+		setAttributes: mockSetAttributes,
+		recordException: vi.fn(),
+		setStatus: vi.fn(),
+		end: vi.fn(),
+	};
+	const mockTracer = {
+		startActiveSpan: vi.fn(
+			(_name: string, fn: (span: typeof mockSpan) => unknown) => fn(mockSpan),
+		),
+	};
+	return {
+		mockLogger: {
+			debug: vi.fn(),
+			error: vi.fn(),
+			warn: vi.fn(),
+			info: vi.fn(),
+		},
+		mockSetAttributes,
+		mockTracer,
+	};
+});
 
 vi.mock("@adk/logger", () => ({
 	Logger: vi.fn(() => mockLogger),
