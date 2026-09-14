@@ -176,6 +176,25 @@ describe("LlmRequest", () => {
 			req.config = { systemInstruction: 99 as any };
 			expect(req.getSystemInstructionText()).toBe("99");
 		});
+
+		it("should String()-coerce boolean and object-without-parts systemInstruction", () => {
+			req.config = { systemInstruction: true as any };
+			expect(req.getSystemInstructionText()).toBe("true");
+
+			req.config = { systemInstruction: { role: "system" } as any };
+			expect(req.getSystemInstructionText()).toBe("[object Object]");
+		});
+
+		it("should fallback to empty string when systemInstruction becomes falsy after the guard", () => {
+			let reads = 0;
+			req.config = {
+				get systemInstruction() {
+					reads += 1;
+					return reads === 1 ? { role: "system" } : (0 as any);
+				},
+			} as any;
+			expect(req.getSystemInstructionText()).toBe("");
+		});
 	});
 
 	describe("extractTextFromContent", () => {

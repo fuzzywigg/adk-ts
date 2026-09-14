@@ -1293,4 +1293,117 @@ describe("OpenAiLlm", () => {
 			);
 		});
 	});
+
+	describe("thoughtText finish_reason and leftover yields", () => {
+		function baseRequest() {
+			return new LlmRequest({
+				contents: [{ role: "user", parts: [{ text: "hi" }] }],
+				config: {},
+			});
+		}
+
+		it("keeps thoughtText through finish_reason and final leftover usage yield", async () => {
+			mockCreate.mockResolvedValue(
+				(async function* () {
+					yield {
+						choices: [
+							{
+								delta: { content: "[thinking] step-" },
+								finish_reason: null,
+							},
+						],
+					};
+					yield {
+						choices: [
+							{
+								delta: { content: "[thinking] two" },
+								finish_reason: "stop",
+							},
+						],
+						usage: {
+							prompt_tokens: 3,
+							completion_tokens: 4,
+							total_tokens: 7,
+						},
+					};
+				})(),
+			);
+
+			const responses: LlmResponse[] = [];
+			for await (const response of (llm as any).generateContentAsyncImpl(
+				baseRequest(),
+				true,
+			)) {
+				responses.push(response);
+			}
+
+			expect(
+				responses.some(
+					(r) =>
+						r.partial === true &&
+						(r.content?.parts?.[0] as any)?.thought === true,
+				),
+			).toBe(true);
+
+			const finished = responses.find((r) => r.finishReason === "STOP");
+			expect(finished?.content?.parts).toEqual([
+				{ text: "[thinking] step-[thinking] two", thought: true },
+			]);
+			expect(finished?.usageMetadata?.totalTokenCount).toBe(7);
+
+			const leftover = responses.find(
+				(r) =>
+					!r.partial &&
+					!r.finishReason &&
+					(r.content?.parts?.[0] as any)?.thought === true &&
+					r.content?.parts?.[0]?.text === "[thinking] step-[thinking] two" &&
+					r.usageMetadata?.totalTokenCount === 7,
+			);
+			expect(leftover).toBeTruthy();
+		});
+
+		it("yields thought-only finish and leftover when the final chunk carries thoughtText", async () => {
+			mockCreate.mockResolvedValue(
+				(async function* () {
+					yield {
+						choices: [
+							{
+								delta: { content: "<thinking>solo" },
+								finish_reason: "stop",
+							},
+						],
+						usage: {
+							prompt_tokens: 1,
+							completion_tokens: 1,
+							total_tokens: 2,
+						},
+					};
+				})(),
+			);
+
+			const responses: LlmResponse[] = [];
+			for await (const response of (llm as any).generateContentAsyncImpl(
+				baseRequest(),
+				true,
+			)) {
+				responses.push(response);
+			}
+
+			const finished = responses.find((r) => r.finishReason === "STOP");
+			expect(finished?.content?.parts).toEqual([
+				{ text: "<thinking>solo", thought: true },
+			]);
+			expect(
+				responses.some(
+					(r) =>
+						!r.partial &&
+						!r.finishReason &&
+						r.content?.parts?.length === 1 &&
+						(r.content.parts[0] as any).thought === true &&
+						r.content.parts[0].text === "<thinking>solo" &&
+						r.usageMetadata?.totalTokenCount === 2,
+				),
+			).toBe(true);
+		});
+	});
 });

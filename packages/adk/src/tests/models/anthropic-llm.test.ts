@@ -696,5 +696,49 @@ describe("AnthropicLlm", () => {
 				}),
 			);
 		});
+
+		it("falls back to this.model when request.model is missing", async () => {
+			const request = {
+				contents: [{ role: "user", parts: [{ text: "hi" }] }],
+				config: {},
+				getSystemInstructionText: () => "",
+			} as unknown as LlmRequest;
+
+			await anthropicLlm["generateContentAsyncImpl"](request).next();
+
+			expect(mockMessagesCreate).toHaveBeenCalledWith(
+				expect.objectContaining({
+					model: "claude-3-5-sonnet-20241022",
+				}),
+			);
+		});
+
+		it("treats falsy contents as an empty message list", async () => {
+			const request = {
+				contents: undefined,
+				config: {},
+				getSystemInstructionText: () => "",
+			} as unknown as LlmRequest;
+
+			await anthropicLlm["generateContentAsyncImpl"](request).next();
+
+			expect(mockMessagesCreate).toHaveBeenCalledWith(
+				expect.objectContaining({
+					messages: [],
+				}),
+			);
+		});
+	});
+
+	describe("content without parts leftovers", () => {
+		it("contentToAnthropicMessage maps missing parts to an empty content array", () => {
+			const message = anthropicLlm["contentToAnthropicMessage"]({
+				role: "user",
+			});
+			expect(message).toEqual({
+				role: "user",
+				content: [],
+			});
+		});
 	});
 });

@@ -711,6 +711,18 @@ describe("AiSdkLlm", () => {
 			);
 		});
 
+		it("convertToAiSdkMessages treats falsy contents as an empty list", () => {
+			expect(
+				(llm as any).convertToAiSdkMessages({ contents: null } as any),
+			).toEqual([]);
+			expect((llm as any).convertToAiSdkMessages({} as any)).toEqual([]);
+			expect(
+				(llm as any).convertToAiSdkMessages({
+					contents: undefined,
+				} as any),
+			).toEqual([]);
+		});
+
 		it("convertToAiSdkTools returns {} when tools array is empty", () => {
 			expect(
 				(llm as any).convertToAiSdkTools(

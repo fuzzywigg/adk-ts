@@ -214,6 +214,22 @@ describe("GoogleLlm", () => {
 			]);
 		});
 
+		it("convertContents defaults missing parts and falsy content to empty text", () => {
+			process.env.GOOGLE_API_KEY = "abc";
+			const llm = new GoogleLlm();
+			expect(
+				(llm as any).convertContents([
+					{ role: "user" },
+					{ role: "assistant", content: "" },
+					{ role: "user", content: null },
+				]),
+			).toEqual([
+				{ role: "user", parts: [{ text: "" }] },
+				{ role: "model", parts: [{ text: "" }] },
+				{ role: "user", parts: [{ text: "" }] },
+			]);
+		});
+
 		it("removeDisplayNameIfPresent nulls displayName", () => {
 			process.env.GOOGLE_API_KEY = "abc";
 			const llm = new GoogleLlm();
@@ -669,6 +685,32 @@ describe("GoogleLlm", () => {
 
 			expect(generateContent).toHaveBeenCalledWith(
 				expect.objectContaining({ model: "gemini-2.5-flash" }),
+			);
+		});
+
+		it("falls back to empty contents when request.contents is falsy", async () => {
+			const generateContent = vi.fn().mockResolvedValue({
+				candidates: [{ content: { parts: [{ text: "ok" }] } }],
+			});
+			(GoogleGenAI as unknown as ReturnType<typeof vi.fn>).mockImplementation(
+				() => ({
+					models: { generateContent, generateContentStream: vi.fn() },
+				}),
+			);
+
+			const llm = new GoogleLlm("gemini-2.5-flash");
+			for await (const _ of (llm as any).generateContentAsyncImpl(
+				{ model: undefined, contents: null as any, config: {} },
+				false,
+			)) {
+				/* drain */
+			}
+
+			expect(generateContent).toHaveBeenCalledWith(
+				expect.objectContaining({
+					model: "gemini-2.5-flash",
+					contents: [],
+				}),
 			);
 		});
 
