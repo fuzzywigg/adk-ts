@@ -253,6 +253,33 @@ describe("ReflectAndRetryToolPlugin", () => {
 		expect(response?.reflection_guidance).toContain("retry limit exceeded");
 	});
 
+	it("defaults error_type to ToolError for nullish errors on exceed path", async () => {
+		const plugin = new ReflectAndRetryToolPlugin({
+			maxRetries: 0,
+			throwExceptionIfRetryExceeded: false,
+		});
+		const response = await plugin.onToolErrorCallback({
+			tool: makeTool("x"),
+			toolArgs: {},
+			toolContext: makeToolContext(),
+			error: null,
+		});
+		expect(response?.error_type).toBe("ToolError");
+		expect(response?.retry_count).toBe(0);
+	});
+
+	it("defaults error_type when Error.name is undefined on reflection path", async () => {
+		const plugin = new ReflectAndRetryToolPlugin({ maxRetries: 2 });
+		const err = { message: "x", name: undefined };
+		const response = await plugin.onToolErrorCallback({
+			tool: makeTool(),
+			toolArgs: {},
+			toolContext: makeToolContext(),
+			error: err,
+		});
+		expect(response?.error_type).toBe("ToolError");
+	});
+
 	it("isolates failure counters per invocation when scope is INVOCATION", async () => {
 		const plugin = new ReflectAndRetryToolPlugin({ maxRetries: 2 });
 		const tool = makeTool();

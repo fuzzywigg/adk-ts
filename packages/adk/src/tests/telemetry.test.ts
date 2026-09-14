@@ -764,4 +764,30 @@ describe("TelemetryService leftovers", () => {
 			}),
 		);
 	});
+
+	it("builds empty contents when llmRequest.contents is undefined via || []", async () => {
+		const setAttributes = vi.fn();
+		const { trace } = await import("@opentelemetry/api");
+		vi.spyOn(trace, "getActiveSpan").mockReturnValue({
+			setAttributes,
+			addEvent: vi.fn(),
+		} as any);
+
+		const service = new TelemetryService();
+		service.traceLlmCall(
+			{
+				invocationId: "inv",
+				userId: "u",
+				session: { id: "s" },
+			} as any,
+			"evt",
+			{ model: "m", config: {}, contents: undefined } as any,
+			{ content: undefined } as LlmResponse,
+		);
+
+		const request = JSON.parse(
+			setAttributes.mock.calls[0][0]["adk.llm_request"],
+		);
+		expect(request.contents).toEqual([]);
+	});
 });

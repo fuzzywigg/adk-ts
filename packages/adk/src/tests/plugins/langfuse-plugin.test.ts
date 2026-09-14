@@ -1509,4 +1509,89 @@ describe("LangfusePlugin", () => {
 			}),
 		);
 	});
+
+	it("serializeContent defaults missing parts to []", () => {
+		const plugin = new LangfusePlugin({ publicKey: "pk", secretKey: "sk" });
+		expect((plugin as any).serializeContent({ role: "user" })).toEqual({
+			role: "user",
+			parts: [],
+		});
+	});
+
+	it("serializePart uses dataSize 0 when inlineData.data is missing", async () => {
+		const plugin = new LangfusePlugin({ publicKey: "pk", secretKey: "sk" });
+		const inv = makeInvocation({ invocationId: "inv-data-size-0" });
+		await plugin.beforeRunCallback({ invocationContext: inv });
+		eventMock.mockClear();
+
+		await plugin.onEventCallback({
+			invocationContext: inv,
+			event: new Event({
+				author: "root",
+				content: {
+					role: "model",
+					parts: [{ inlineData: { mimeType: "text/plain" } as any }],
+				},
+			}),
+		});
+
+		expect(eventMock).toHaveBeenCalledWith(
+			expect.objectContaining({
+				input: expect.objectContaining({
+					parts: [
+						expect.objectContaining({
+							inlineData: expect.objectContaining({
+								mimeType: "text/plain",
+								dataSize: 0,
+							}),
+						}),
+					],
+				}),
+			}),
+		);
+	});
+
+	it("recordTokenUsage coerces missing usage fields to 0 via ??", async () => {
+		const plugin = new LangfusePlugin({ publicKey: "pk", secretKey: "sk" });
+		const inv = makeInvocation({ invocationId: "inv-usage-zero" });
+		const callbackContext = makeCallbackContext(inv);
+		await plugin.beforeAgentCallback({ agent: inv.agent, callbackContext });
+		const llmRequest = new LlmRequest({ model: "m" });
+		await plugin.beforeModelCallback({ callbackContext, llmRequest });
+
+		await plugin.afterModelCallback({
+			callbackContext,
+			llmRequest,
+			llmResponse: new LlmResponse({
+				content: { role: "model", parts: [{ text: "x" }] },
+				usageMetadata: {},
+			}),
+		});
+
+		expect((plugin as any).tokenUsage.get("inv-usage-zero")).toEqual({
+			inputTokens: 0,
+			outputTokens: 0,
+			totalTokens: 0,
+		});
+	});
+
+	it("afterRunCallback prefers structured output when plain text is empty", async () => {
+		const plugin = new LangfusePlugin({ publicKey: "pk", secretKey: "sk" });
+		const inv = makeInvocation({ invocationId: "inv-empty-plain" });
+		await plugin.beforeRunCallback({ invocationContext: inv });
+		updateMock.mockClear();
+
+		await plugin.afterRunCallback({
+			invocationContext: inv,
+			result: {
+				content: { role: "model", parts: [] },
+			},
+		});
+
+		expect(updateMock).toHaveBeenCalledWith(
+			expect.objectContaining({
+				output: expect.objectContaining({ role: "model", parts: [] }),
+			}),
+		);
+	});
 });

@@ -711,6 +711,15 @@ describe("AiSdkLlm", () => {
 			);
 		});
 
+		it("convertToAiSdkMessages tolerates null contents on duck request via || []", () => {
+			expect((llm as any).convertToAiSdkMessages({ contents: null })).toEqual(
+				[],
+			);
+			expect(
+				(llm as any).convertToAiSdkMessages({ contents: undefined }),
+			).toEqual([]);
+		});
+
 		it("convertToAiSdkTools returns {} when tools array is empty", () => {
 			expect(
 				(llm as any).convertToAiSdkTools(
