@@ -4,9 +4,9 @@ import { describe, expect, it } from "vitest";
 
 /**
  * Eighteenth leftover: reversible workflow assertions for the agents
- * `"false"` / NaN asymmetry Vitest slice after tip #221. Softened after
- * nineteenth leftover gate retarget — pins lint/build/test only; nineteenth
- * owns the focused filter pin.
+ * `"false"` / NaN asymmetry Vitest slice after tip #221. Softened while
+ * providers/telemetry eighteenth owns the focused filter pin — pins
+ * lint/build/test only.
  */
 describe("agents false-nan ci workflow eighteenth leftover edges", () => {
 	const root = resolve(__dirname, "../../../../..");
