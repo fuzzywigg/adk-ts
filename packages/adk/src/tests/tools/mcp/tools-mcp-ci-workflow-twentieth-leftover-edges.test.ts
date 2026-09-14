@@ -3,14 +3,14 @@ import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 
 /**
- * Twentieth leftover: reversible workflow assertions for the agents
- * boolean-true / string-true / SameValueZero `-0` asymmetry Vitest slice
- * after tip #236. Softened after tools/mcp heavy residual tip-relaunch —
- * shares the focused twentieth leftover gate; pins lint/build/test plus
- * twentieth filter (tools/mcp residual also matches).
+ * Twentieth leftover: reversible workflow assertions for the tools/mcp
+ * boolean-true / string-true / SameValueZero `-0` / empty-array /
+ * NEGATIVE_INFINITY residual Vitest slice after tip #248. Shares the
+ * focused twentieth leftover gate with agents #246 — pins lint/build/test
+ * plus twentieth filter (no retarget).
  */
-describe("agents true-asymmetry ci workflow twentieth leftover edges", () => {
-	const root = resolve(__dirname, "../../../../..");
+describe("tools/mcp residual ci workflow twentieth leftover edges", () => {
+	const root = resolve(__dirname, "../../../../../..");
 
 	it("ci.yml build-and-test still runs pnpm test and ADK coverage", () => {
 		const ci = readFileSync(resolve(root, ".github/workflows/ci.yml"), "utf8");
