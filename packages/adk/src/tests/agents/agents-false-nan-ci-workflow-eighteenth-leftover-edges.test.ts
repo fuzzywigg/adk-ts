@@ -4,7 +4,8 @@ import { describe, expect, it } from "vitest";
 
 /**
  * Eighteenth leftover: reversible workflow assertions for the agents
- * `"false"` / NaN asymmetry Vitest slice after tip #221.
+ * `"false"` / NaN asymmetry Vitest slice. Softened after fifteenth tools/mcp
+ * gate retarget — pins lint/build/test only; fifteenth owns the focused filter.
  */
 describe("agents false-nan ci workflow eighteenth leftover edges", () => {
 	const root = resolve(__dirname, "../../../../..");
@@ -18,7 +19,7 @@ describe("agents false-nan ci workflow eighteenth leftover edges", () => {
 		expect(ci).toContain("continue-on-error: true");
 	});
 
-	it("push.yml runs focused eighteenth leftover slice then pnpm test", () => {
+	it("push.yml still runs Biome lint, ADK build, and pnpm test", () => {
 		const push = readFileSync(
 			resolve(root, ".github/workflows/push.yml"),
 			"utf8",
@@ -27,7 +28,6 @@ describe("agents false-nan ci workflow eighteenth leftover edges", () => {
 		expect(push).toContain("- main");
 		expect(push).toMatch(/run:\s*pnpm lint\b/);
 		expect(push).toContain("pnpm --filter @iqai/adk build");
-		expect(push).toContain("eighteenth-leftover-edges");
 		expect(push).toMatch(/run:\s*pnpm test\b/);
 	});
 
