@@ -222,4 +222,70 @@ describe("LocalEvalSetsManager", () => {
 			.sort();
 		expect(ids).toEqual(["a", "b"]);
 	});
+
+	it("rethrows non-ENOENT errors from listEvalSets", async () => {
+		await manager.createEvalSet(appName, makeEvalSet("set-1"));
+		const evalSetsPath = path.join(basePath, appName, "eval_sets");
+		await fs.chmod(evalSetsPath, 0o000);
+		try {
+			await expect(manager.listEvalSets(appName)).rejects.toThrow();
+		} finally {
+			await fs.chmod(evalSetsPath, 0o755);
+		}
+	});
+
+	it("rethrows non-ENOENT errors from deleteEvalSet", async () => {
+		await manager.createEvalSet(appName, makeEvalSet("set-1"));
+		const evalSetsPath = path.join(basePath, appName, "eval_sets");
+		await fs.chmod(evalSetsPath, 0o555);
+		try {
+			await expect(manager.deleteEvalSet(appName, "set-1")).rejects.toThrow();
+		} finally {
+			await fs.chmod(evalSetsPath, 0o755);
+		}
+	});
+
+	it("updateEvalCase rejects unknown case ids via utils", async () => {
+		await manager.createEvalSet(appName, makeEvalSet("set-1"));
+		await expect(
+			manager.updateEvalCase(appName, "set-1", makeCase("missing")),
+		).rejects.toThrow(/not found/);
+	});
+
+	it("getEvalCase fails when the eval set is missing", async () => {
+		await expect(manager.getEvalCase(appName, "ghost", "c1")).rejects.toThrow(
+			/not found/,
+		);
+	});
+
+	it("createEvalCase fails when the eval set is missing", async () => {
+		await expect(
+			manager.createEvalCase(appName, "ghost", makeCase("c1")),
+		).rejects.toThrow(/not found/);
+	});
+
+	it("persists pretty-printed JSON for created eval sets", async () => {
+		await manager.createEvalSet(
+			appName,
+			makeEvalSet("pretty", { description: " Formal " }),
+		);
+		const raw = await fs.readFile(
+			path.join(basePath, appName, "eval_sets", "pretty.json"),
+			"utf-8",
+		);
+		expect(raw).toContain("\n");
+		expect(JSON.parse(raw).description).toBe(" Formal ");
+	});
+
+	it("deleteEvalCase leaves sibling cases intact", async () => {
+		await manager.createEvalSet(
+			appName,
+			makeEvalSet("set-1", {
+				evalCases: [makeCase("keep"), makeCase("drop")],
+			}),
+		);
+		await manager.deleteEvalCase(appName, "set-1", "drop");
+		const fetched = await manager.getEvalSet(appName, "set-1");
+		expect(fetched?.evalCases.map((c) => c.evalId)).toEqual(["keep"]);
+	});
 });

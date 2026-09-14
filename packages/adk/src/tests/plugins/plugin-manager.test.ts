@@ -285,4 +285,119 @@ describe("PluginManager", () => {
 			false,
 		);
 	});
+
+	it("returns undefined when every plugin callback returns undefined", async () => {
+		const manager = new PluginManager({
+			plugins: [new TestPlugin("a"), new TestPlugin("b")],
+		});
+		await expect(
+			manager.runBeforeRunCallback({ invocationContext: {} as any }),
+		).resolves.toBeUndefined();
+	});
+
+	it("skips plugins that omit the requested callback method", async () => {
+		class PartialPlugin extends BasePlugin {
+			constructor(name: string) {
+				super(name);
+			}
+		}
+		const partial = new PartialPlugin("partial");
+		const answering = new TestPlugin("answering", { hit: true });
+		const manager = new PluginManager({ plugins: [partial, answering] });
+
+		await expect(
+			manager.runBeforeRunCallback({ invocationContext: {} as any }),
+		).resolves.toEqual({ hit: true });
+	});
+
+	it("getPlugin returns undefined for unknown names", () => {
+		const manager = new PluginManager();
+		expect(manager.getPlugin("missing")).toBeUndefined();
+		expect(manager.getPlugins()).toEqual([]);
+	});
+
+	it("registers plugins after construction", () => {
+		const manager = new PluginManager();
+		manager.registerPlugin(new TestPlugin("late"));
+		expect(manager.getPlugin("late")?.name).toBe("late");
+		expect(manager.getPlugins()).toHaveLength(1);
+	});
+
+	it("aggregates multiple close failures into one error message", async () => {
+		const first = new ClosePlugin("first", async () => {
+			throw new Error("boom-one");
+		});
+		const second = new ClosePlugin("second", async () => {
+			throw "boom-two";
+		});
+		const manager = new PluginManager({
+			plugins: [first, second],
+			closeTimeout: 1000,
+		});
+
+		await expect(manager.close()).rejects.toThrow(
+			/Failed to close plugins: 'first': boom-one, 'second': boom-two/,
+		);
+	});
+
+	it("uses the default closeTimeout when omitted", () => {
+		const manager = new PluginManager({ plugins: [] });
+		expect((manager as any).closeTimeout).toBe(5000);
+	});
+
+	it("continues to later plugins when earlier callbacks return undefined", async () => {
+		class SilentPlugin extends BasePlugin {
+			calls = 0;
+			constructor() {
+				super("silent");
+			}
+			async onUserMessageCallback(): Promise<any> {
+				this.calls += 1;
+				return undefined;
+			}
+		}
+		class LoudPlugin extends BasePlugin {
+			calls = 0;
+			constructor() {
+				super("loud");
+			}
+			async onUserMessageCallback(): Promise<any> {
+				this.calls += 1;
+				return { rewritten: "hi" };
+			}
+		}
+		const silent = new SilentPlugin();
+		const loud = new LoudPlugin();
+		const manager = new PluginManager({ plugins: [silent, loud] });
+
+		await expect(
+			manager.runOnUserMessageCallback({
+				userMessage: { role: "user", parts: [{ text: "x" }] } as any,
+				invocationContext: {} as any,
+			}),
+		).resolves.toEqual({ rewritten: "hi" });
+		expect(silent.calls).toBe(1);
+		expect(loud.calls).toBe(1);
+	});
+
+	it("exposes every pluginCallbackNameSchema enum value", () => {
+		const values = pluginCallbackNameSchema.options;
+		expect(values).toEqual(
+			expect.arrayContaining([
+				"onUserMessageCallback",
+				"beforeRunCallback",
+				"afterRunCallback",
+				"onEventCallback",
+				"beforeAgentCallback",
+				"afterAgentCallback",
+				"beforeToolCallback",
+				"afterToolCallback",
+				"beforeModelCallback",
+				"afterModelCallback",
+				"onToolErrorCallback",
+				"onModelErrorCallback",
+			]),
+		);
+		expect(values).toHaveLength(12);
+	});
 });

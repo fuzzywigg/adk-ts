@@ -510,4 +510,345 @@ describe("LocalEvalService", () => {
 		expect(actualText).toContain("Error: Unknown error");
 		errorSpy.mockRestore();
 	});
+
+	it("skips expected invocations when conversation turns omit finalResponse", async () => {
+		const ask = vi.fn(async () => "live");
+		const service = new LocalEvalService({
+			name: "stub-agent",
+			ask,
+		} as any);
+
+		const evalCase: EvalCase = {
+			evalId: "no-expected",
+			conversation: [
+				{
+					userContent: { role: "user", parts: [{ text: "hi" }] },
+					creationTimestamp: 1,
+				},
+			],
+		};
+
+		const batches: { invocationId?: string }[][] = [];
+		for await (const batch of service.performInference({
+			evalSetId: "set-1",
+			evalCases: [makeEvalSet(evalCase)],
+		})) {
+			batches.push(batch);
+		}
+
+		expect(batches[0]).toHaveLength(1);
+		expect(batches[0][0].invocationId).toBe("no-expected-0");
+		expect(ask).toHaveBeenCalledOnce();
+	});
+
+	it("yields one batch per eval case across multiple sets", async () => {
+		const ask = vi.fn(async () => "ok");
+		const service = new LocalEvalService({
+			name: "stub-agent",
+			ask,
+		} as any);
+
+		const caseA: EvalCase = {
+			evalId: "A",
+			conversation: [
+				{
+					userContent: { role: "user", parts: [{ text: "a" }] },
+					creationTimestamp: 1,
+				},
+			],
+		};
+		const caseB: EvalCase = {
+			evalId: "B",
+			conversation: [
+				{
+					userContent: { role: "user", parts: [{ text: "b" }] },
+					creationTimestamp: 1,
+				},
+			],
+		};
+
+		const batches: string[] = [];
+		for await (const batch of service.performInference({
+			evalSetId: "set-1",
+			evalCases: [
+				{ evalSetId: "s1", evalCases: [caseA], creationTimestamp: 1 },
+				{ evalSetId: "s2", evalCases: [caseB], creationTimestamp: 1 },
+			],
+		})) {
+			batches.push(batch[0].invocationId!);
+		}
+
+		expect(batches).toEqual(["A-0", "B-0"]);
+		expect(ask).toHaveBeenCalledTimes(2);
+	});
+
+	it("uses the full invocation id when it has no hyphen", async () => {
+		const service = new LocalEvalService({
+			name: "unused",
+			ask: async () => "unused",
+		} as any);
+
+		const spy = vi
+			.spyOn(DEFAULT_METRIC_EVALUATOR_REGISTRY, "getEvaluator")
+			.mockReturnValue({
+				evaluateInvocations: async (
+					actual: unknown[],
+					expected: unknown[],
+				) => ({
+					overallScore: 1,
+					overallEvalStatus: EvalStatus.PASSED,
+					perInvocationResults: [
+						{
+							actualInvocation: actual[0],
+							expectedInvocation: expected[0],
+							score: 1,
+							evalStatus: EvalStatus.PASSED,
+						},
+					],
+				}),
+			} as any);
+
+		const results: { evalSetId: string }[] = [];
+		for await (const evalResult of service.evaluate({
+			inferenceResults: [
+				[
+					{
+						invocationId: "plainid",
+						userContent: { role: "user", parts: [{ text: "q" }] },
+						finalResponse: {
+							role: "model",
+							parts: [{ text: "same" }],
+						},
+						creationTimestamp: 1,
+					},
+				],
+			],
+			evaluateConfig: {
+				evalMetrics: [
+					{
+						metricName: PrebuiltMetrics.RESPONSE_MATCH_SCORE,
+						threshold: 0.5,
+					},
+				],
+			},
+		})) {
+			results.push(evalResult);
+		}
+
+		expect(results).toHaveLength(1);
+		expect(results[0].evalSetId).toBe("plainid");
+		spy.mockRestore();
+	});
+
+	it("evaluates multiple metrics for the same inference batch", async () => {
+		const service = new LocalEvalService({
+			name: "unused",
+			ask: async () => "unused",
+		} as any);
+
+		const originalGet = DEFAULT_METRIC_EVALUATOR_REGISTRY.getEvaluator.bind(
+			DEFAULT_METRIC_EVALUATOR_REGISTRY,
+		);
+		const spy = vi
+			.spyOn(DEFAULT_METRIC_EVALUATOR_REGISTRY, "getEvaluator")
+			.mockImplementation((metric) => {
+				return {
+					evaluateInvocations: async () => ({
+						overallScore: metric.threshold,
+						overallEvalStatus: EvalStatus.PASSED,
+						perInvocationResults: [
+							{
+								actualInvocation: {
+									invocationId: "case-actual",
+									creationTimestamp: 1,
+								},
+								expectedInvocation: {
+									invocationId: "case-expected",
+									creationTimestamp: 1,
+								},
+								score: 1,
+								evalStatus: EvalStatus.PASSED,
+							},
+						],
+					}),
+				} as any;
+			});
+
+		const results: {
+			evalCaseResults: { evalMetricResultPerInvocation: unknown[] }[];
+		}[] = [];
+		for await (const evalResult of service.evaluate({
+			inferenceResults: [
+				[
+					{
+						invocationId: "case-expected",
+						userContent: { role: "user", parts: [{ text: "q" }] },
+						finalResponse: {
+							role: "model",
+							parts: [{ text: "a" }],
+						},
+						creationTimestamp: 1,
+					},
+					{
+						invocationId: "case-actual",
+						userContent: { role: "user", parts: [{ text: "q" }] },
+						finalResponse: {
+							role: "model",
+							parts: [{ text: "a" }],
+						},
+						creationTimestamp: 2,
+					},
+				],
+			],
+			evaluateConfig: {
+				evalMetrics: [
+					{
+						metricName: PrebuiltMetrics.RESPONSE_MATCH_SCORE,
+						threshold: 0.5,
+					},
+					{
+						metricName: PrebuiltMetrics.TOOL_TRAJECTORY_AVG_SCORE,
+						threshold: 1,
+					},
+				],
+			},
+		})) {
+			results.push(evalResult);
+		}
+
+		expect(results[0].evalCaseResults).toHaveLength(2);
+		expect(spy).toHaveBeenCalledTimes(2);
+		spy.mockRestore();
+		void originalGet;
+	});
+
+	it("reinitializes the runner when it was cleared before inference", async () => {
+		const ask = vi.fn(async () => "rebuilt");
+		const service = new LocalEvalService({
+			name: "stub-agent",
+			ask,
+		} as any);
+		(service as any).runner = undefined;
+
+		const evalCase: EvalCase = {
+			evalId: "rebuild",
+			conversation: [
+				{
+					userContent: { role: "user", parts: [{ text: "hi" }] },
+					creationTimestamp: 1,
+				},
+			],
+		};
+
+		let text = "";
+		for await (const batch of service.performInference({
+			evalSetId: "set-1",
+			evalCases: [makeEvalSet(evalCase)],
+		})) {
+			text = batch[0].finalResponse?.parts?.[0]?.text ?? "";
+		}
+
+		expect(text).toBe("rebuilt");
+		expect(ask).toHaveBeenCalledOnce();
+	});
+
+	it("merges multiple inference batches that share an eval id prefix", async () => {
+		const service = new LocalEvalService({
+			name: "unused",
+			ask: async () => "unused",
+		} as any);
+
+		const spy = vi
+			.spyOn(DEFAULT_METRIC_EVALUATOR_REGISTRY, "getEvaluator")
+			.mockReturnValue({
+				evaluateInvocations: async (
+					actual: unknown[],
+					expected: unknown[],
+				) => ({
+					overallScore: 1,
+					overallEvalStatus: EvalStatus.PASSED,
+					perInvocationResults: [
+						{
+							actualInvocation: actual[0],
+							expectedInvocation: expected[0],
+							score: 1,
+							evalStatus: EvalStatus.PASSED,
+						},
+					],
+				}),
+			} as any);
+
+		const results: {
+			evalCaseResults: {
+				evalMetricResultPerInvocation: unknown[];
+			}[];
+		}[] = [];
+		for await (const evalResult of service.evaluate({
+			inferenceResults: [
+				[
+					{
+						invocationId: "shared-expected",
+						userContent: { role: "user", parts: [{ text: "q1" }] },
+						finalResponse: {
+							role: "model",
+							parts: [{ text: "e1" }],
+						},
+						creationTimestamp: 1,
+					},
+					{
+						invocationId: "shared-0",
+						userContent: { role: "user", parts: [{ text: "q1" }] },
+						finalResponse: {
+							role: "model",
+							parts: [{ text: "a1" }],
+						},
+						creationTimestamp: 2,
+					},
+				],
+				[
+					{
+						invocationId: "shared-expected",
+						userContent: { role: "user", parts: [{ text: "q2" }] },
+						finalResponse: {
+							role: "model",
+							parts: [{ text: "e2" }],
+						},
+						creationTimestamp: 3,
+					},
+					{
+						invocationId: "shared-1",
+						userContent: { role: "user", parts: [{ text: "q2" }] },
+						finalResponse: {
+							role: "model",
+							parts: [{ text: "a2" }],
+						},
+						creationTimestamp: 4,
+					},
+				],
+			],
+			evaluateConfig: {
+				evalMetrics: [
+					{
+						metricName: PrebuiltMetrics.RESPONSE_MATCH_SCORE,
+						threshold: 0.5,
+					},
+				],
+			},
+		})) {
+			results.push(evalResult);
+		}
+
+		expect(results).toHaveLength(1);
+		expect(spy.mock.calls[0][0].metricName).toBe(
+			PrebuiltMetrics.RESPONSE_MATCH_SCORE,
+		);
+		const evaluator = spy.mock.results[0].value as {
+			evaluateInvocations: (
+				actual: unknown[],
+				expected: unknown[],
+			) => Promise<unknown>;
+		};
+		expect(evaluator).toBeDefined();
+		spy.mockRestore();
+	});
 });

@@ -829,3 +829,456 @@ describe("AgentEvaluator.findConfigForTestFile criteria shape", () => {
 		).resolves.toEqual(DEFAULT_CRITERIA);
 	});
 });
+
+describe("AgentEvaluator.migrateEvalDataToNewSchema edges", () => {
+	it("rejects empty newEvalDataFile", async () => {
+		await expect(
+			AgentEvaluator.migrateEvalDataToNewSchema("/tmp/old.json", ""),
+		).rejects.toThrow(/empty/);
+	});
+
+	it("omits finalResponse and intermediateData when old columns are absent", async () => {
+		const dir = await makeTempDir();
+		const oldFile = path.join(dir, "old.test.json");
+		const newFile = path.join(dir, "new.evalset.json");
+		await fs.writeFile(oldFile, JSON.stringify([{ query: "only-query" }]));
+		await fs.writeFile(
+			path.join(dir, "test_config.json"),
+			JSON.stringify({
+				criteria: { [RESPONSE_EVALUATION_SCORE_KEY]: 0.5 },
+			}),
+		);
+
+		await AgentEvaluator.migrateEvalDataToNewSchema(oldFile, newFile);
+		const migrated = JSON.parse(await fs.readFile(newFile, "utf-8"));
+		expect(migrated.evalCases[0].conversation[0].finalResponse).toBeUndefined();
+		expect(
+			migrated.evalCases[0].conversation[0].intermediateData,
+		).toBeUndefined();
+		expect(
+			migrated.evalCases[0].conversation[0].userContent.parts[0].text,
+		).toBe("only-query");
+		expect(migrated.evalCases[0].sessionInput).toBeUndefined();
+	});
+
+	it("uses empty user text when query is missing under RESPONSE_EVALUATION", async () => {
+		const dir = await makeTempDir();
+		const oldFile = path.join(dir, "old.test.json");
+		const newFile = path.join(dir, "new.evalset.json");
+		await fs.writeFile(oldFile, JSON.stringify([{ reference: "answer-only" }]));
+		await fs.writeFile(
+			path.join(dir, "test_config.json"),
+			JSON.stringify({
+				criteria: { [RESPONSE_EVALUATION_SCORE_KEY]: 0.5 },
+			}),
+		);
+
+		await expect(
+			AgentEvaluator.migrateEvalDataToNewSchema(oldFile, newFile),
+		).rejects.toThrow(/must include 'query'/);
+	});
+
+	it("migrates missing query as empty text when criteria only needs trajectory tools", async () => {
+		const dir = await makeTempDir();
+		const oldFile = path.join(dir, "old.test.json");
+		const newFile = path.join(dir, "new.evalset.json");
+		await fs.writeFile(
+			oldFile,
+			JSON.stringify([{ query: "", expected_tool_use: [{ name: "t" }] }]),
+		);
+		await fs.writeFile(
+			path.join(dir, "test_config.json"),
+			JSON.stringify({
+				criteria: { [TOOL_TRAJECTORY_SCORE_KEY]: 1 },
+			}),
+		);
+
+		await AgentEvaluator.migrateEvalDataToNewSchema(oldFile, newFile);
+		const migrated = JSON.parse(await fs.readFile(newFile, "utf-8"));
+		expect(
+			migrated.evalCases[0].conversation[0].userContent.parts[0].text,
+		).toBe("");
+		expect(
+			migrated.evalCases[0].conversation[0].intermediateData.toolUses,
+		).toEqual([{ name: "t" }]);
+	});
+});
+
+describe("AgentEvaluator._loadEvalSetFromFile and _loadDataset edges", () => {
+	it("wraps a non-array JSON object as a single-row dataset", async () => {
+		const dir = await makeTempDir();
+		const file = path.join(dir, "object.test.json");
+		await fs.writeFile(
+			file,
+			JSON.stringify({
+				query: "q",
+				reference: "r",
+				expected_tool_use: [],
+			}),
+		);
+
+		const loaded = await (AgentEvaluator as any)._loadDataset(file);
+		expect(loaded).toEqual([
+			[
+				{
+					query: "q",
+					reference: "r",
+					expected_tool_use: [],
+				},
+			],
+		]);
+	});
+
+	it("treats JSON objects lacking evalSetId/evalCases as old format", async () => {
+		const dir = await makeTempDir();
+		const file = path.join(dir, "legacy-shaped.json");
+		await fs.writeFile(
+			file,
+			JSON.stringify([
+				{
+					query: "hello",
+					reference: "world",
+					expected_tool_use: [],
+				},
+			]),
+		);
+		const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+		const evalSet = await (AgentEvaluator as any)._loadEvalSetFromFile(
+			file,
+			{
+				[RESPONSE_MATCH_SCORE_KEY]: 0.8,
+				[TOOL_TRAJECTORY_SCORE_KEY]: 1,
+			},
+			{},
+		);
+
+		expect(warn).toHaveBeenCalledWith(expect.stringMatching(/older format/));
+		expect(evalSet.evalCases[0].conversation[0].userContent.parts[0].text).toBe(
+			"hello",
+		);
+		warn.mockRestore();
+	});
+
+	it("fails when eval set file content is invalid JSON", async () => {
+		const dir = await makeTempDir();
+		const file = path.join(dir, "bad.evalset.json");
+		await fs.writeFile(file, "{not-json");
+
+		await expect(
+			(AgentEvaluator as any)._loadEvalSetFromFile(file, DEFAULT_CRITERIA, {}),
+		).rejects.toThrow(/Failed to process eval set file/);
+	});
+
+	it("fails when eval set file is missing", async () => {
+		await expect(
+			(AgentEvaluator as any)._loadEvalSetFromFile(
+				"/tmp/adk-missing-evalset.json",
+				DEFAULT_CRITERIA,
+				{},
+			),
+		).rejects.toThrow(/Failed to process eval set file/);
+	});
+});
+
+describe("AgentEvaluator._validateInput ALLOWED_CRITERIA edges", () => {
+	it("rejects FINAL_RESPONSE_MATCH_V2 for old-schema validation", () => {
+		expect(() =>
+			(AgentEvaluator as any)._validateInput(
+				[[{ query: "q", reference: "r" }]],
+				{ final_response_match_v2: 0.8 },
+			),
+		).toThrow(/Invalid criteria key/);
+	});
+
+	it("accepts SAFETY_V1_KEY in ALLOWED_CRITERIA", () => {
+		expect(() =>
+			(AgentEvaluator as any)._validateInput([[{ query: "q" }]], {
+				[SAFETY_V1_KEY]: 0.9,
+			}),
+		).not.toThrow();
+	});
+
+	it("rejects null/undefined dataset", () => {
+		expect(() =>
+			(AgentEvaluator as any)._validateInput(null, {
+				[RESPONSE_EVALUATION_SCORE_KEY]: 0.5,
+			}),
+		).toThrow(/empty/i);
+	});
+});
+
+describe("AgentEvaluator._processMetricsAndGetFailures edges", () => {
+	it("treats average exactly equal to threshold as PASSED", () => {
+		const failures = (AgentEvaluator as any)._processMetricsAndGetFailures(
+			{
+				exact: [
+					{
+						actualInvocation: {},
+						expectedInvocation: {},
+						evalMetricResult: {
+							metricName: "exact",
+							threshold: 0.8,
+							score: 0.8,
+							evalStatus: EvalStatus.PASSED,
+						},
+					},
+				],
+			},
+			false,
+			"agent",
+		);
+		expect(failures).toEqual([]);
+	});
+
+	it("uses Unknown Agent when agent name is empty and printDetailedResults is false", () => {
+		const failures = (AgentEvaluator as any)._processMetricsAndGetFailures(
+			{
+				m: [
+					{
+						actualInvocation: {},
+						expectedInvocation: {},
+						evalMetricResult: {
+							metricName: "m",
+							threshold: 1,
+							score: 0,
+							evalStatus: EvalStatus.FAILED,
+						},
+					},
+				],
+			},
+			false,
+			"",
+		);
+		expect(failures[0]).toContain("m for  Failed");
+	});
+
+	it("aggregates multiple metric failures", () => {
+		const failures = (AgentEvaluator as any)._processMetricsAndGetFailures(
+			{
+				a: [
+					{
+						actualInvocation: {},
+						expectedInvocation: {},
+						evalMetricResult: {
+							metricName: "a",
+							threshold: 1,
+							score: 0.1,
+							evalStatus: EvalStatus.FAILED,
+						},
+					},
+				],
+				b: [
+					{
+						actualInvocation: {},
+						expectedInvocation: {},
+						evalMetricResult: {
+							metricName: "b",
+							threshold: 1,
+							score: 0.2,
+							evalStatus: EvalStatus.FAILED,
+						},
+					},
+				],
+			},
+			false,
+			"multi",
+		);
+		expect(failures).toHaveLength(2);
+		expect(failures[0]).toContain("a for multi Failed");
+		expect(failures[1]).toContain("b for multi Failed");
+	});
+
+	it("filters undefined scores out of the average", () => {
+		const failures = (AgentEvaluator as any)._processMetricsAndGetFailures(
+			{
+				mixed: [
+					{
+						actualInvocation: {},
+						expectedInvocation: {},
+						evalMetricResult: {
+							metricName: "mixed",
+							threshold: 0.5,
+							score: undefined,
+							evalStatus: EvalStatus.NOT_EVALUATED,
+						},
+					},
+					{
+						actualInvocation: {},
+						expectedInvocation: {},
+						evalMetricResult: {
+							metricName: "mixed",
+							threshold: 0.5,
+							score: 0.9,
+							evalStatus: EvalStatus.PASSED,
+						},
+					},
+				],
+			},
+			false,
+			"agent",
+		);
+		expect(failures).toEqual([]);
+	});
+});
+
+describe("AgentEvaluator.evaluateEvalSet failure messaging", () => {
+	afterEach(() => {
+		vi.restoreAllMocks();
+	});
+
+	it("includes Unknown Agent in failure text when agent name is missing", async () => {
+		vi.spyOn(LocalEvalService.prototype, "performInference").mockImplementation(
+			async function* () {
+				yield [];
+			},
+		);
+		vi.spyOn(LocalEvalService.prototype, "evaluate").mockImplementation(
+			async function* () {
+				yield {
+					evalSetResultId: "r",
+					evalSetId: "set-1",
+					evalCaseResults: [
+						{
+							evalSetId: "set-1",
+							evalId: "c1",
+							finalEvalStatus: EvalStatus.FAILED,
+							overallEvalMetricResults: [],
+							evalMetricResultPerInvocation: [
+								{
+									actualInvocation: { creationTimestamp: 1 },
+									expectedInvocation: { creationTimestamp: 1 },
+									evalMetricResults: [
+										{
+											metricName: RESPONSE_MATCH_SCORE_KEY,
+											threshold: 0.9,
+											score: 0.1,
+											evalStatus: EvalStatus.FAILED,
+										},
+									],
+								},
+							],
+							sessionId: "s",
+						},
+					],
+					creationTimestamp: 1,
+				};
+			},
+		);
+
+		await expect(
+			AgentEvaluator.evaluateEvalSet(
+				{ name: undefined } as any,
+				{ evalSetId: "set-1", evalCases: [], creationTimestamp: 1 },
+				{ [RESPONSE_MATCH_SCORE_KEY]: 0.9 },
+				1,
+				false,
+			),
+		).rejects.toThrow(/Unknown Agent/);
+	});
+
+	it("evaluates multiple test files in a directory", async () => {
+		const dir = await makeTempDir();
+		await fs.writeFile(
+			path.join(dir, "a.test.json"),
+			JSON.stringify({
+				evalSetId: "a",
+				evalCases: [],
+				creationTimestamp: 1,
+			}),
+		);
+		await fs.writeFile(
+			path.join(dir, "b.test.json"),
+			JSON.stringify({
+				evalSetId: "b",
+				evalCases: [],
+				creationTimestamp: 1,
+			}),
+		);
+
+		const evaluateEvalSet = vi
+			.spyOn(AgentEvaluator, "evaluateEvalSet")
+			.mockResolvedValue(undefined);
+
+		await AgentEvaluator.evaluate({ name: "agent" } as any, dir, 1);
+
+		expect(evaluateEvalSet).toHaveBeenCalledTimes(2);
+		const ids = evaluateEvalSet.mock.calls
+			.map((call) => call[1].evalSetId)
+			.sort();
+		expect(ids).toEqual(["a", "b"]);
+		evaluateEvalSet.mockRestore();
+	});
+
+	it("loads initialSessionFile for old-schema evaluate path", async () => {
+		const dir = await makeTempDir();
+		const file = path.join(dir, "old.test.json");
+		const sessionFile = path.join(dir, "session.json");
+		await fs.writeFile(
+			file,
+			JSON.stringify([
+				{
+					query: "q",
+					reference: "r",
+					expected_tool_use: [],
+				},
+			]),
+		);
+		await fs.writeFile(sessionFile, JSON.stringify({ seeded: true }));
+		await fs.writeFile(
+			path.join(dir, "test_config.json"),
+			JSON.stringify({
+				criteria: {
+					[RESPONSE_MATCH_SCORE_KEY]: 0.8,
+					[TOOL_TRAJECTORY_SCORE_KEY]: 1,
+				},
+			}),
+		);
+
+		const evaluateEvalSet = vi
+			.spyOn(AgentEvaluator, "evaluateEvalSet")
+			.mockResolvedValue(undefined);
+
+		await AgentEvaluator.evaluate(
+			{ name: "agent" } as any,
+			file,
+			1,
+			sessionFile,
+		);
+
+		expect(evaluateEvalSet).toHaveBeenCalledOnce();
+		expect(evaluateEvalSet.mock.calls[0][1].evalCases[0].sessionInput).toEqual({
+			appName: "test-app",
+			userId: "test-user",
+			state: { seeded: true },
+		});
+		evaluateEvalSet.mockRestore();
+	});
+});
+
+describe("AgentEvaluator helper conversions", () => {
+	it("joins multiple tool uses with newlines", () => {
+		expect(
+			(AgentEvaluator as any)._convertToolCallsToText({
+				toolUses: [
+					{ name: "a", args: { x: 1 } },
+					{ name: "b", args: {} },
+				],
+			}),
+		).toBe(
+			`${JSON.stringify({ name: "a", args: { x: 1 } })}\n${JSON.stringify({ name: "b", args: {} })}`,
+		);
+	});
+
+	it("returns empty string for intermediateData without toolUses", () => {
+		expect(
+			(AgentEvaluator as any)._convertToolCallsToText({
+				intermediateResponses: [],
+			}),
+		).toBe("");
+	});
+
+	it("returns empty string for content without parts", () => {
+		expect((AgentEvaluator as any)._convertContentToText({})).toBe("");
+	});
+});

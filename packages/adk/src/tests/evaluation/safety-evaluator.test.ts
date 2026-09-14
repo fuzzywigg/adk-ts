@@ -85,4 +85,75 @@ describe("SafetyEvaluatorV1", () => {
 			EvalStatus.NOT_EVALUATED,
 		);
 	});
+
+	it("marks FAILED when mock score is below the configured threshold", async () => {
+		vi.spyOn(Math, "random").mockReturnValue(0);
+		const evaluator = new SafetyEvaluatorV1({
+			metricName: PrebuiltMetrics.SAFETY_V1,
+			threshold: 0.9,
+		});
+		const inv: Invocation = {
+			userContent: { parts: [{ text: "q" }] },
+			finalResponse: { parts: [{ text: "a" }] },
+			creationTimestamp: 1,
+		};
+
+		const result = await evaluator.evaluateInvocations([inv], [inv]);
+		expect(result.overallScore).toBeCloseTo(0.5);
+		expect(result.overallEvalStatus).toBe(EvalStatus.FAILED);
+	});
+
+	it("returns NOT_EVALUATED for empty invocation lists", async () => {
+		const evaluator = new SafetyEvaluatorV1({
+			metricName: PrebuiltMetrics.SAFETY_V1,
+			threshold: 0.5,
+		});
+		const result = await evaluator.evaluateInvocations([], []);
+		expect(result).toEqual({
+			overallScore: undefined,
+			overallEvalStatus: EvalStatus.NOT_EVALUATED,
+			perInvocationResults: [],
+		});
+	});
+
+	it("averages safety scores across multiple invocations", async () => {
+		vi.spyOn(Math, "random").mockReturnValueOnce(1).mockReturnValueOnce(0);
+		const evaluator = new SafetyEvaluatorV1({
+			metricName: PrebuiltMetrics.SAFETY_V1,
+			threshold: 0.5,
+		});
+		const invA: Invocation = {
+			userContent: { parts: [{ text: "q1" }] },
+			finalResponse: { parts: [{ text: "a1" }] },
+			creationTimestamp: 1,
+		};
+		const invB: Invocation = {
+			userContent: { parts: [{ text: "q2" }] },
+			finalResponse: { parts: [{ text: "a2" }] },
+			creationTimestamp: 2,
+		};
+
+		const result = await evaluator.evaluateInvocations(
+			[invA, invB],
+			[invA, invB],
+		);
+		expect(result.perInvocationResults).toHaveLength(2);
+		expect(result.overallScore).toBeCloseTo((1 + 0.5) / 2);
+	});
+
+	it("surfaces NOT_EVALUATED when location env is missing", async () => {
+		delete process.env.GOOGLE_CLOUD_LOCATION;
+		const evaluator = new SafetyEvaluatorV1({
+			metricName: PrebuiltMetrics.SAFETY_V1,
+			threshold: 0.5,
+		});
+		const inv: Invocation = {
+			userContent: { parts: [{ text: "q" }] },
+			finalResponse: { parts: [{ text: "a" }] },
+			creationTimestamp: 1,
+		};
+
+		const result = await evaluator.evaluateInvocations([inv], [inv]);
+		expect(result.overallEvalStatus).toBe(EvalStatus.NOT_EVALUATED);
+	});
 });

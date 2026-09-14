@@ -439,6 +439,233 @@ describe("AnthropicLlm", () => {
 				expect(schema.items.type).toBe("object");
 				expect(schema.items.properties.nested.type).toBe("number");
 			});
+
+			it("lowercases items without nested properties", () => {
+				const schema = {
+					type: "ARRAY",
+					items: { type: "STRING" },
+				};
+				anthropicLlm["updateTypeString"](schema);
+				expect(schema.type).toBe("array");
+				expect(schema.items.type).toBe("string");
+			});
+
+			it("leaves schemas without type untouched aside from nested walks", () => {
+				const schema = {
+					items: {
+						type: "BOOLEAN",
+					},
+				};
+				anthropicLlm["updateTypeString"](schema);
+				expect(schema.items.type).toBe("boolean");
+			});
+		});
+
+		describe("functionDeclarationToAnthropicTool edges", () => {
+			it("defaults missing description and empty properties", () => {
+				const tool = anthropicLlm["functionDeclarationToAnthropicTool"]({
+					name: "bare",
+				});
+				expect(tool).toEqual({
+					name: "bare",
+					description: "",
+					input_schema: {
+						type: "object",
+						properties: {},
+					},
+				});
+			});
+
+			it("handles parameters without properties", () => {
+				const tool = anthropicLlm["functionDeclarationToAnthropicTool"]({
+					name: "no-props",
+					description: "d",
+					parameters: { type: "OBJECT" },
+				});
+				expect(tool.input_schema.properties).toEqual({});
+			});
+		});
+
+		describe("partToAnthropicBlock function_response id edges", () => {
+			it("defaults missing function_response id to empty string", () => {
+				const block = anthropicLlm["partToAnthropicBlock"]({
+					function_response: {
+						response: { result: 42 },
+					},
+				});
+				expect(block).toEqual({
+					type: "tool_result",
+					tool_use_id: "",
+					content: "42",
+					is_error: false,
+				});
+			});
+
+			it("stringifies non-string result values", () => {
+				const block = anthropicLlm["partToAnthropicBlock"]({
+					function_response: {
+						id: "r1",
+						response: { result: { ok: true } },
+					},
+				});
+				expect(block).toEqual({
+					type: "tool_result",
+					tool_use_id: "r1",
+					content: "[object Object]",
+					is_error: false,
+				});
+			});
+		});
+	});
+
+	describe("generateContentAsyncImpl request wiring leftovers", () => {
+		let mockMessagesCreate: ReturnType<typeof vi.fn>;
+
+		beforeEach(() => {
+			mockMessagesCreate = vi.fn().mockResolvedValue({
+				content: [{ type: "text", text: "ok" }],
+				usage: { input_tokens: 1, output_tokens: 1 },
+				stop_reason: "end_turn",
+			});
+			(Anthropic as any).mockImplementation(() => ({
+				messages: { create: mockMessagesCreate },
+			}));
+		});
+
+		it("forwards temperature and topP into messages.create", async () => {
+			const request = {
+				contents: [{ role: "user", parts: [{ text: "hi" }] }],
+				config: { temperature: 0.25, topP: 0.4 },
+				getSystemInstructionText: () => "",
+			} as unknown as LlmRequest;
+
+			const generator = anthropicLlm["generateContentAsyncImpl"](request);
+			await generator.next();
+
+			expect(mockMessagesCreate).toHaveBeenCalledWith(
+				expect.objectContaining({
+					temperature: 0.25,
+					top_p: 0.4,
+					tool_choice: undefined,
+					tools: undefined,
+				}),
+			);
+		});
+
+		it("omits tools and tool_choice when tools lack functionDeclarations", async () => {
+			const request = {
+				contents: [{ role: "user", parts: [{ text: "hi" }] }],
+				config: { tools: [{ someOtherShape: true }] },
+				getSystemInstructionText: () => "",
+			} as unknown as LlmRequest;
+
+			const generator = anthropicLlm["generateContentAsyncImpl"](request);
+			await generator.next();
+
+			expect(mockMessagesCreate).toHaveBeenCalledWith(
+				expect.objectContaining({
+					tools: undefined,
+					tool_choice: undefined,
+				}),
+			);
+		});
+
+		it("handles empty contents arrays", async () => {
+			const request = {
+				contents: [],
+				config: {},
+				getSystemInstructionText: () => "",
+			} as unknown as LlmRequest;
+
+			const generator = anthropicLlm["generateContentAsyncImpl"](request);
+			await generator.next();
+
+			expect(mockMessagesCreate).toHaveBeenCalledWith(
+				expect.objectContaining({
+					messages: [],
+				}),
+			);
+		});
+
+		it("maps assistant role contents through to Anthropic messages", async () => {
+			const request = {
+				contents: [
+					{ role: "assistant", parts: [{ text: "prior" }] },
+					{ role: "user", parts: [{ text: "next" }] },
+				],
+				config: {},
+				getSystemInstructionText: () => "",
+			} as unknown as LlmRequest;
+
+			const generator = anthropicLlm["generateContentAsyncImpl"](request);
+			await generator.next();
+
+			expect(mockMessagesCreate).toHaveBeenCalledWith(
+				expect.objectContaining({
+					messages: [
+						{
+							role: "assistant",
+							content: [{ type: "text", text: "prior" }],
+						},
+						{
+							role: "user",
+							content: [{ type: "text", text: "next" }],
+						},
+					],
+				}),
+			);
+		});
+
+		it("reuses the Anthropic client across calls", async () => {
+			const request = {
+				contents: [{ role: "user", parts: [{ text: "hi" }] }],
+				config: {},
+				getSystemInstructionText: () => "",
+			} as unknown as LlmRequest;
+
+			await anthropicLlm["generateContentAsyncImpl"](request).next();
+			await anthropicLlm["generateContentAsyncImpl"](request).next();
+
+			expect(Anthropic).toHaveBeenCalledTimes(1);
+			expect(mockMessagesCreate).toHaveBeenCalledTimes(2);
+		});
+
+		it("yields tool_use parts from multi-block Anthropic responses", async () => {
+			mockMessagesCreate.mockResolvedValue({
+				content: [
+					{ type: "text", text: "calling" },
+					{
+						type: "tool_use",
+						id: "tu1",
+						name: "lookup",
+						input: { q: "adk" },
+					},
+				],
+				usage: { input_tokens: 2, output_tokens: 4 },
+				stop_reason: "tool_use",
+			});
+
+			const request = {
+				contents: [{ role: "user", parts: [{ text: "hi" }] }],
+				config: {},
+				getSystemInstructionText: () => "",
+			} as unknown as LlmRequest;
+
+			const result =
+				await anthropicLlm["generateContentAsyncImpl"](request).next();
+			const response = result.value as LlmResponse;
+			expect(response.content?.parts).toEqual([
+				{ text: "calling" },
+				{
+					function_call: {
+						id: "tu1",
+						name: "lookup",
+						args: { q: "adk" },
+					},
+				},
+			]);
+			expect(response.finishReason).toBe("STOP");
+			expect(response.usageMetadata?.totalTokenCount).toBe(6);
 		});
 	});
 });
