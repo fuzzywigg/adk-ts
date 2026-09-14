@@ -1,28 +1,27 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const { createContainer, buildImage, followProgress, existsSync, DockerMock } =
-	vi.hoisted(() => {
-		const createContainer = vi.fn();
-		const buildImage = vi.fn();
-		const followProgress = vi.fn();
-		const existsSync = vi.fn();
-		const DockerMock = vi.fn(function Docker(
-			this: any,
-			opts?: { host?: string },
-		) {
-			this.host = opts?.host;
-			this.createContainer = createContainer;
-			this.buildImage = buildImage;
-			this.modem = { followProgress };
-		});
-		return {
-			createContainer,
-			buildImage,
-			followProgress,
-			existsSync,
-			DockerMock,
-		};
+const { existsSync, DockerMock } = vi.hoisted(() => {
+	const createContainer = vi.fn();
+	const buildImage = vi.fn();
+	const followProgress = vi.fn();
+	const existsSync = vi.fn();
+	const DockerMock = vi.fn(function Docker(
+		this: any,
+		opts?: { host?: string },
+	) {
+		this.host = opts?.host;
+		this.createContainer = createContainer;
+		this.buildImage = buildImage;
+		this.modem = { followProgress };
 	});
+	return {
+		createContainer,
+		buildImage,
+		followProgress,
+		existsSync,
+		DockerMock,
+	};
+});
 
 vi.mock("dockerode", () => ({
 	default: DockerMock,
