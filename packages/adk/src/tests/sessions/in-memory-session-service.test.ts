@@ -356,4 +356,67 @@ describe("InMemorySessionService", () => {
 		expect(await service.getSession("other", "user", "s1")).toBeUndefined();
 		expect(await service.getSession("app", "other", "s1")).toBeUndefined();
 	});
+
+	it("createSession does not split app/user prefixes into maps until appendEvent", async () => {
+		const service = new InMemorySessionService();
+		const created = await service.createSession(
+			"app",
+			"user",
+			{
+				[`${State.APP_PREFIX}theme`]: "dark",
+				[`${State.USER_PREFIX}locale`]: "en",
+				local: 1,
+			},
+			"s-prefix",
+		);
+		expect(created.state[`${State.APP_PREFIX}theme`]).toBe("dark");
+		expect(created.state[`${State.USER_PREFIX}locale`]).toBe("en");
+		expect(created.state.local).toBe(1);
+
+		const other = await service.createSession("app", "user", {}, "s-other");
+		expect(other.state[`${State.APP_PREFIX}theme`]).toBeUndefined();
+		expect(other.state[`${State.USER_PREFIX}locale`]).toBeUndefined();
+	});
+
+	it("partial appendEvent still refreshes lastUpdateTime without storing history", async () => {
+		const service = new InMemorySessionService();
+		const session = await service.createSession("app", "user", {}, "s1");
+		const before = session.lastUpdateTime;
+
+		await new Promise((r) => setTimeout(r, 5));
+		await service.appendEvent(session, {
+			author: "agent",
+			partial: true,
+			timestamp: Date.now() / 1000,
+			content: { parts: [{ text: "stream" }] },
+			actions: {
+				stateDelta: { shouldNotApply: true },
+			},
+		} as any);
+
+		expect(session.events).toEqual([]);
+		expect(session.state.shouldNotApply).toBeUndefined();
+		expect(session.lastUpdateTime).toBeGreaterThanOrEqual(before);
+
+		const fetched = await service.getSession("app", "user", "s1");
+		expect(fetched?.events).toEqual([]);
+		expect(fetched?.state.shouldNotApply).toBeUndefined();
+	});
+
+	it("user-only state deltas populate user maps across sessions", async () => {
+		const service = new InMemorySessionService();
+		const session = await service.createSession("app", "user", {}, "s1");
+		await service.appendEvent(session, {
+			author: "agent",
+			timestamp: 1,
+			actions: {
+				stateDelta: {
+					[`${State.USER_PREFIX}tone`]: "formal",
+				},
+			},
+		} as any);
+
+		const sibling = await service.createSession("app", "user", {}, "s2");
+		expect(sibling.state[`${State.USER_PREFIX}tone`]).toBe("formal");
+	});
 });

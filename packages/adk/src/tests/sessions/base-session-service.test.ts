@@ -115,4 +115,46 @@ describe("BaseSessionService.appendEvent", () => {
 		expect(session.state.removeUndef).toBeUndefined();
 		expect(session.state.keep).toBe(true);
 	});
+
+	it("appendEvent without actions leaves state untouched", async () => {
+		const service = new InMemoryStubSessionService();
+		const session = await service.createSession("app", "user", { a: 1 }, "s1");
+		const event = {
+			author: "agent",
+			content: { parts: [{ text: "hi" }] },
+		} as Event;
+
+		await service.appendEvent(session, event);
+		expect(session.events).toEqual([event]);
+		expect(session.state).toEqual({ a: 1 });
+	});
+
+	it("appendEvent with actions but no stateDelta is a no-op for state", async () => {
+		const service = new InMemoryStubSessionService();
+		const session = await service.createSession("app", "user", { a: 1 }, "s1");
+		const event = {
+			author: "agent",
+			actions: { transferToAgent: "other" },
+		} as Event;
+
+		await service.appendEvent(session, event);
+		expect(session.events).toEqual([event]);
+		expect(session.state).toEqual({ a: 1 });
+	});
+
+	it("createSession defaults and list/delete round-trip through the stub", async () => {
+		const service = new InMemoryStubSessionService();
+		const created = await service.createSession("app", "user");
+		expect(created.id).toBe("generated");
+		expect(created.state).toEqual({});
+
+		expect(await service.listSessions("app", "user")).toEqual({
+			sessions: [created],
+		});
+		await service.deleteSession("app", "user", "generated");
+		expect(
+			await service.getSession("app", "user", "generated"),
+		).toBeUndefined();
+		expect(await service.listSessions("app", "user")).toEqual({ sessions: [] });
+	});
 });
