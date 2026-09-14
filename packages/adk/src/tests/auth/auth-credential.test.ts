@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { AuthConfig } from "../../auth/auth-config";
 import {
 	ApiKeyCredential,
@@ -208,5 +208,87 @@ describe("auth credentials", () => {
 		expect(new Unsupported(AuthCredentialType.CUSTOM).type).toBe(
 			AuthCredentialType.CUSTOM,
 		);
+	});
+
+	it("treats expiresIn 0 as falsy and leaves expiresAt unset", () => {
+		const credential = new OAuth2Credential({
+			accessToken: "access",
+			expiresIn: 0,
+		});
+		expect(credential.expiresAt).toBeUndefined();
+		expect(credential.isExpired()).toBe(false);
+	});
+
+	it("marks oauth tokens expired only when remaining time is under 30s skew", () => {
+		vi.useFakeTimers();
+		vi.setSystemTime(new Date("2024-01-01T00:00:00.000Z"));
+		const atBoundary = new OAuth2Credential({
+			accessToken: "access",
+			expiresIn: 30,
+		});
+		expect(atBoundary.isExpired()).toBe(false);
+
+		const underSkew = new OAuth2Credential({
+			accessToken: "access",
+			expiresIn: 29,
+		});
+		expect(underSkew.isExpired()).toBe(true);
+		vi.useRealTimers();
+	});
+
+	it("propagates refresh function rejections", async () => {
+		const credential = new OAuth2Credential({
+			accessToken: "access",
+			refreshToken: "refresh",
+			refreshFunction: async () => {
+				throw new Error("network down");
+			},
+		});
+		await expect(credential.refresh()).rejects.toThrow(/network down/);
+	});
+
+	it("encodes basic auth with colon in username and empty password", () => {
+		const credential = new BasicAuthCredential("user:name", "");
+		const expected = Buffer.from("user:name:").toString("base64");
+		expect(credential.getToken()).toBe(expected);
+		expect(credential.getHeaders()).toEqual({
+			Authorization: `Basic ${expected}`,
+		});
+	});
+
+	it("refresh result with expiresIn 0 leaves prior expiresAt unchanged", async () => {
+		const credential = new OAuth2Credential({
+			accessToken: "access",
+			refreshToken: "refresh",
+			expiresIn: 3600,
+			refreshFunction: async () => ({
+				accessToken: "next",
+				expiresIn: 0,
+			}),
+		});
+		const prior = credential.expiresAt!.getTime();
+		await credential.refresh();
+		expect(credential.getToken()).toBe("next");
+		expect(credential.expiresAt!.getTime()).toBe(prior);
+	});
+
+	it("ApiKeyCredential getHeaders uses unusual header names as-is", () => {
+		const credential = new ApiKeyCredential("secret");
+		const config = new AuthConfig({
+			authScheme: new ApiKeyScheme({
+				in: "header",
+				name: "X-Custom-Auth_Token.v2",
+			}),
+		});
+		expect(credential.getHeaders(config)).toEqual({
+			"X-Custom-Auth_Token.v2": "secret",
+		});
+	});
+
+	it("BearerTokenCredential supports empty and unicode tokens", () => {
+		expect(new BearerTokenCredential("").getToken()).toBe("");
+		expect(new BearerTokenCredential("tokén-🔐").getHeaders()).toEqual({
+			Authorization: "Bearer tokén-🔐",
+		});
 	});
 });

@@ -772,3 +772,933 @@ describe("auth requestProcessor.parseAndStoreAuthResponse", () => {
 		warn.mockRestore();
 	});
 });
+
+describe("auth requestProcessor leftover edges", () => {
+	it("returns immediately when agent is null", async () => {
+		const events = await collect(
+			requestProcessor.runAsync(
+				baseCtx({ agent: null as unknown as object }),
+				new LlmRequest(),
+			),
+		);
+		expect(events).toEqual([]);
+	});
+
+	it("returns immediately when session.events is null", async () => {
+		const ctx = baseCtx();
+		(ctx.session as { events: Event[] | null }).events = null;
+		const events = await collect(
+			requestProcessor.runAsync(ctx, new LlmRequest()),
+		);
+		expect(events).toEqual([]);
+	});
+
+	it("skips events with falsy author while scanning for user EUC responses", async () => {
+		const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+		handleFunctionCallsAsyncMock.mockResolvedValue(null);
+
+		const originalCall = new Event({
+			author: "auth-agent",
+			content: {
+				role: "model",
+				parts: [
+					{
+						functionCall: {
+							id: "tool-falsy-author",
+							name: "secure_api",
+							args: {},
+						},
+					},
+				],
+			},
+		});
+		const eucCall = new Event({
+			author: "auth-agent",
+			content: {
+				role: "model",
+				parts: [
+					{
+						functionCall: {
+							id: "euc-falsy-author",
+							name: REQUEST_EUC_FUNCTION_CALL_NAME,
+							args: JSON.stringify({
+								function_call_id: "tool-falsy-author",
+							}) as any,
+						},
+					},
+				],
+			},
+		});
+		const emptyAuthor = new Event({
+			author: "user",
+			content: {
+				role: "user",
+				parts: [
+					{
+						functionResponse: {
+							id: "ignored",
+							name: REQUEST_EUC_FUNCTION_CALL_NAME,
+							response: "{}",
+						},
+					},
+				],
+			},
+		});
+		(emptyAuthor as { author: string }).author = "";
+		const eucResponse = new Event({
+			author: "user",
+			content: {
+				role: "user",
+				parts: [
+					{
+						functionResponse: {
+							id: "euc-falsy-author",
+							name: REQUEST_EUC_FUNCTION_CALL_NAME,
+							response: JSON.stringify({
+								authScheme: { type: "apiKey" },
+								rawAuthCredential: { apiKey: "k" },
+							}),
+						},
+					},
+				],
+			},
+		});
+
+		const tool = { name: "secure_api" };
+		const events = await collect(
+			requestProcessor.runAsync(
+				baseCtx({
+					agent: {
+						name: "auth-agent",
+						canonicalTools: async () => [tool],
+					},
+					events: [originalCall, eucCall, emptyAuthor, eucResponse],
+				}),
+				new LlmRequest(),
+			),
+		);
+
+		expect(events).toEqual([]);
+		expect(handleFunctionCallsAsyncMock).toHaveBeenCalledWith(
+			expect.anything(),
+			originalCall,
+			{ secure_api: tool },
+			new Set(["tool-falsy-author"]),
+		);
+		warn.mockRestore();
+	});
+
+	it("pins EnhancedAuthConfig constructor-without-new failure on runAsync parse path", async () => {
+		const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+		handleFunctionCallsAsyncMock.mockResolvedValue(null);
+
+		const originalCall = new Event({
+			author: "auth-agent",
+			content: {
+				role: "model",
+				parts: [
+					{
+						functionCall: {
+							id: "tool-ctor",
+							name: "secure_api",
+							args: {},
+						},
+					},
+				],
+			},
+		});
+		const eucCall = new Event({
+			author: "auth-agent",
+			content: {
+				role: "model",
+				parts: [
+					{
+						functionCall: {
+							id: "euc-ctor",
+							name: REQUEST_EUC_FUNCTION_CALL_NAME,
+							args: JSON.stringify({
+								function_call_id: "tool-ctor",
+							}) as any,
+						},
+					},
+				],
+			},
+		});
+		const eucResponse = new Event({
+			author: "user",
+			content: {
+				role: "user",
+				parts: [
+					{
+						functionResponse: {
+							id: "euc-ctor",
+							name: REQUEST_EUC_FUNCTION_CALL_NAME,
+							response: JSON.stringify({
+								authScheme: { type: "apiKey" },
+								rawAuthCredential: { apiKey: "k" },
+							}),
+						},
+					},
+				],
+			},
+		});
+
+		const state: Record<string, unknown> = { keep: true };
+		const events = await collect(
+			requestProcessor.runAsync(
+				baseCtx({
+					agent: {
+						name: "auth-agent",
+						canonicalTools: async () => [{ name: "secure_api" }],
+					},
+					events: [originalCall, eucCall, eucResponse],
+					state,
+				}),
+				new LlmRequest(),
+			),
+		);
+
+		expect(events).toEqual([]);
+		expect(state).toEqual({ keep: true });
+		expect(warn).toHaveBeenCalledWith(
+			"Failed to parse auth response:",
+			expect.objectContaining({
+				message: expect.stringMatching(/Class constructor|cannot be invoked/i),
+			}),
+		);
+		expect(handleFunctionCallsAsyncMock).toHaveBeenCalled();
+		warn.mockRestore();
+	});
+
+	it("continues outer EUC scan when getFunctionCalls returns null", async () => {
+		const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+		handleFunctionCallsAsyncMock.mockResolvedValue(null);
+
+		const originalCall = new Event({
+			author: "auth-agent",
+			content: {
+				role: "model",
+				parts: [
+					{
+						functionCall: {
+							id: "tool-null-fc",
+							name: "secure_api",
+							args: {},
+						},
+					},
+				],
+			},
+		});
+		const nullFcEvent = new Event({
+			author: "auth-agent",
+			content: { role: "model", parts: [{ text: "placeholder" }] },
+		});
+		vi.spyOn(nullFcEvent, "getFunctionCalls").mockReturnValue(null as any);
+		const eucCall = new Event({
+			author: "auth-agent",
+			content: {
+				role: "model",
+				parts: [
+					{
+						functionCall: {
+							id: "euc-null-fc",
+							name: REQUEST_EUC_FUNCTION_CALL_NAME,
+							args: JSON.stringify({
+								function_call_id: "tool-null-fc",
+							}) as any,
+						},
+					},
+				],
+			},
+		});
+		const eucResponse = new Event({
+			author: "user",
+			content: {
+				role: "user",
+				parts: [
+					{
+						functionResponse: {
+							id: "euc-null-fc",
+							name: REQUEST_EUC_FUNCTION_CALL_NAME,
+							response: JSON.stringify({
+								authScheme: { type: "apiKey" },
+								rawAuthCredential: { apiKey: "k" },
+							}),
+						},
+					},
+				],
+			},
+		});
+
+		const tool = { name: "secure_api" };
+		const events = await collect(
+			requestProcessor.runAsync(
+				baseCtx({
+					agent: {
+						name: "auth-agent",
+						canonicalTools: async () => [tool],
+					},
+					events: [originalCall, nullFcEvent, eucCall, eucResponse],
+				}),
+				new LlmRequest(),
+			),
+		);
+
+		expect(events).toEqual([]);
+		expect(handleFunctionCallsAsyncMock).toHaveBeenCalledWith(
+			expect.anything(),
+			originalCall,
+			{ secure_api: tool },
+			new Set(["tool-null-fc"]),
+		);
+		warn.mockRestore();
+	});
+
+	it("returns without handleFunctionCallsAsync when toolsToResume never match prior calls", async () => {
+		const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+		handleFunctionCallsAsyncMock.mockResolvedValue(null);
+
+		const originalCall = new Event({
+			author: "auth-agent",
+			content: {
+				role: "model",
+				parts: [
+					{
+						functionCall: {
+							id: "tool-unrelated",
+							name: "secure_api",
+							args: {},
+						},
+					},
+				],
+			},
+		});
+		const eucCall = new Event({
+			author: "auth-agent",
+			content: {
+				role: "model",
+				parts: [
+					{
+						functionCall: {
+							id: "euc-mismatch",
+							name: REQUEST_EUC_FUNCTION_CALL_NAME,
+							args: JSON.stringify({
+								function_call_id: "tool-missing",
+							}) as any,
+						},
+					},
+				],
+			},
+		});
+		const eucResponse = new Event({
+			author: "user",
+			content: {
+				role: "user",
+				parts: [
+					{
+						functionResponse: {
+							id: "euc-mismatch",
+							name: REQUEST_EUC_FUNCTION_CALL_NAME,
+							response: JSON.stringify({
+								authScheme: { type: "apiKey" },
+								rawAuthCredential: { apiKey: "k" },
+							}),
+						},
+					},
+				],
+			},
+		});
+
+		const events = await collect(
+			requestProcessor.runAsync(
+				baseCtx({
+					events: [originalCall, eucCall, eucResponse],
+				}),
+				new LlmRequest(),
+			),
+		);
+
+		expect(events).toEqual([]);
+		expect(handleFunctionCallsAsyncMock).not.toHaveBeenCalled();
+		warn.mockRestore();
+	});
+
+	it("resumes multiple tools when the user event carries multiple EUC responses", async () => {
+		const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+		const resumed = new Event({
+			author: "auth-agent",
+			content: {
+				role: "user",
+				parts: [
+					{
+						functionResponse: {
+							id: "tool-a",
+							name: "api_a",
+							response: { ok: true },
+						},
+					},
+				],
+			},
+		});
+		handleFunctionCallsAsyncMock.mockResolvedValue(resumed);
+
+		const originalCall = new Event({
+			author: "auth-agent",
+			content: {
+				role: "model",
+				parts: [
+					{
+						functionCall: {
+							id: "tool-a",
+							name: "api_a",
+							args: {},
+						},
+					},
+					{
+						functionCall: {
+							id: "tool-b",
+							name: "api_b",
+							args: {},
+						},
+					},
+				],
+			},
+		});
+		const eucCall = new Event({
+			author: "auth-agent",
+			content: {
+				role: "model",
+				parts: [
+					{
+						functionCall: {
+							id: "euc-a",
+							name: REQUEST_EUC_FUNCTION_CALL_NAME,
+							args: JSON.stringify({
+								function_call_id: "tool-a",
+							}) as any,
+						},
+					},
+					{
+						functionCall: {
+							id: "euc-b",
+							name: REQUEST_EUC_FUNCTION_CALL_NAME,
+							args: JSON.stringify({
+								function_call_id: "tool-b",
+							}) as any,
+						},
+					},
+				],
+			},
+		});
+		const eucResponse = new Event({
+			author: "user",
+			content: {
+				role: "user",
+				parts: [
+					{
+						functionResponse: {
+							id: "euc-a",
+							name: REQUEST_EUC_FUNCTION_CALL_NAME,
+							response: JSON.stringify({
+								authScheme: { type: "apiKey" },
+								rawAuthCredential: { apiKey: "a" },
+							}),
+						},
+					},
+					{
+						functionResponse: {
+							id: "euc-b",
+							name: REQUEST_EUC_FUNCTION_CALL_NAME,
+							response: JSON.stringify({
+								authScheme: { type: "http" },
+								rawAuthCredential: { token: "b" },
+							}),
+						},
+					},
+				],
+			},
+		});
+
+		const tools = [{ name: "api_a" }, { name: "api_b" }];
+		const events = await collect(
+			requestProcessor.runAsync(
+				baseCtx({
+					agent: {
+						name: "auth-agent",
+						canonicalTools: async () => tools,
+					},
+					events: [originalCall, eucCall, eucResponse],
+				}),
+				new LlmRequest(),
+			),
+		);
+
+		expect(events).toEqual([resumed]);
+		expect(handleFunctionCallsAsyncMock).toHaveBeenCalledWith(
+			expect.anything(),
+			originalCall,
+			{ api_a: tools[0], api_b: tools[1] },
+			new Set(["tool-a", "tool-b"]),
+		);
+		warn.mockRestore();
+	});
+
+	it("skips EUC response ids that do not match any prior functionCall id", async () => {
+		const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+		handleFunctionCallsAsyncMock.mockResolvedValue(null);
+
+		const originalCall = new Event({
+			author: "auth-agent",
+			content: {
+				role: "model",
+				parts: [
+					{
+						functionCall: {
+							id: "tool-real",
+							name: "secure_api",
+							args: {},
+						},
+					},
+				],
+			},
+		});
+		const eucCall = new Event({
+			author: "auth-agent",
+			content: {
+				role: "model",
+				parts: [
+					{
+						functionCall: {
+							id: "euc-real",
+							name: REQUEST_EUC_FUNCTION_CALL_NAME,
+							args: JSON.stringify({
+								function_call_id: "tool-real",
+							}) as any,
+						},
+					},
+				],
+			},
+		});
+		const eucResponse = new Event({
+			author: "user",
+			content: {
+				role: "user",
+				parts: [
+					{
+						functionResponse: {
+							id: "euc-orphan",
+							name: REQUEST_EUC_FUNCTION_CALL_NAME,
+							response: JSON.stringify({
+								authScheme: { type: "apiKey" },
+								rawAuthCredential: { apiKey: "k" },
+							}),
+						},
+					},
+					{
+						functionResponse: {
+							id: "euc-real",
+							name: REQUEST_EUC_FUNCTION_CALL_NAME,
+							response: JSON.stringify({
+								authScheme: { type: "apiKey" },
+								rawAuthCredential: { apiKey: "k2" },
+							}),
+						},
+					},
+				],
+			},
+		});
+
+		const tool = { name: "secure_api" };
+		const events = await collect(
+			requestProcessor.runAsync(
+				baseCtx({
+					agent: {
+						name: "auth-agent",
+						canonicalTools: async () => [tool],
+					},
+					events: [originalCall, eucCall, eucResponse],
+				}),
+				new LlmRequest(),
+			),
+		);
+
+		expect(events).toEqual([]);
+		expect(handleFunctionCallsAsyncMock).toHaveBeenCalledWith(
+			expect.anything(),
+			originalCall,
+			{ secure_api: tool },
+			new Set(["tool-real"]),
+		);
+		warn.mockRestore();
+	});
+
+	it("continues when an intermediate event has functionCalls that do not match EUC ids", async () => {
+		const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+		handleFunctionCallsAsyncMock.mockResolvedValue(null);
+
+		const originalCall = new Event({
+			author: "auth-agent",
+			content: {
+				role: "model",
+				parts: [
+					{
+						functionCall: {
+							id: "tool-skip-inter",
+							name: "secure_api",
+							args: {},
+						},
+					},
+				],
+			},
+		});
+		const distractor = new Event({
+			author: "auth-agent",
+			content: {
+				role: "model",
+				parts: [
+					{
+						functionCall: {
+							id: "other-fc",
+							name: "other_tool",
+							args: {},
+						},
+					},
+				],
+			},
+		});
+		const eucCall = new Event({
+			author: "auth-agent",
+			content: {
+				role: "model",
+				parts: [
+					{
+						functionCall: {
+							id: "euc-skip-inter",
+							name: REQUEST_EUC_FUNCTION_CALL_NAME,
+							args: JSON.stringify({
+								function_call_id: "tool-skip-inter",
+							}) as any,
+						},
+					},
+				],
+			},
+		});
+		const eucResponse = new Event({
+			author: "user",
+			content: {
+				role: "user",
+				parts: [
+					{
+						functionResponse: {
+							id: "euc-skip-inter",
+							name: REQUEST_EUC_FUNCTION_CALL_NAME,
+							response: JSON.stringify({
+								authScheme: { type: "apiKey" },
+								rawAuthCredential: { apiKey: "k" },
+							}),
+						},
+					},
+				],
+			},
+		});
+
+		const tool = { name: "secure_api" };
+		const events = await collect(
+			requestProcessor.runAsync(
+				baseCtx({
+					agent: {
+						name: "auth-agent",
+						canonicalTools: async () => [tool],
+					},
+					events: [originalCall, distractor, eucCall, eucResponse],
+				}),
+				new LlmRequest(),
+			),
+		);
+
+		expect(events).toEqual([]);
+		expect(handleFunctionCallsAsyncMock).toHaveBeenCalledWith(
+			expect.anything(),
+			originalCall,
+			{ secure_api: tool },
+			new Set(["tool-skip-inter"]),
+		);
+		warn.mockRestore();
+	});
+
+	it("skips empty originalFunctionCalls while searching for the matching prior tool call", async () => {
+		const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+		handleFunctionCallsAsyncMock.mockResolvedValue(null);
+
+		const originalCall = new Event({
+			author: "auth-agent",
+			content: {
+				role: "model",
+				parts: [
+					{
+						functionCall: {
+							id: "tool-empty-prior",
+							name: "secure_api",
+							args: {},
+						},
+					},
+				],
+			},
+		});
+		const emptyPrior = new Event({
+			author: "auth-agent",
+			content: { role: "model", parts: [{ text: "empty prior" }] },
+		});
+		vi.spyOn(emptyPrior, "getFunctionCalls").mockReturnValue([]);
+		const eucCall = new Event({
+			author: "auth-agent",
+			content: {
+				role: "model",
+				parts: [
+					{
+						functionCall: {
+							id: "euc-empty-prior",
+							name: REQUEST_EUC_FUNCTION_CALL_NAME,
+							args: JSON.stringify({
+								function_call_id: "tool-empty-prior",
+							}) as any,
+						},
+					},
+				],
+			},
+		});
+		const eucResponse = new Event({
+			author: "user",
+			content: {
+				role: "user",
+				parts: [
+					{
+						functionResponse: {
+							id: "euc-empty-prior",
+							name: REQUEST_EUC_FUNCTION_CALL_NAME,
+							response: JSON.stringify({
+								authScheme: { type: "apiKey" },
+								rawAuthCredential: { apiKey: "k" },
+							}),
+						},
+					},
+				],
+			},
+		});
+
+		const tool = { name: "secure_api" };
+		const events = await collect(
+			requestProcessor.runAsync(
+				baseCtx({
+					agent: {
+						name: "auth-agent",
+						canonicalTools: async () => [tool],
+					},
+					events: [originalCall, emptyPrior, eucCall, eucResponse],
+				}),
+				new LlmRequest(),
+			),
+		);
+
+		expect(events).toEqual([]);
+		expect(handleFunctionCallsAsyncMock).toHaveBeenCalledWith(
+			expect.anything(),
+			originalCall,
+			{ secure_api: tool },
+			new Set(["tool-empty-prior"]),
+		);
+		warn.mockRestore();
+	});
+
+	it("returns early after finding toolsToResume when no earlier original call exists", async () => {
+		const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+		handleFunctionCallsAsyncMock.mockResolvedValue(null);
+
+		const eucCall = new Event({
+			author: "auth-agent",
+			content: {
+				role: "model",
+				parts: [
+					{
+						functionCall: {
+							id: "euc-no-orig",
+							name: REQUEST_EUC_FUNCTION_CALL_NAME,
+							args: JSON.stringify({
+								function_call_id: "tool-ghost",
+							}) as any,
+						},
+					},
+				],
+			},
+		});
+		const eucResponse = new Event({
+			author: "user",
+			content: {
+				role: "user",
+				parts: [
+					{
+						functionResponse: {
+							id: "euc-no-orig",
+							name: REQUEST_EUC_FUNCTION_CALL_NAME,
+							response: JSON.stringify({
+								authScheme: { type: "apiKey" },
+								rawAuthCredential: { apiKey: "k" },
+							}),
+						},
+					},
+				],
+			},
+		});
+
+		const events = await collect(
+			requestProcessor.runAsync(
+				baseCtx({ events: [eucCall, eucResponse] }),
+				new LlmRequest(),
+			),
+		);
+
+		expect(events).toEqual([]);
+		expect(handleFunctionCallsAsyncMock).not.toHaveBeenCalled();
+		warn.mockRestore();
+	});
+
+	it("pins constructor failure for oauth2 JSON auth responses on runAsync", async () => {
+		const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+		handleFunctionCallsAsyncMock.mockResolvedValue(null);
+
+		const originalCall = new Event({
+			author: "auth-agent",
+			content: {
+				role: "model",
+				parts: [
+					{
+						functionCall: {
+							id: "tool-oauth-pin",
+							name: "secure_api",
+							args: {},
+						},
+					},
+				],
+			},
+		});
+		const eucCall = new Event({
+			author: "auth-agent",
+			content: {
+				role: "model",
+				parts: [
+					{
+						functionCall: {
+							id: "euc-oauth-pin",
+							name: REQUEST_EUC_FUNCTION_CALL_NAME,
+							args: JSON.stringify({
+								function_call_id: "tool-oauth-pin",
+							}) as any,
+						},
+					},
+				],
+			},
+		});
+		const eucResponse = new Event({
+			author: "user",
+			content: {
+				role: "user",
+				parts: [
+					{
+						functionResponse: {
+							id: "euc-oauth-pin",
+							name: REQUEST_EUC_FUNCTION_CALL_NAME,
+							response: JSON.stringify({
+								authScheme: { type: "oauth2" },
+								rawAuthCredential: { accessToken: "t" },
+							}),
+						},
+					},
+				],
+			},
+		});
+
+		const state: Record<string, unknown> = {};
+		await collect(
+			requestProcessor.runAsync(
+				baseCtx({
+					agent: {
+						name: "auth-agent",
+						canonicalTools: async () => [{ name: "secure_api" }],
+					},
+					events: [originalCall, eucCall, eucResponse],
+					state,
+				}),
+				new LlmRequest(),
+			),
+		);
+
+		expect(Object.keys(state)).toEqual([]);
+		expect(warn).toHaveBeenCalledWith(
+			"Failed to parse auth response:",
+			expect.any(Error),
+		);
+		warn.mockRestore();
+	});
+});
+
+describe("auth requestProcessor.parseAndStoreAuthResponse leftover edges", () => {
+	function callStore(
+		authHandler: AuthHandler,
+		invocationContext: InvocationContext,
+	): void {
+		(requestProcessor as any).parseAndStoreAuthResponse(
+			authHandler,
+			invocationContext,
+		);
+	}
+
+	it("stores undefined credential when AuthHandler has no credential", () => {
+		const state: Record<string, unknown> = {};
+		const authHandler = new AuthHandler({
+			authConfig: new AuthConfig({
+				authScheme: { type: "apiKey" } as any,
+				context: { credentialKey: "temp:empty-cred" },
+			}),
+		});
+
+		callStore(authHandler, baseCtx({ state }));
+		expect(state["temp:empty-cred"]).toBeUndefined();
+		expect(Object.keys(state)).toEqual(["temp:empty-cred"]);
+	});
+
+	it("defaults credentialKey when context.credentialKey is empty string", () => {
+		const state: Record<string, unknown> = {};
+		const authHandler = new AuthHandler({
+			authConfig: new AuthConfig({
+				authScheme: { type: "apiKey" } as any,
+				context: { credentialKey: "" },
+			}),
+			credential: { apiKey: "k" } as any,
+		});
+
+		const before = Date.now();
+		callStore(authHandler, baseCtx({ state }));
+		const after = Date.now();
+
+		const keys = Object.keys(state);
+		expect(keys).toHaveLength(1);
+		expect(keys[0].startsWith("temp:")).toBe(true);
+		const ts = Number(keys[0].slice("temp:".length));
+		expect(ts).toBeGreaterThanOrEqual(before);
+		expect(ts).toBeLessThanOrEqual(after);
+	});
+
+	it("stores http scheme credentials without entering oauth exchange branches", () => {
+		const state: Record<string, unknown> = {};
+		const authHandler = new AuthHandler({
+			authConfig: new AuthConfig({
+				authScheme: { type: "http" } as any,
+				context: { credentialKey: "http-cred" },
+			}),
+			credential: { token: "bearer-x" } as any,
+		});
+
+		callStore(authHandler, baseCtx({ state }));
+		expect(state["temp:http-cred"]).toEqual({ token: "bearer-x" });
+	});
+});

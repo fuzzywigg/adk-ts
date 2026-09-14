@@ -499,5 +499,214 @@ describe("LlmEventSummarizer", () => {
 
 			expect(await summarizer.maybeSummarizeEvents(events)).toBeUndefined();
 		});
+
+		it("joins multiple text parts within a single stream chunk", async () => {
+			const events = [
+				new Event({
+					invocationId: "inv-1",
+					author: "user",
+					content: { parts: [{ text: "Hello" }] },
+					timestamp: 1000,
+				}),
+			];
+
+			async function* mockGenerator() {
+				yield {
+					content: {
+						parts: [{ text: "part-a" }, { text: "part-b" }, { text: "" }],
+					},
+				};
+			}
+			(mockLlm.generateContentAsync as any).mockReturnValue(mockGenerator());
+
+			const result = await summarizer.maybeSummarizeEvents(events);
+			expect(result?.actions?.compaction?.compactedContent.parts[0].text).toBe(
+				"part-apart-b",
+			);
+		});
+
+		it("leaves custom prompts without {events} unchanged and omits event body", async () => {
+			const custom = new LlmEventSummarizer(
+				mockLlm,
+				"Static prompt with no placeholder",
+			);
+			const events = [
+				new Event({
+					invocationId: "inv-1",
+					author: "user",
+					content: { parts: [{ text: "secret-event-body" }] },
+					timestamp: 1000,
+				}),
+			];
+
+			async function* mockGenerator() {
+				yield { content: { parts: [{ text: "ok" }] } };
+			}
+			(mockLlm.generateContentAsync as any).mockReturnValue(mockGenerator());
+
+			await custom.maybeSummarizeEvents(events);
+			const promptText = (mockLlm.generateContentAsync as any).mock.calls[0][0]
+				.contents[0].parts[0].text as string;
+			expect(promptText).toBe("Static prompt with no placeholder");
+			expect(promptText).not.toContain("secret-event-body");
+		});
+
+		it("formats functionCall without args and functionResponse without response", async () => {
+			const events = [
+				new Event({
+					invocationId: "inv-1",
+					author: "agent",
+					content: {
+						parts: [
+							{ functionCall: { name: "noop" } as any },
+							{ functionResponse: { name: "noop" } as any },
+						],
+					},
+					timestamp: 1000,
+				}),
+			];
+
+			async function* mockGenerator() {
+				yield { content: { parts: [{ text: "done" }] } };
+			}
+			(mockLlm.generateContentAsync as any).mockReturnValue(mockGenerator());
+
+			await summarizer.maybeSummarizeEvents(events);
+			const promptText = (mockLlm.generateContentAsync as any).mock.calls[0][0]
+				.contents[0].parts[0].text as string;
+			expect(promptText).toContain("Called tool 'noop' with args undefined");
+			expect(promptText).toContain("Tool 'noop' returned: undefined");
+		});
+
+		it("joins multi-text parts in one chunk alongside empty and non-text parts across chunks", async () => {
+			const events = [
+				new Event({
+					invocationId: "inv-1",
+					author: "user",
+					content: { parts: [{ text: "seed" }] },
+					timestamp: 1000,
+				}),
+			];
+
+			async function* mockGenerator() {
+				yield {
+					content: {
+						parts: [
+							{ text: "A" },
+							{ inlineData: { data: "x", mimeType: "text/plain" } } as any,
+							{ text: "B" },
+							{ text: undefined as any },
+							{ text: "C" },
+						],
+					},
+				};
+				yield {
+					content: {
+						parts: [{ text: "-D" }, { text: "-E" }],
+					},
+				};
+			}
+			(mockLlm.generateContentAsync as any).mockReturnValue(mockGenerator());
+
+			const result = await summarizer.maybeSummarizeEvents(events);
+			expect(result?.actions?.compaction?.compactedContent.parts[0].text).toBe(
+				"ABC-D-E",
+			);
+		});
+
+		it("does not substitute when custom prompt lacks exact {events} token", async () => {
+			const custom = new LlmEventSummarizer(
+				mockLlm,
+				"Use {EVENTS} and {event_list} only; no lowercase events token.",
+			);
+			const events = [
+				new Event({
+					invocationId: "inv-1",
+					author: "user",
+					content: { parts: [{ text: "must-not-leak" }] },
+					timestamp: 42,
+				}),
+			];
+
+			async function* mockGenerator() {
+				yield { content: { parts: [{ text: "summary" }] } };
+			}
+			(mockLlm.generateContentAsync as any).mockReturnValue(mockGenerator());
+
+			await custom.maybeSummarizeEvents(events);
+			const promptText = (mockLlm.generateContentAsync as any).mock.calls[0][0]
+				.contents[0].parts[0].text as string;
+			expect(promptText).toBe(
+				"Use {EVENTS} and {event_list} only; no lowercase events token.",
+			);
+			expect(promptText).toContain("{EVENTS}");
+			expect(promptText).toContain("{event_list}");
+			expect(promptText).not.toContain("must-not-leak");
+			expect(promptText).not.toContain("user:");
+		});
+
+		it("substitutes only the first {events} occurrence even inside doubled braces", async () => {
+			const custom = new LlmEventSummarizer(
+				mockLlm,
+				"Wrap {{events}} then leave a second {events} alone.",
+			);
+			const events = [
+				new Event({
+					invocationId: "inv-1",
+					author: "user",
+					content: { parts: [{ text: "payload-x" }] },
+					timestamp: 42,
+				}),
+			];
+
+			async function* mockGenerator() {
+				yield { content: { parts: [{ text: "summary" }] } };
+			}
+			(mockLlm.generateContentAsync as any).mockReturnValue(mockGenerator());
+
+			await custom.maybeSummarizeEvents(events);
+			const promptText = (mockLlm.generateContentAsync as any).mock.calls[0][0]
+				.contents[0].parts[0].text as string;
+			expect(promptText.startsWith("Wrap {")).toBe(true);
+			expect(promptText).toContain("payload-x");
+			expect(promptText).toContain("then leave a second {events} alone.");
+			expect(promptText.match(/\{events\}/g)).toEqual(["{events}"]);
+		});
+
+		it("stringifies omitted functionCall.args as undefined while empty args become {}", async () => {
+			const events = [
+				new Event({
+					invocationId: "inv-1",
+					author: "agent",
+					content: {
+						parts: [
+							{ functionCall: { name: "no_args" } as any },
+							{
+								functionCall: {
+									name: "explicit_undefined",
+									args: undefined,
+								} as any,
+							},
+							{ functionCall: { name: "empty_args", args: {} } },
+						],
+					},
+					timestamp: 1000,
+				}),
+			];
+
+			async function* mockGenerator() {
+				yield { content: { parts: [{ text: "ok" }] } };
+			}
+			(mockLlm.generateContentAsync as any).mockReturnValue(mockGenerator());
+
+			await summarizer.maybeSummarizeEvents(events);
+			const promptText = (mockLlm.generateContentAsync as any).mock.calls[0][0]
+				.contents[0].parts[0].text as string;
+			expect(promptText).toContain("Called tool 'no_args' with args undefined");
+			expect(promptText).toContain(
+				"Called tool 'explicit_undefined' with args undefined",
+			);
+			expect(promptText).toContain("Called tool 'empty_args' with args {}");
+		});
 	});
 });

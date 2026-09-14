@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 import { AuthConfig } from "../../auth/auth-config";
-import { HttpScheme, OAuth2Scheme } from "../../auth/auth-schemes";
+import {
+	ApiKeyScheme,
+	HttpScheme,
+	OAuth2Scheme,
+	OpenIdConnectScheme,
+} from "../../auth/auth-schemes";
 
 describe("AuthConfig", () => {
 	it("wraps an auth scheme with optional context", () => {
@@ -29,5 +34,25 @@ describe("AuthConfig", () => {
 		const config = new AuthConfig({ authScheme });
 		expect(config.authScheme.type).toBe("oauth2");
 		expect(config.context).toBeUndefined();
+	});
+
+	it("stores nested context values for ApiKey and OpenID schemes", () => {
+		const apiKeyConfig = new AuthConfig({
+			authScheme: new ApiKeyScheme({ in: "cookie", name: "sid" }),
+			context: { credentialKey: "temp:cookie", meta: { env: "test" } },
+		});
+		expect(apiKeyConfig.authScheme.type).toBe("apiKey");
+		expect(apiKeyConfig.context?.credentialKey).toBe("temp:cookie");
+		expect(apiKeyConfig.context?.meta).toEqual({ env: "test" });
+
+		const oidcConfig = new AuthConfig({
+			authScheme: new OpenIdConnectScheme({
+				openIdConnectUrl: "https://example.com/.well-known/openid",
+				description: "OIDC",
+			}),
+			context: {},
+		});
+		expect(oidcConfig.authScheme.type).toBe("openIdConnect");
+		expect(oidcConfig.context).toEqual({});
 	});
 });
