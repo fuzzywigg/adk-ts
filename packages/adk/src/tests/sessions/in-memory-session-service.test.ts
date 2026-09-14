@@ -509,4 +509,79 @@ describe("InMemorySessionService", () => {
 		expect(fetched?.state.version).toBe(2);
 		expect(fetched?.events).toEqual([]);
 	});
+
+	it("getSession/getSessionSync return undefined when map entry is nullish", async () => {
+		const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+		const service = new InMemorySessionService();
+		await service.createSession("app", "user", {}, "ghost");
+		const userMap = (service as any).sessions.get("app").get("user") as Map<
+			string,
+			unknown
+		>;
+		userMap.set("ghost", null);
+		expect(await service.getSession("app", "user", "ghost")).toBeUndefined();
+		expect(service.getSessionSync("app", "user", "ghost")).toBeUndefined();
+
+		userMap.set("ghost", undefined);
+		expect(await service.getSession("app", "user", "ghost")).toBeUndefined();
+		expect(service.getSessionSync("app", "user", "ghost")).toBeUndefined();
+		warn.mockRestore();
+	});
+
+	it("getSession applies afterTimestamp when all events are newer", async () => {
+		const service = new InMemorySessionService();
+		const session = await service.createSession("app", "user", {}, "s-new");
+		for (let i = 0; i < 3; i++) {
+			await service.appendEvent(session, {
+				author: "agent",
+				timestamp: 100 + i,
+				content: { parts: [{ text: `e${i}` }] },
+			} as any);
+		}
+		const fetched = await service.getSession("app", "user", "s-new", {
+			afterTimestamp: 50,
+		});
+		expect(fetched?.events).toHaveLength(3);
+	});
+
+	it("getSession afterTimestamp drops a trailing older prefix", async () => {
+		const service = new InMemorySessionService();
+		const session = await service.createSession("app", "user", {}, "s-old");
+		for (const ts of [10, 20, 30, 40]) {
+			await service.appendEvent(session, {
+				author: "agent",
+				timestamp: ts,
+				content: { parts: [{ text: `t${ts}` }] },
+			} as any);
+		}
+		const fetched = await service.getSession("app", "user", "s-old", {
+			afterTimestamp: 25,
+		});
+		expect(fetched?.events.map((e) => e.content?.parts?.[0]?.text)).toEqual([
+			"t30",
+			"t40",
+		]);
+	});
+
+	it("listSessions returns empty for unknown app or user", async () => {
+		const service = new InMemorySessionService();
+		await service.createSession("app", "user", {}, "s1");
+		expect((await service.listSessions("other", "user")).sessions).toEqual([]);
+		expect((await service.listSessions("app", "other")).sessions).toEqual([]);
+	});
+
+	it("deleteSession is a no-op for missing nested maps", async () => {
+		const service = new InMemorySessionService();
+		await expect(
+			service.deleteSession("missing-app", "u", "s"),
+		).resolves.toBeUndefined();
+		await service.createSession("app", "user", {}, "s1");
+		await expect(
+			service.deleteSession("app", "other-user", "s1"),
+		).resolves.toBeUndefined();
+		await expect(
+			service.deleteSession("app", "user", "missing"),
+		).resolves.toBeUndefined();
+		expect((await service.getSession("app", "user", "s1"))?.id).toBe("s1");
+	});
 });

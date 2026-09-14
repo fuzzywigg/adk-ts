@@ -396,4 +396,184 @@ describe("GcsArtifactService", () => {
 			},
 		});
 	});
+
+	it("saveArtifact propagates blob.save rejections including precondition races", async () => {
+		getFilesMock.mockResolvedValue([[]]);
+		saveMock.mockRejectedValueOnce(
+			Object.assign(new Error("precondition"), { code: 412 }),
+		);
+		const service = new GcsArtifactService("b");
+		await expect(
+			service.saveArtifact({
+				...base,
+				filename: "race.txt",
+				artifact: {
+					inlineData: { data: "x", mimeType: "text/plain" },
+				},
+			}),
+		).rejects.toMatchObject({ code: 412 });
+	});
+
+	it("listVersions and listArtifactKeys propagate getFiles failures", async () => {
+		getFilesMock.mockRejectedValueOnce(new Error("list versions boom"));
+		const service = new GcsArtifactService("b");
+		await expect(
+			service.listVersions({ ...base, filename: "a.txt" }),
+		).rejects.toThrow("list versions boom");
+
+		getFilesMock.mockRejectedValueOnce(new Error("list keys boom"));
+		await expect(service.listArtifactKeys(base)).rejects.toThrow(
+			"list keys boom",
+		);
+	});
+
+	it("deleteArtifact rejects when any version delete fails", async () => {
+		getFilesMock.mockResolvedValue([
+			[
+				{ name: "app/user-1/sess-1/del.txt/0" },
+				{ name: "app/user-1/sess-1/del.txt/1" },
+			],
+		]);
+		deleteMock
+			.mockResolvedValueOnce(undefined)
+			.mockRejectedValueOnce(new Error("delete v1 failed"));
+		const service = new GcsArtifactService("b");
+		await expect(
+			service.deleteArtifact({ ...base, filename: "del.txt" }),
+		).rejects.toThrow("delete v1 failed");
+		expect(deleteMock).toHaveBeenCalledTimes(2);
+	});
+
+	it("loadArtifact rethrows non-404 download errors and accepts numeric 404", async () => {
+		getMetadataMock.mockResolvedValue([{ contentType: "text/plain" }]);
+		downloadMock.mockRejectedValueOnce(
+			Object.assign(new Error("gone"), { code: 404 }),
+		);
+		const service = new GcsArtifactService("b");
+		await expect(
+			service.loadArtifact({ ...base, filename: "a.txt", version: 0 }),
+		).resolves.toBeNull();
+
+		downloadMock.mockRejectedValueOnce(
+			Object.assign(new Error("network"), { code: 500 }),
+		);
+		await expect(
+			service.loadArtifact({ ...base, filename: "a.txt", version: 0 }),
+		).rejects.toThrow("network");
+
+		downloadMock.mockRejectedValueOnce(
+			Object.assign(new Error("string-404"), { code: "404" }),
+		);
+		await expect(
+			service.loadArtifact({ ...base, filename: "a.txt", version: 0 }),
+		).rejects.toThrow("string-404");
+	});
+
+	it("loadArtifact returns null when download buffer is falsy", async () => {
+		getMetadataMock.mockResolvedValue([{ contentType: "text/plain" }]);
+		downloadMock.mockResolvedValueOnce([null]);
+		const service = new GcsArtifactService("b");
+		await expect(
+			service.loadArtifact({ ...base, filename: "a.txt", version: 0 }),
+		).resolves.toBeNull();
+	});
+
+	it("loadArtifact defaults mimeType when metadata contentType is missing", async () => {
+		getMetadataMock.mockResolvedValue([{}]);
+		downloadMock.mockResolvedValue([Buffer.from("bytes")]);
+		const service = new GcsArtifactService("b");
+		await expect(
+			service.loadArtifact({ ...base, filename: "a.txt", version: 0 }),
+		).resolves.toEqual({
+			inlineData: {
+				data: "bytes",
+				mimeType: "application/octet-stream",
+			},
+		});
+	});
+
+	it("listVersions skips non-numeric trailing segments and wrong depths", async () => {
+		getFilesMock.mockResolvedValue([
+			[
+				{ name: "app/user-1/sess-1/a.txt/0" },
+				{ name: "app/user-1/sess-1/a.txt/not-a-number" },
+				{ name: "app/user-1/sess-1/a.txt/2/extra" },
+				{ name: "app/user-1/sess-1/a.txt/3" },
+				{ name: "too/short" },
+			],
+		]);
+		const service = new GcsArtifactService("b");
+		await expect(
+			service.listVersions({ ...base, filename: "a.txt" }),
+		).resolves.toEqual([0, 3]);
+	});
+
+	it("listArtifactKeys ignores wrong-depth blobs and sorts filenames", async () => {
+		getFilesMock
+			.mockResolvedValueOnce([
+				[
+					{ name: "app/user-1/sess-1/z.txt/0" },
+					{ name: "app/user-1/sess-1/a.txt/1" },
+					{ name: "app/user-1/sess-1/nested/extra/x.txt/0" },
+					{ name: "short" },
+				],
+			])
+			.mockResolvedValueOnce([
+				[
+					{ name: "app/user-1/user/user:prefs.json/0" },
+					{ name: "app/user-1/user/too/many/parts/here/0" },
+				],
+			]);
+		const service = new GcsArtifactService("b");
+		await expect(service.listArtifactKeys(base)).resolves.toEqual([
+			"a.txt",
+			"user:prefs.json",
+			"z.txt",
+		]);
+	});
+
+	it("saveArtifact starts at version 0 when listVersions is empty", async () => {
+		getFilesMock.mockResolvedValue([[]]);
+		const service = new GcsArtifactService("b");
+		const version = await service.saveArtifact({
+			...base,
+			filename: "first.txt",
+			artifact: {
+				inlineData: { data: "1", mimeType: "text/plain" },
+			},
+		});
+		expect(version).toBe(0);
+		expect(fileMock).toHaveBeenCalledWith("app/user-1/sess-1/first.txt/0");
+		expect(saveMock).toHaveBeenCalledWith("1", {
+			contentType: "text/plain",
+			preconditionOpts: { ifGenerationMatch: 0 },
+		});
+	});
+
+	it("loadArtifact without version returns null when no versions exist", async () => {
+		getFilesMock.mockResolvedValue([[]]);
+		const service = new GcsArtifactService("b");
+		await expect(
+			service.loadArtifact({ ...base, filename: "missing.txt" }),
+		).resolves.toBeNull();
+	});
+
+	it("loadArtifact without version selects the maximum version", async () => {
+		getFilesMock.mockResolvedValue([
+			[
+				{ name: "app/user-1/sess-1/max.txt/1" },
+				{ name: "app/user-1/sess-1/max.txt/4" },
+				{ name: "app/user-1/sess-1/max.txt/2" },
+			],
+		]);
+		getMetadataMock.mockResolvedValue([{ contentType: "text/plain" }]);
+		downloadMock.mockResolvedValue([Buffer.from("latest")]);
+		const service = new GcsArtifactService("b");
+		const part = await service.loadArtifact({
+			...base,
+			filename: "max.txt",
+		});
+		expect(fileMock).toHaveBeenCalledWith("app/user-1/sess-1/max.txt/4");
+		expect(part?.inlineData?.data).toBe("latest");
+	});
 });
