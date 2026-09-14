@@ -300,6 +300,60 @@ describe("LogFormatter leftover truncation / part-type matrices", () => {
 		);
 	});
 
+	it("formatContentPreview filters empty-string text via part.text truthiness", () => {
+		expect(
+			LogFormatter.formatContentPreview({
+				role: "user",
+				parts: [{ text: "" }],
+			}),
+		).toBe("no text content");
+	});
+
+	it("formatContentPreview keeps whitespace-only text (truthy)", () => {
+		expect(
+			LogFormatter.formatContentPreview({
+				role: "user",
+				parts: [{ text: " " }],
+			}),
+		).toBe(" ");
+	});
+
+	it("formatContentPreview mixed empty + hi joins surviving text", () => {
+		expect(
+			LogFormatter.formatContentPreview({
+				role: "user",
+				parts: [{ text: "" }, { text: "hi" }],
+			}),
+		).toBe("hi");
+	});
+
+	it("fileData snake mime_type is ignored; camel empty falls to unknown type", () => {
+		expect(
+			LogFormatter.formatContentParts({
+				role: "user",
+				parts: [{ fileData: { mime_type: "text/plain" } as any }],
+			})[0],
+		).toContain("file: unknown type");
+		expect(
+			LogFormatter.formatContentParts({
+				role: "user",
+				parts: [{ fileData: { mimeType: "text/plain" } as any }],
+			})[0],
+		).toContain("file: text/plain");
+		expect(
+			LogFormatter.formatContentParts({
+				role: "user",
+				parts: [{ fileData: { mimeType: "" } as any }],
+			})[0],
+		).toContain("file: unknown type");
+		expect(
+			LogFormatter.formatContentParts({
+				role: "user",
+				parts: [{ fileData: { mimeType: " " } as any }],
+			})[0],
+		).toContain("file:  ");
+	});
+
 	it.each([
 		{ label: "empty string", text: "", expectedType: "text", preview: '""' },
 		{ label: "0", text: 0 as any, expectedType: "text", preview: '"0"' },

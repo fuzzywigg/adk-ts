@@ -60,6 +60,30 @@ describe("telemetry leftover contents || [] edges", () => {
 				contents: null,
 			}),
 		},
+		{
+			label: "contents empty string",
+			buildRequest: () => ({
+				model: "m",
+				config: { topP: 0.4 },
+				contents: "",
+			}),
+		},
+		{
+			label: "contents 0",
+			buildRequest: () => ({
+				model: "m",
+				config: { topP: 0.3 },
+				contents: 0,
+			}),
+		},
+		{
+			label: "contents false",
+			buildRequest: () => ({
+				model: "m",
+				config: { topP: 0.2 },
+				contents: false,
+			}),
+		},
 	];
 
 	for (const { label, buildRequest } of missingContentsCases) {

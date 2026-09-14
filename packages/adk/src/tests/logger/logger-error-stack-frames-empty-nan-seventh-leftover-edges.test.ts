@@ -140,4 +140,15 @@ describe("Logger seventh leftover — ADK_ERROR_STACK_FRAMES empty/NaN Number() 
 		expect(rendered).toContain("↳ … 3 more frames");
 		expect(rendered).not.toContain("↳ first");
 	});
+
+	it("ADK_ERROR_STACK_FRAMES='08' → Number('08')===8 shows all 3 frames (no ellipsis)", () => {
+		process.env.ADK_ERROR_STACK_FRAMES = "08";
+		const logger = new Logger({ name: "stack-oct-like" });
+		logger.error("failed", makeStackedError());
+		const rendered = stripAnsi(String(errorSpy.mock.calls[0][0]));
+		expect(rendered).toContain("↳ first");
+		expect(rendered).toContain("↳ second");
+		expect(rendered).toContain("↳ third");
+		expect(rendered).not.toContain("more frames");
+	});
 });
