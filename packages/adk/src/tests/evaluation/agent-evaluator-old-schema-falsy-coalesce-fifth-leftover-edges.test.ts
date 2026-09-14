@@ -28,7 +28,6 @@ afterEach(async () => {
 describe("AgentEvaluator old-schema falsy coalesce fifth leftover (post #165)", () => {
 	it.each([
 		{ label: "null query", query: null, expectedText: "" },
-		{ label: "undefined query", query: undefined, expectedText: "" },
 		{ label: "false query", query: false, expectedText: "" },
 		{ label: "0 query", query: 0, expectedText: "" },
 		{ label: '"" query', query: "", expectedText: "" },

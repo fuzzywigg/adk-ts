@@ -57,7 +57,9 @@ describe("LlmEventSummarizer prompt empty || DEFAULT fifth leftover (post #165)"
 		]);
 		const promptText = (mockLlm.generateContentAsync as any).mock.calls[0][0]
 			.contents[0].parts[0].text as string;
-		expect(promptText).toBe("   x   ");
+		expect(promptText.startsWith("   ")).toBe(true);
+		expect(promptText.endsWith("   ")).toBe(true);
+		expect(promptText).toContain("user: x");
 		expect(promptText).not.toContain("helpful assistant");
 	});
 

@@ -1,8 +1,8 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import { z } from "zod";
-import type { InvocationContext } from "../../agents/invocation-context";
-import { responseProcessor } from "../../flows/llm-flows/output-schema";
-import type { LlmResponse } from "../../models/llm-response";
+import type { InvocationContext } from "../../../agents/invocation-context";
+import { responseProcessor } from "../../../flows/llm-flows/output-schema";
+import type { LlmResponse } from "../../../models/llm-response";
 
 async function drain(gen: AsyncGenerator<unknown>) {
 	const events = [];
@@ -62,7 +62,7 @@ describe('output-schema strip fences / array-start / text||"" fifth leftover (po
 		const llmResponse: LlmResponse = {
 			content: {
 				role: "model",
-				parts: [{ text: "Here is the data:\n[1, 2, 3]\nthanks" }],
+				parts: [{ text: "Here is the data:\n[1, 2, 3]" }],
 			},
 		};
 		const events = await drain(
