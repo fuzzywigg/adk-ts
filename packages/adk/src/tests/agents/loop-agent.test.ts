@@ -1,8 +1,8 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
-import { LoopAgent } from "../../agents/loop-agent";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { BaseAgent } from "../../agents/base-agent";
-import { Event } from "../../events/event";
 import type { InvocationContext } from "../../agents/invocation-context";
+import { LoopAgent } from "../../agents/loop-agent";
+import { Event } from "../../events/event";
 
 class MockSubAgent extends BaseAgent {
 	runAsync = vi.fn();
@@ -187,6 +187,114 @@ describe("LoopAgent", () => {
 			}
 
 			expect(yieldedEvents).toHaveLength(0);
+		});
+
+		it("stops on the first escalate event from the first sub-agent", async () => {
+			const agent = new LoopAgent({
+				name: "testloop",
+				description: "desc",
+				subAgents: [subAgent1, subAgent2],
+				maxIterations: 5,
+			});
+			const escalateEvent = new Event({
+				author: "subAgent1",
+				actions: { escalate: true } as any,
+			});
+
+			subAgent1.runAsync.mockImplementation(async function* () {
+				yield escalateEvent;
+			});
+			subAgent2.runAsync.mockImplementation(async function* () {
+				yield new Event({ author: "subAgent2" });
+			});
+
+			const yieldedEvents = [];
+			for await (const event of agent["runAsyncImpl"](mockContext)) {
+				yieldedEvents.push(event);
+			}
+
+			expect(subAgent1.runAsync).toHaveBeenCalledTimes(1);
+			expect(subAgent2.runAsync).not.toHaveBeenCalled();
+			expect(yieldedEvents).toEqual([escalateEvent]);
+		});
+
+		it("runs a single sub-agent across N iterations then stops", async () => {
+			const agent = new LoopAgent({
+				name: "testloop",
+				description: "desc",
+				subAgents: [subAgent1],
+				maxIterations: 4,
+			});
+			subAgent1.runAsync.mockImplementation(async function* () {
+				yield new Event({ author: "subAgent1" });
+			});
+
+			const yieldedEvents = [];
+			for await (const event of agent["runAsyncImpl"](mockContext)) {
+				yieldedEvents.push(event);
+			}
+
+			expect(subAgent1.runAsync).toHaveBeenCalledTimes(4);
+			expect(yieldedEvents).toHaveLength(4);
+		});
+
+		it("continues after empty event streams and escalates later", async () => {
+			const agent = new LoopAgent({
+				name: "testloop",
+				description: "desc",
+				subAgents: [subAgent1],
+				maxIterations: 5,
+			});
+			const escalateEvent = new Event({
+				author: "subAgent1",
+				actions: { escalate: true } as any,
+			});
+			let calls = 0;
+			subAgent1.runAsync.mockImplementation(async function* () {
+				calls++;
+				if (calls === 1) {
+					return;
+				}
+				if (calls === 2) {
+					yield new Event({ author: "subAgent1" });
+					return;
+				}
+				yield escalateEvent;
+			});
+
+			const yieldedEvents = [];
+			for await (const event of agent["runAsyncImpl"](mockContext)) {
+				yieldedEvents.push(event);
+			}
+
+			expect(calls).toBe(3);
+			expect(yieldedEvents).toHaveLength(2);
+			expect(yieldedEvents[1]).toBe(escalateEvent);
+		});
+
+		it("escalates without remaining siblings when the only sub-agent escalates", async () => {
+			const agent = new LoopAgent({
+				name: "testloop",
+				description: "desc",
+				subAgents: [subAgent1],
+				maxIterations: 3,
+			});
+			const escalateEvent = new Event({
+				author: "subAgent1",
+				actions: { escalate: true } as any,
+			});
+			subAgent1.runAsync.mockImplementation(async function* () {
+				yield new Event({ author: "subAgent1" });
+				yield escalateEvent;
+			});
+
+			const yieldedEvents = [];
+			for await (const event of agent["runAsyncImpl"](mockContext)) {
+				yieldedEvents.push(event);
+			}
+
+			expect(subAgent1.runAsync).toHaveBeenCalledTimes(1);
+			expect(yieldedEvents.pop()).toBe(escalateEvent);
 		});
 	});
 
