@@ -411,6 +411,33 @@ describe("VertexAiSessionService", () => {
 		});
 	});
 
+	it("appendEvent keeps local mutations when the remote POST rejects", async () => {
+		const { service, asyncRequest } = createService();
+		asyncRequest.mockRejectedValueOnce(new Error("remote-down"));
+		const session = {
+			id: "sess-local",
+			appName: "app",
+			userId: "u",
+			state: { keep: 1 },
+			events: [] as Event[],
+			lastUpdateTime: 0,
+		};
+		const event = new Event({
+			author: "agent",
+			content: { parts: [{ text: "local-first" }] },
+			actions: new EventActions({
+				stateDelta: { keep: 9, local: "yes" },
+			}),
+		});
+
+		await expect(service.appendEvent(session, event)).rejects.toThrow(
+			"remote-down",
+		);
+		expect(session.state).toEqual({ keep: 9, local: "yes" });
+		expect(session.events).toHaveLength(1);
+		expect(session.events[0].content?.parts?.[0]?.text).toBe("local-first");
+	});
+
 	it("appendEvent still posts partial events while leaving local history unchanged", async () => {
 		const { service, asyncRequest } = createService();
 		asyncRequest.mockResolvedValueOnce({});

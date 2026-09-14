@@ -239,4 +239,38 @@ describe("convertMcpToolToBaseTool", () => {
 			message: "typed",
 		});
 	});
+
+	it("getDeclaration wraps schema conversion failures as INVALID_SCHEMA_ERROR", async () => {
+		const schemaConversion = await import(
+			"../../../tools/mcp/schema-conversion"
+		);
+		const spy = vi
+			.spyOn(schemaConversion, "mcpSchemaToParameters")
+			.mockImplementation(() => {
+				throw new Error("broken inputSchema");
+			});
+
+		try {
+			const tool = await convertMcpToolToBaseTool({
+				mcpTool: {
+					name: "bad_schema_tool",
+					description: "fails declaration",
+					inputSchema: { type: "object", properties: {} },
+				} as any,
+				toolHandler: async () => ({ content: [] }),
+			});
+
+			expect(() => tool.getDeclaration()).toThrow(
+				expect.objectContaining({
+					name: "McpError",
+					type: McpErrorType.INVALID_SCHEMA_ERROR,
+					message: expect.stringContaining(
+						"Failed to convert schema for tool bad_schema_tool",
+					),
+				}),
+			);
+		} finally {
+			spy.mockRestore();
+		}
+	});
 });
