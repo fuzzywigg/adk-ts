@@ -1406,4 +1406,160 @@ describe("OpenAiLlm", () => {
 			).toBe(true);
 		});
 	});
+
+	describe("generateContentAsyncImpl leftover model and empty tool args", () => {
+		it("falls back to this.model when request.model is empty string", async () => {
+			const custom = new OpenAiLlm("gpt-4o-mini");
+			mockCreate.mockResolvedValue({
+				choices: [{ message: { content: "ok" }, finish_reason: "stop" }],
+			});
+
+			const request = new LlmRequest({
+				model: "",
+				contents: [{ role: "user", parts: [{ text: "hi" }] }],
+			});
+			for await (const _ of (custom as any).generateContentAsyncImpl(
+				request,
+				false,
+			)) {
+				// drain
+			}
+
+			expect(mockCreate).toHaveBeenCalledWith(
+				expect.objectContaining({ model: "gpt-4o-mini" }),
+			);
+		});
+
+		it("falls back to this.model when request.model is nullish", async () => {
+			mockCreate.mockResolvedValue({
+				choices: [{ message: { content: "ok" }, finish_reason: "stop" }],
+			});
+
+			const request = new LlmRequest({
+				contents: [{ role: "user", parts: [{ text: "hi" }] }],
+			});
+			(request as any).model = null;
+
+			for await (const _ of (llm as any).generateContentAsyncImpl(
+				request,
+				false,
+			)) {
+				// drain
+			}
+
+			expect(mockCreate).toHaveBeenCalledWith(
+				expect.objectContaining({ model: "gpt-4o-mini" }),
+			);
+		});
+
+		it("JSON.parses empty stream tool arguments via || {} on finish_reason", async () => {
+			mockCreate.mockResolvedValue(
+				(async function* () {
+					yield {
+						choices: [
+							{
+								delta: {
+									tool_calls: [
+										{
+											index: 0,
+											id: "empty-args",
+											type: "function",
+											function: { name: "noop", arguments: "" },
+										},
+									],
+								},
+								finish_reason: null,
+							},
+						],
+					};
+					yield {
+						choices: [
+							{
+								delta: {
+									tool_calls: [
+										{
+											index: 0,
+											function: { arguments: undefined },
+										},
+									],
+								},
+								finish_reason: "tool_calls",
+							},
+						],
+						usage: {
+							prompt_tokens: 1,
+							completion_tokens: 1,
+							total_tokens: 2,
+						},
+					};
+				})(),
+			);
+
+			const responses: LlmResponse[] = [];
+			for await (const response of (llm as any).generateContentAsyncImpl(
+				new LlmRequest({
+					contents: [{ role: "user", parts: [{ text: "hi" }] }],
+				}),
+				true,
+			)) {
+				responses.push(response);
+			}
+
+			const finished = responses.find((r) => r.finishReason === "STOP");
+			expect(finished?.content?.parts).toEqual([
+				{
+					functionCall: {
+						id: "empty-args",
+						name: "noop",
+						args: {},
+					},
+				},
+			]);
+		});
+
+		it("JSON.parses missing stream tool arguments when only name is set", async () => {
+			mockCreate.mockResolvedValue(
+				(async function* () {
+					yield {
+						choices: [
+							{
+								delta: {
+									tool_calls: [
+										{
+											index: 0,
+											id: "name-only",
+											type: "function",
+											function: { name: "ping" },
+										},
+									],
+								},
+								finish_reason: "tool_calls",
+							},
+						],
+					};
+				})(),
+			);
+
+			const responses: LlmResponse[] = [];
+			for await (const response of (llm as any).generateContentAsyncImpl(
+				new LlmRequest({
+					contents: [{ role: "user", parts: [{ text: "hi" }] }],
+				}),
+				true,
+			)) {
+				responses.push(response);
+			}
+
+			const finished = responses.find((r) => r.finishReason === "STOP");
+			expect(finished?.content?.parts).toEqual([
+				{
+					functionCall: {
+						id: "name-only",
+						name: "ping",
+						args: {},
+					},
+				},
+			]);
+		});
+	});
 });

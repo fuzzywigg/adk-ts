@@ -495,4 +495,35 @@ describe("sharedMemoryRequestProcessor leftover coalescing edges", () => {
 		);
 		expect(reads).toBeGreaterThanOrEqual(2);
 	});
+
+	it("coalesces null parts via ?? [] when findLast previously saw a length", async () => {
+		const searchMemory = vi.fn(async () => ({ memories: [] }));
+		const realParts = [{ text: "null-vanish" }];
+		let reads = 0;
+		const content: { role: string; parts?: unknown } = { role: "user" };
+		Object.defineProperty(content, "parts", {
+			configurable: true,
+			enumerable: true,
+			get() {
+				reads++;
+				if (reads <= 1) return realParts;
+				return null;
+			},
+		});
+		const { context, llmRequest } = makeContext({
+			memoryService: { searchMemory } as any,
+			events: [
+				new Event({
+					author: "user",
+					content: content as any,
+				}),
+			],
+		});
+
+		await drain(sharedMemoryRequestProcessor.runAsync(context, llmRequest));
+		expect(searchMemory).toHaveBeenCalledWith(
+			expect.objectContaining({ query: "" }),
+		);
+		expect(reads).toBeGreaterThanOrEqual(2);
+	});
 });
