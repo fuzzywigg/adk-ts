@@ -107,4 +107,37 @@ describe("Logger seventh leftover — ADK_ERROR_STACK_FRAMES empty/NaN Number() 
 		expect(rendered).toContain("↳ … 3 more frames");
 		expect(rendered).not.toContain("↳ first");
 	});
+
+	it("ADK_ERROR_STACK_FRAMES='-1' → slice(0,-1) drops last frame and ellipsis uses 3-(-1)", () => {
+		process.env.ADK_ERROR_STACK_FRAMES = "-1";
+		const logger = new Logger({ name: "stack-neg" });
+		logger.error("failed", makeStackedError());
+		const rendered = stripAnsi(String(errorSpy.mock.calls[0][0]));
+		expect(rendered).toContain("• Stack:");
+		expect(rendered).toContain("↳ first");
+		expect(rendered).toContain("↳ second");
+		expect(rendered).not.toContain("↳ third");
+		expect(rendered).toContain("↳ … 4 more frames");
+	});
+
+	it("ADK_ERROR_STACK_FRAMES='2.9' → slice takes 2 frames; ellipsis uses 3-2.9 fractional remainder", () => {
+		process.env.ADK_ERROR_STACK_FRAMES = "2.9";
+		const logger = new Logger({ name: "stack-float" });
+		logger.error("failed", makeStackedError());
+		const rendered = stripAnsi(String(errorSpy.mock.calls[0][0]));
+		expect(rendered).toContain("↳ first");
+		expect(rendered).toContain("↳ second");
+		expect(rendered).not.toContain("↳ third");
+		expect(rendered).toMatch(/↳ … 0\.1\d* more frames/);
+	});
+
+	it("ADK_ERROR_STACK_FRAMES='+0' → Number('+0')===0 like empty/'0'", () => {
+		process.env.ADK_ERROR_STACK_FRAMES = "+0";
+		const logger = new Logger({ name: "stack-plus-zero" });
+		logger.error("failed", makeStackedError());
+		const rendered = stripAnsi(String(errorSpy.mock.calls[0][0]));
+		expect(rendered).toContain("• Stack:");
+		expect(rendered).toContain("↳ … 3 more frames");
+		expect(rendered).not.toContain("↳ first");
+	});
 });

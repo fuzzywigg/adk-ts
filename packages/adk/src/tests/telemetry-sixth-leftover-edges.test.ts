@@ -200,4 +200,61 @@ describe("telemetry sixth leftover deepen edges", () => {
 			"gen_ai.usage.output_tokens": 22,
 		});
 	});
+
+	it.each([
+		{ label: "undefined", usageMetadata: undefined },
+		{ label: "null", usageMetadata: null },
+		{ label: "0", usageMetadata: 0 },
+		{ label: "false", usageMetadata: false },
+		{ label: "empty string", usageMetadata: "" },
+	])("traceLlmCall skips usage attrs when usageMetadata is falsy ($label)", async ({
+		usageMetadata,
+	}) => {
+		const setAttributes = vi.fn();
+		const addEvent = vi.fn();
+		const { trace } = await import("@opentelemetry/api");
+		vi.spyOn(trace, "getActiveSpan").mockReturnValue({
+			setAttributes,
+			addEvent,
+		} as any);
+
+		const service = new TelemetryService();
+		service.traceLlmCall(
+			{ invocationId: "i", userId: "u", session: { id: "s" } } as any,
+			"e",
+			{ model: "m", config: {}, contents: [] } as LlmRequest,
+			{ usageMetadata } as LlmResponse,
+		);
+
+		const usageCall = setAttributes.mock.calls.find(
+			(c) => "gen_ai.usage.input_tokens" in c[0],
+		);
+		expect(usageCall).toBeUndefined();
+	});
+
+	it("empty-object usageMetadata is truthy so usage attrs still emit as 0", async () => {
+		const setAttributes = vi.fn();
+		const addEvent = vi.fn();
+		const { trace } = await import("@opentelemetry/api");
+		vi.spyOn(trace, "getActiveSpan").mockReturnValue({
+			setAttributes,
+			addEvent,
+		} as any);
+
+		const service = new TelemetryService();
+		service.traceLlmCall(
+			{ invocationId: "i", userId: "u", session: { id: "s" } } as any,
+			"e",
+			{ model: "m", config: {}, contents: [] } as LlmRequest,
+			{ usageMetadata: {} } as LlmResponse,
+		);
+
+		const usageCall = setAttributes.mock.calls.find(
+			(c) => "gen_ai.usage.input_tokens" in c[0],
+		);
+		expect(usageCall?.[0]).toMatchObject({
+			"gen_ai.usage.input_tokens": 0,
+			"gen_ai.usage.output_tokens": 0,
+		});
+	});
 });

@@ -300,6 +300,46 @@ describe("LogFormatter leftover truncation / part-type matrices", () => {
 		);
 	});
 
+	it.each([
+		{ label: "empty string", text: "", expectedType: "text", preview: '""' },
+		{ label: "0", text: 0 as any, expectedType: "text", preview: '"0"' },
+		{
+			label: "false",
+			text: false as any,
+			expectedType: "text",
+			preview: '"false"',
+		},
+	])("getPartType uses !== undefined so text=$label is still text", ({
+		text,
+		expectedType,
+		preview,
+	}) => {
+		const lines = LogFormatter.formatContentParts({
+			role: "model",
+			parts: [{ text } as Part],
+		});
+		expect(lines[0]).toContain(`[0] ${expectedType}:`);
+		expect(lines[0]).toContain(preview);
+	});
+
+	it("text:null is still typed text via !== undefined then throws on .length", () => {
+		expect(() =>
+			LogFormatter.formatContentParts({
+				role: "model",
+				parts: [{ text: null as any }],
+			}),
+		).toThrow();
+	});
+
+	it("functionCall:null is typed function_call (!== undefined) then throws on args access", () => {
+		expect(() =>
+			LogFormatter.formatContentParts({
+				role: "model",
+				parts: [{ functionCall: null as any }],
+			}),
+		).toThrow();
+	});
+
 	const argBoundary = [
 		{ n: 49, repeat: 41 },
 		{ n: 50, repeat: 42 },

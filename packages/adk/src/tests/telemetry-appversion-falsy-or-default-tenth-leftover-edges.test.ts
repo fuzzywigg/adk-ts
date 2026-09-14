@@ -104,4 +104,24 @@ describe("telemetry appVersion falsy-or-default tenth leftover edges", () => {
 			true,
 		);
 	});
+
+	it.each([
+		{ label: "single space", appVersion: " " },
+		{ label: "zero string", appVersion: "0" },
+		{ label: "false string", appVersion: "false" },
+	])("initialize keeps truthy-but-odd appVersion ($label) (no || default)", ({
+		appVersion,
+	}) => {
+		const service = new TelemetryService();
+		const before = getTracerSpy.mock.calls.length;
+		service.initialize({
+			appName: "app-ver",
+			appVersion,
+			otlpEndpoint: "http://localhost:4318/v1/traces",
+		});
+		const after = getTracerSpy.mock.calls.slice(before);
+		expect(after.some((c) => c[0] === "iqai-adk" && c[1] === appVersion)).toBe(
+			true,
+		);
+	});
 });

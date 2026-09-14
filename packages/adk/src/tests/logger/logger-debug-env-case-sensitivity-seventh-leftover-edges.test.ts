@@ -83,4 +83,33 @@ describe("Logger seventh leftover — ADK_DEBUG === 'true' case asymmetry", () =
 		expect(logSpy).toHaveBeenCalled();
 		expect(logger.isDebugEnabled).toBe(true);
 	});
+
+	it.each([
+		{ label: "DEVELOPMENT", value: "DEVELOPMENT" },
+		{ label: "Development", value: "Development" },
+		{ label: "dev", value: "dev" },
+		{ label: "development ", value: "development " },
+		{ label: " development", value: " development" },
+		{ label: "empty", value: "" },
+	] as const)("isDebugEnabled false when NODE_ENV=$label (strict === 'development') and ADK_DEBUG unset", async ({
+		value,
+	}) => {
+		process.env.NODE_ENV = value;
+		delete process.env.ADK_DEBUG;
+		await reloadLogger();
+		expect(isDebugEnabled()).toBe(false);
+		const logger = new Logger({ name: "dev-case" });
+		logger.debug("skip-dev-case");
+		expect(logSpy).not.toHaveBeenCalled();
+	});
+
+	it("isDebugEnabled true for exact NODE_ENV='development' without ADK_DEBUG", async () => {
+		process.env.NODE_ENV = "development";
+		delete process.env.ADK_DEBUG;
+		await reloadLogger();
+		expect(isDebugEnabled()).toBe(true);
+		const logger = new Logger({ name: "dev-exact" });
+		logger.debug("emit-dev");
+		expect(logSpy).toHaveBeenCalled();
+	});
 });

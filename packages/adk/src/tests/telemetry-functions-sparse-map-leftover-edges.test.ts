@@ -82,4 +82,11 @@ describe("telemetry functions sparse-map leftover edges", () => {
 		});
 		expect(built.config).not.toHaveProperty("response_schema");
 	});
+
+	it("array-like non-array functions object is stored raw (Array.isArray false)", () => {
+		const arrayLike = { 0: { name: "a", handler: () => 1 }, length: 1 };
+		const result = exclude({ functions: arrayLike });
+		expect(result.functions).toBe(arrayLike);
+		expect(result.functions[0]).toHaveProperty("handler");
+	});
 });

@@ -68,4 +68,28 @@ describe("telemetry functionResponse truthy-gate eleventh leftover", () => {
 			"<not specified>",
 		);
 	});
+
+	it("whitespace id is truthy so || does not apply sentinel", async () => {
+		const { setAttributes } = await withActiveSpan();
+		const service = new TelemetryService();
+		service.traceToolCall(
+			tool,
+			{},
+			new Event({
+				author: "tool",
+				content: {
+					parts: [
+						{
+							functionResponse: {
+								id: " ",
+								name: "lookup",
+								response: {},
+							},
+						},
+					],
+				},
+			}),
+		);
+		expect(setAttributes.mock.calls[0][0]["gen_ai.tool.call.id"]).toBe(" ");
+	});
 });

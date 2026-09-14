@@ -120,6 +120,52 @@ describe("Logger seventh leftover — warnStructured format '' fallthrough + tim
 	});
 
 	it.each([
+		{ label: "JSON", value: "JSON" },
+		{ label: "Json", value: "Json" },
+		{ label: "json ", value: "json " },
+		{ label: "PRETTY", value: "PRETTY" },
+		{ label: "Pretty", value: "Pretty" },
+	] as const)("ADK_WARN_FORMAT=$label misses json/pretty (strict ===) and falls through to text", ({
+		value,
+	}) => {
+		process.env.ADK_WARN_FORMAT = value;
+		const logger = new Logger({ name: "fmt-case" });
+		logger.warnStructured(
+			{ code: "E3", message: "case-miss", suggestion: "hint" },
+			{},
+		);
+		const rendered = stripAnsi(String(warnSpy.mock.calls[0][0]));
+		expect(rendered).toContain("[E3] case-miss");
+		expect(rendered).toContain("-> hint");
+		expect(rendered).not.toContain('"code":');
+		expect(rendered).not.toContain("• Suggestion:");
+	});
+
+	it("ADK_WARN_FORMAT=TEXT still hits text else-branch (TEXT !== pretty)", () => {
+		process.env.ADK_WARN_FORMAT = "TEXT";
+		const logger = new Logger({ name: "fmt-text-case" });
+		logger.warnStructured(
+			{ code: "E4", message: "text-case", suggestion: "go" },
+			{},
+		);
+		const rendered = stripAnsi(String(warnSpy.mock.calls[0][0]));
+		expect(rendered).toContain("[E4] text-case");
+		expect(rendered).toContain("-> go");
+	});
+
+	it("opts.format='JSON' also misses json/pretty and uses text", () => {
+		delete process.env.ADK_WARN_FORMAT;
+		const logger = new Logger({ name: "fmt-opts-json" });
+		logger.warnStructured(
+			{ code: "E5", message: "opts-json", suggestion: "hint" },
+			{ format: "JSON" as any },
+		);
+		const rendered = stripAnsi(String(warnSpy.mock.calls[0][0]));
+		expect(rendered).toContain("[E5] opts-json");
+		expect(rendered).not.toContain('"code":');
+	});
+
+	it.each([
 		{ label: "whitespace", timestamp: "   " },
 		{ label: "zero-string", timestamp: "0" },
 		{ label: "custom", timestamp: "1999-12-31T23:59:59.000Z" },

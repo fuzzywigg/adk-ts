@@ -136,4 +136,43 @@ describe("Logger seventh leftover — ADK_AGENT_BUILDER_WARN === 'verbose' + opt
 		expect(rendered).toContain("[T1] text-msg");
 		expect(rendered).not.toContain("Context:");
 	});
+
+	it.each([
+		{ label: "empty object", context: {} },
+		{ label: "null", context: null },
+		{ label: "undefined", context: undefined },
+		{ label: "0", context: 0 },
+		{ label: "false", context: false },
+		{ label: "empty string", context: "" },
+	] as const)("verbose=true still omits Context when context=$label (truthy+keys length)", ({
+		context,
+	}) => {
+		const logger = new Logger({ name: "abw-empty-ctx" });
+		logger.warnStructured(
+			{
+				code: "C",
+				message: "m",
+				context: context as any,
+			},
+			{ format: "pretty", verbose: true },
+		);
+		const rendered = stripAnsi(String(warnSpy.mock.calls[0][0]));
+		expect(rendered).not.toContain("Context:");
+	});
+
+	it("empty-object context omits Context in text format even when env is exact verbose", () => {
+		process.env.ADK_AGENT_BUILDER_WARN = "verbose";
+		const logger = new Logger({ name: "abw-text-empty" });
+		logger.warnStructured(
+			{
+				code: "T2",
+				message: "empty-ctx",
+				context: {},
+			},
+			{ format: "text" },
+		);
+		const rendered = stripAnsi(String(warnSpy.mock.calls[0][0]));
+		expect(rendered).toContain("[T2] empty-ctx");
+		expect(rendered).not.toContain("Context:");
+	});
 });
