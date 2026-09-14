@@ -85,4 +85,51 @@ describe("database-factories", () => {
 			/To use MySQL sessions/,
 		);
 	});
+
+	it("routes .db filenames through createDatabaseSessionService", () => {
+		const service = createDatabaseSessionService(":memory:");
+		expect(service).toBeDefined();
+		const fileLike = createDatabaseSessionService("sqlite://:memory:");
+		expect(fileLike).toBeDefined();
+	});
+
+	it("treats paths containing .db as sqlite even without sqlite://", async () => {
+		const service = createDatabaseSessionService(":memory:");
+		const created = await service.createSession("app", "user", { a: 1 }, "s1");
+		expect(created.id).toBe("s1");
+		expect(created.state.a).toBe(1);
+	});
+
+	it("surfaces a sqlite peer dependency error when better-sqlite3 is missing", () => {
+		blockPeer("better-sqlite3");
+		expect(() => createSqliteSessionService(":memory:")).toThrow(
+			/Missing required peer dependency: better-sqlite3/,
+		);
+		expect(() => createDatabaseSessionService(":memory:")).toThrow(
+			/To use SQLite sessions/,
+		);
+	});
+
+	it("rejects empty and unknown scheme URLs", () => {
+		expect(() => createDatabaseSessionService("")).toThrow(
+			/Unsupported database URL/,
+		);
+		expect(() => createDatabaseSessionService("mssql://localhost")).toThrow(
+			/Unsupported database URL/,
+		);
+		expect(() => createDatabaseSessionService("file:memory")).toThrow(
+			/Unsupported database URL/,
+		);
+	});
+
+	it("postgres and mysql dependency errors mention install commands", () => {
+		blockPeer("pg");
+		expect(() => createPostgresSessionService("postgres://x")).toThrow(
+			/npm install pg/,
+		);
+		blockPeer("mysql2");
+		expect(() => createMysqlSessionService("mysql://x")).toThrow(
+			/yarn add mysql2/,
+		);
+	});
 });

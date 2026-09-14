@@ -577,4 +577,446 @@ describe("DatabaseSessionService (sqlite :memory:)", () => {
 		]);
 		expect(withActions.hasTrailingCodeExecutionResult()).toBe(true);
 	});
+
+	it("generates a session id when the provided id is only whitespace", async () => {
+		const created = await service.createSession("app", "user", {}, "   ");
+		expect(created.id).toMatch(/^session-/);
+		expect(await service.getSession("app", "user", created.id)).toBeDefined();
+	});
+
+	it("createSession without state still seeds empty app/user rows", async () => {
+		const created = await service.createSession("app-empty", "user-empty");
+		expect(created.state).toEqual({});
+		const again = await service.createSession(
+			"app-empty",
+			"user-empty",
+			{
+				[`${State.USER_PREFIX}locale`]: "de",
+			},
+			"second",
+		);
+		expect(again.state[`${State.USER_PREFIX}locale`]).toBe("de");
+	});
+
+	it("isolates app and user state across different apps", async () => {
+		await service.createSession(
+			"app-a",
+			"shared-user",
+			{ [`${State.APP_PREFIX}theme`]: "a", local: 1 },
+			"s1",
+		);
+		const b = await service.createSession(
+			"app-b",
+			"shared-user",
+			{ [`${State.APP_PREFIX}theme`]: "b", local: 2 },
+			"s1",
+		);
+
+		expect(b.state[`${State.APP_PREFIX}theme`]).toBe("b");
+		expect(b.state.local).toBe(2);
+		const a = await service.getSession("app-a", "shared-user", "s1");
+		expect(a?.state[`${State.APP_PREFIX}theme`]).toBe("a");
+		expect(a?.state.local).toBe(1);
+	});
+
+	it("appendEvent with only app-prefixed deltas updates shared app state", async () => {
+		const session = await service.createSession("app", "user", {}, "s-app");
+		await service.appendEvent(
+			session,
+			new Event({
+				author: "agent",
+				actions: new EventActions({
+					stateDelta: { [`${State.APP_PREFIX}flag`]: "on" },
+				}),
+			}),
+		);
+
+		const sibling = await service.createSession("app", "user", {}, "s-sib");
+		expect(sibling.state[`${State.APP_PREFIX}flag`]).toBe("on");
+	});
+
+	it("appendEvent with only user-prefixed deltas updates shared user state", async () => {
+		const session = await service.createSession("app", "user", {}, "s-user");
+		await service.appendEvent(
+			session,
+			new Event({
+				author: "agent",
+				actions: new EventActions({
+					stateDelta: { [`${State.USER_PREFIX}plan`]: "pro" },
+				}),
+			}),
+		);
+
+		const other = await service.createSession("app", "user", {}, "s-other");
+		expect(other.state[`${State.USER_PREFIX}plan`]).toBe("pro");
+	});
+
+	it("appendEvent with empty stateDelta still persists the event", async () => {
+		const session = await service.createSession(
+			"app",
+			"user",
+			{},
+			"s-empty-delta",
+		);
+		await service.appendEvent(
+			session,
+			new Event({
+				author: "agent",
+				content: { role: "model", parts: [{ text: "noop" }] },
+				actions: new EventActions({ stateDelta: {} }),
+			}),
+		);
+
+		const fetched = await service.getSession("app", "user", "s-empty-delta");
+		expect(fetched?.events).toHaveLength(1);
+		expect(fetched?.events[0].content?.parts?.[0]).toEqual({ text: "noop" });
+		expect(fetched?.state).toEqual({});
+	});
+
+	it("appendEvent mutates the in-memory session events list", async () => {
+		const session = await service.createSession("app", "user", {}, "s-mem");
+		const event = new Event({
+			author: "agent",
+			content: { parts: [{ text: "live" }] },
+		});
+		await service.appendEvent(session, event);
+		expect(session.events).toHaveLength(1);
+		expect(session.events[0].id).toBe(event.id);
+		expect(session.lastUpdateTime).toBeGreaterThan(0);
+	});
+
+	it("maps interrupted/turnComplete helpers and empty longRunningToolIds in storage conversion", () => {
+		const withFlags = (service as any).storageEventToEvent({
+			id: "e-flags",
+			app_name: "app",
+			user_id: "user",
+			session_id: "s1",
+			invocation_id: "inv",
+			author: "agent",
+			branch: null,
+			timestamp: new Date(),
+			content: JSON.stringify({ parts: [{ text: "flags" }] }),
+			actions: null,
+			long_running_tool_ids_json: JSON.stringify([]),
+			grounding_metadata: null,
+			partial: null,
+			turn_complete: true,
+			error_code: null,
+			error_message: null,
+			interrupted: true,
+		});
+		expect(withFlags.interrupted).toBe(true);
+		expect(withFlags.turnComplete).toBe(true);
+		expect(withFlags.isFinalResponse()).toBe(true);
+		expect(Array.from(withFlags.longRunningToolIds ?? [])).toEqual([]);
+
+		const session = {
+			id: "s1",
+			appName: "app",
+			userId: "user",
+			state: {},
+			events: [],
+			lastUpdateTime: 0,
+		};
+		const storage = (service as any).eventToStorageEvent(
+			session,
+			new Event({
+				author: "agent",
+				longRunningToolIds: new Set(),
+			}),
+		);
+		expect(storage.long_running_tool_ids_json).toBe("[]");
+	});
+
+	it("updateSession replaces session-local state for subsequent gets", async () => {
+		const created = await service.createSession(
+			"app",
+			"user",
+			{ counter: 1 },
+			"s-upd",
+		);
+		await service.updateSession({
+			...created,
+			state: { counter: 9, extra: "yes" },
+		});
+		const fetched = await service.getSession("app", "user", "s-upd");
+		expect(fetched?.state.counter).toBe(9);
+		expect(fetched?.state.extra).toBe("yes");
+	});
+
+	it("listSessions always returns empty state and events shells", async () => {
+		const session = await service.createSession(
+			"app",
+			"user",
+			{ filled: true },
+			"s-list",
+		);
+		await service.appendEvent(
+			session,
+			new Event({ author: "agent", content: { parts: [{ text: "x" }] } }),
+		);
+
+		const listed = await service.listSessions("app", "user");
+		const row = listed.sessions.find((s) => s.id === "s-list");
+		expect(row?.state).toEqual({});
+		expect(row?.events).toEqual([]);
+		expect(row?.lastUpdateTime).toBeGreaterThan(0);
+	});
+
+	it("eventToStorageEvent nulls optional fields when absent", () => {
+		const session = {
+			id: "s1",
+			appName: "app",
+			userId: "user",
+			state: {},
+			events: [],
+			lastUpdateTime: 0,
+		};
+		const storage = (service as any).eventToStorageEvent(
+			session,
+			new Event({ author: "agent" }),
+		);
+		expect(storage.content).toBeNull();
+		expect(JSON.parse(storage.actions)).toMatchObject({
+			stateDelta: {},
+			artifactDelta: {},
+		});
+		expect(storage.branch).toBeNull();
+		expect(storage.long_running_tool_ids_json).toBeNull();
+		expect(storage.grounding_metadata).toBeNull();
+		expect(storage.partial).toBeNull();
+		expect(storage.turn_complete).toBeNull();
+		expect(storage.error_code).toBeNull();
+		expect(storage.error_message).toBeNull();
+		expect(storage.interrupted).toBeNull();
+		expect(storage.invocation_id).toBe("");
+	});
+
+	it("storageEventToEvent falls back on corrupt JSON blobs", () => {
+		const event = (service as any).storageEventToEvent({
+			id: "e-bad",
+			app_name: "app",
+			user_id: "user",
+			session_id: "s1",
+			invocation_id: "inv",
+			author: "agent",
+			branch: "b",
+			timestamp: new Date("2024-06-01T00:00:00.000Z"),
+			content: "{not-json",
+			actions: "{also-bad",
+			long_running_tool_ids_json: "not-an-array",
+			grounding_metadata: "{nope",
+			partial: false,
+			turn_complete: false,
+			error_code: "E",
+			error_message: "m",
+			interrupted: false,
+		});
+
+		expect(event.content).toBeNull();
+		expect(event.actions).toBeNull();
+		expect(event.groundingMetadata).toBeNull();
+		expect(Array.from(event.longRunningToolIds ?? [])).toEqual([]);
+		expect(event.getFunctionCalls()).toEqual([]);
+		expect(event.getFunctionResponses()).toEqual([]);
+		expect(event.hasTrailingCodeExecutionResult()).toBe(false);
+		expect(event.branch).toBe("b");
+		expect(event.errorCode).toBe("E");
+	});
+
+	it("storageEventToEvent treats empty action bags as no function traffic", () => {
+		const event = (service as any).storageEventToEvent({
+			id: "e-empty-actions",
+			app_name: "app",
+			user_id: "user",
+			session_id: "s1",
+			invocation_id: "inv",
+			author: "agent",
+			branch: null,
+			timestamp: new Date(),
+			content: null,
+			actions: JSON.stringify({}),
+			long_running_tool_ids_json: JSON.stringify(["a", "b"]),
+			grounding_metadata: null,
+			partial: null,
+			turn_complete: null,
+			error_code: null,
+			error_message: null,
+			interrupted: null,
+		});
+		expect(event.getFunctionCalls()).toEqual([]);
+		expect(event.getFunctionResponses()).toEqual([]);
+		expect(event.hasTrailingCodeExecutionResult()).toBe(false);
+		expect(Array.from(event.longRunningToolIds ?? [])).toEqual(["a", "b"]);
+	});
+
+	it("extractStateDelta ignores temp keys and splits prefixes", () => {
+		expect((service as any).extractStateDelta(undefined)).toEqual({
+			appStateDelta: {},
+			userStateDelta: {},
+			sessionStateDelta: {},
+		});
+		expect(
+			(service as any).extractStateDelta({
+				[`${State.APP_PREFIX}a`]: 1,
+				[`${State.USER_PREFIX}b`]: 2,
+				[`${State.TEMP_PREFIX}c`]: 3,
+				session: 4,
+			}),
+		).toEqual({
+			appStateDelta: { a: 1 },
+			userStateDelta: { b: 2 },
+			sessionStateDelta: { session: 4 },
+		});
+	});
+
+	it("mergeState prefixes app and user keys onto session state", () => {
+		expect(
+			(service as any).mergeState(
+				{ theme: "dark" },
+				{ locale: "en" },
+				{
+					local: true,
+				},
+			),
+		).toEqual({
+			local: true,
+			[`${State.APP_PREFIX}theme`]: "dark",
+			[`${State.USER_PREFIX}locale`]: "en",
+		});
+	});
+
+	it("generateSessionId returns unique session-prefixed ids", () => {
+		const ids = new Set(
+			Array.from({ length: 20 }, () => (service as any).generateSessionId()),
+		);
+		expect(ids.size).toBe(20);
+		for (const id of ids) {
+			expect(id).toMatch(/^session-\d+-[a-z0-9]+$/);
+		}
+	});
+
+	it("ensureInitialized rethrows initializeDatabase failures", async () => {
+		const { DatabaseSessionService } = await import(
+			"../../sessions/database-session-service"
+		);
+		const boom = new Error("schema boom");
+		const db = {
+			schema: {
+				createTable: () => ({
+					ifNotExists: () => ({
+						addColumn: () => {
+							throw boom;
+						},
+					}),
+				}),
+			},
+		};
+		const broken = new DatabaseSessionService({
+			db: db as any,
+			skipTableCreation: true,
+		});
+		await expect(broken.createSession("app", "user")).rejects.toThrow(
+			"schema boom",
+		);
+	});
+
+	it("appends multiple events and returns all of them from getSession", async () => {
+		const session = await service.createSession("app", "user", {}, "s-order");
+		for (const text of ["first", "second", "third"]) {
+			await service.appendEvent(
+				session,
+				new Event({
+					author: "agent",
+					content: { parts: [{ text }] },
+				}),
+			);
+		}
+		const fetched = await service.getSession("app", "user", "s-order");
+		const texts =
+			fetched?.events.map((e) => e.content?.parts?.[0]?.text as string) ?? [];
+		expect(texts).toHaveLength(3);
+		expect(texts.sort()).toEqual(["first", "second", "third"]);
+	});
+
+	it("createSession with only TEMP keys stores no session-local state", async () => {
+		const created = await service.createSession(
+			"app",
+			"user",
+			{ [`${State.TEMP_PREFIX}scratch`]: "gone" },
+			"s-temp-only",
+		);
+		expect(created.state).toEqual({});
+		const fetched = await service.getSession("app", "user", "s-temp-only");
+		expect(fetched?.state).toEqual({});
+	});
+
+	it("partial append does not advance lastUpdateTime or session events", async () => {
+		const session = await service.createSession("app", "user", {}, "s-partial");
+		const before = session.lastUpdateTime;
+		await service.appendEvent(
+			session,
+			new Event({
+				author: "agent",
+				partial: true,
+				content: { parts: [{ text: "stream" }] },
+			}),
+		);
+		expect(session.events).toEqual([]);
+		expect(session.lastUpdateTime).toBe(before);
+	});
+
+	it("round-trips functionCall content parts", async () => {
+		const session = await service.createSession("app", "user", {}, "s-fc");
+		await service.appendEvent(
+			session,
+			new Event({
+				author: "agent",
+				content: {
+					role: "model",
+					parts: [
+						{
+							functionCall: { id: "c1", name: "search", args: { q: "adk" } },
+						},
+					],
+				},
+			}),
+		);
+		const fetched = await service.getSession("app", "user", "s-fc");
+		expect(fetched?.events[0].content?.parts?.[0]?.functionCall).toEqual({
+			id: "c1",
+			name: "search",
+			args: { q: "adk" },
+		});
+	});
+
+	it("rejects append when session row is missing mid-flight", async () => {
+		const session = await service.createSession("app", "user", {}, "s-gone");
+		await service.deleteSession("app", "user", "s-gone");
+		await expect(
+			service.appendEvent(
+				session,
+				new Event({ author: "agent", content: { parts: [{ text: "x" }] } }),
+			),
+		).rejects.toThrow();
+	});
+
+	it("numRecentEvents of 1 returns a single event from the session", async () => {
+		const session = await service.createSession("app", "user", {}, "s-one");
+		await service.appendEvent(
+			session,
+			new Event({ author: "user", content: { parts: [{ text: "old" }] } }),
+		);
+		await service.appendEvent(
+			session,
+			new Event({ author: "agent", content: { parts: [{ text: "new" }] } }),
+		);
+		const recent = await service.getSession("app", "user", "s-one", {
+			numRecentEvents: 1,
+		});
+		expect(recent?.events).toHaveLength(1);
+		expect(["old", "new"]).toContain(
+			recent?.events[0].content?.parts?.[0]?.text,
+		);
+	});
 });

@@ -115,4 +115,40 @@ describe("BaseSessionService.appendEvent", () => {
 		expect(session.state.removeUndef).toBeUndefined();
 		expect(session.state.keep).toBe(true);
 	});
+
+	it("appendEvent without stateDelta only pushes the event", async () => {
+		const service = new InMemoryStubSessionService();
+		const session = await service.createSession("app", "user", { a: 1 }, "s1");
+		const event = { author: "agent" } as Event;
+		await service.appendEvent(session, event);
+		expect(session.events).toEqual([event]);
+		expect(session.state).toEqual({ a: 1 });
+	});
+
+	it("appendEvent with empty stateDelta leaves state unchanged", async () => {
+		const service = new InMemoryStubSessionService();
+		const session = await service.createSession("app", "user", { a: 1 }, "s1");
+		const event = {
+			author: "agent",
+			actions: { stateDelta: {} },
+		} as Event;
+		await service.appendEvent(session, event);
+		expect(session.state).toEqual({ a: 1 });
+		expect(session.events).toHaveLength(1);
+	});
+
+	it("supports get/list/delete through the stub implementation", async () => {
+		const service = new InMemoryStubSessionService();
+		await service.createSession("app", "alice", {}, "a1");
+		await service.createSession("app", "bob", {}, "b1");
+		expect((await service.getSession("app", "alice", "a1"))?.id).toBe("a1");
+		expect((await service.listSessions("app", "alice")).sessions).toHaveLength(
+			1,
+		);
+		await service.deleteSession("app", "alice", "a1");
+		expect(await service.getSession("app", "alice", "a1")).toBeUndefined();
+		expect((await service.listSessions("app", "bob")).sessions[0].id).toBe(
+			"b1",
+		);
+	});
 });

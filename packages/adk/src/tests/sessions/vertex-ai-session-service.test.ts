@@ -438,4 +438,369 @@ describe("VertexAiSessionService", () => {
 			}),
 		);
 	});
+
+	it("createSession succeeds when LRO completes on a later poll", async () => {
+		vi.useFakeTimers();
+		const { service, asyncRequest } = createService({ agentEngineId: "1" });
+		asyncRequest
+			.mockResolvedValueOnce({
+				name: "projects/p/locations/l/reasoningEngines/1/sessions/s/operations/op",
+			})
+			.mockResolvedValueOnce({ done: false })
+			.mockResolvedValueOnce({ done: true })
+			.mockResolvedValueOnce({
+				name: "projects/p/locations/l/reasoningEngines/1/sessions/s",
+				updateTime: "2024-01-01T00:00:00.000Z",
+				sessionState: { ready: true },
+			});
+
+		const pending = service.createSession("app", "u");
+		await vi.advanceTimersByTimeAsync(1000);
+		const session = await pending;
+		expect(session.state).toEqual({ ready: true });
+		expect(asyncRequest).toHaveBeenCalledTimes(4);
+	});
+
+	it("createSession with empty state object still sends session_state", async () => {
+		const { service, asyncRequest } = createService({ agentEngineId: "3" });
+		asyncRequest
+			.mockResolvedValueOnce({
+				name: "projects/p/locations/l/reasoningEngines/3/sessions/s/operations/o",
+			})
+			.mockResolvedValueOnce({ done: true })
+			.mockResolvedValueOnce({
+				name: "projects/p/locations/l/reasoningEngines/3/sessions/s",
+				updateTime: "2024-01-01T00:00:00.000Z",
+			});
+
+		await service.createSession("app", "u", {});
+		expect(asyncRequest.mock.calls[0][0].request_dict).toEqual({
+			user_id: "u",
+			session_state: {},
+		});
+	});
+
+	it("prefers agentEngineId over numeric or resource app names", async () => {
+		const { service, asyncRequest } = createService({
+			agentEngineId: "engine-override",
+		});
+		asyncRequest
+			.mockResolvedValueOnce({
+				name: "projects/p/locations/l/reasoningEngines/engine-override/sessions/s/operations/o",
+			})
+			.mockResolvedValueOnce({ done: true })
+			.mockResolvedValueOnce({
+				name: "projects/p/locations/l/reasoningEngines/engine-override/sessions/s",
+				updateTime: "2024-01-01T00:00:00.000Z",
+			});
+
+		await service.createSession(
+			"projects/p/locations/l/reasoningEngines/999",
+			"u",
+		);
+		expect(asyncRequest.mock.calls[0][0].path).toBe(
+			"reasoningEngines/engine-override/sessions",
+		);
+	});
+
+	it("listSessions omits user filter when userId is empty", async () => {
+		const { service, asyncRequest } = createService();
+		asyncRequest.mockResolvedValueOnce({ sessions: [] });
+		await service.listSessions("app", "");
+		expect(asyncRequest.mock.calls[0][0].path).toBe(
+			"reasoningEngines/9/sessions",
+		);
+	});
+
+	it("listSessions returns empty when sessions field is absent", async () => {
+		const { service, asyncRequest } = createService();
+		asyncRequest.mockResolvedValueOnce({});
+		await expect(service.listSessions("app", "u")).resolves.toEqual({
+			sessions: [],
+		});
+	});
+
+	it("getSession keeps all events when every timestamp is after the cutoff", async () => {
+		const { service, asyncRequest } = createService();
+		asyncRequest
+			.mockResolvedValueOnce({
+				name: "projects/p/locations/l/reasoningEngines/9/sessions/sess",
+				updateTime: "2024-01-01T00:00:10.000Z",
+				sessionState: {},
+			})
+			.mockResolvedValueOnce({
+				sessionEvents: [
+					{
+						name: ".../e1",
+						invocationId: "i1",
+						author: "user",
+						timestamp: "2024-01-01T00:00:06.000Z",
+						content: { parts: [{ text: "a" }] },
+					},
+					{
+						name: ".../e2",
+						invocationId: "i2",
+						author: "agent",
+						timestamp: "2024-01-01T00:00:08.000Z",
+						content: { parts: [{ text: "b" }] },
+					},
+				],
+			});
+
+		const session = await service.getSession("app", "u", "sess", {
+			afterTimestamp: Date.parse("2024-01-01T00:00:01.000Z") / 1000,
+		});
+		expect(session?.events.map((e) => e.content?.parts?.[0]?.text)).toEqual([
+			"a",
+			"b",
+		]);
+	});
+
+	it("getSession with empty config leaves events unfiltered beyond timestamp", async () => {
+		const { service, asyncRequest } = createService();
+		asyncRequest
+			.mockResolvedValueOnce({
+				name: "projects/p/locations/l/reasoningEngines/9/sessions/sess",
+				updateTime: "2024-01-01T00:00:10.000Z",
+				sessionState: { z: 1 },
+			})
+			.mockResolvedValueOnce({
+				sessionEvents: [
+					{
+						name: ".../e1",
+						invocationId: "i1",
+						author: "user",
+						timestamp: "2024-01-01T00:00:05.000Z",
+						content: { parts: [{ text: "kept" }] },
+					},
+					{
+						name: ".../e2",
+						invocationId: "i2",
+						author: "agent",
+						timestamp: "2024-01-01T00:00:20.000Z",
+						content: { parts: [{ text: "dropped-late" }] },
+					},
+				],
+			});
+
+		const session = await service.getSession("app", "u", "sess", {});
+		expect(session?.events).toHaveLength(1);
+		expect(session?.events[0].content?.parts?.[0]?.text).toBe("kept");
+		expect(session?.state).toEqual({ z: 1 });
+	});
+
+	it("getSession pagination pages without sessionEvents are skipped", async () => {
+		const { service, asyncRequest } = createService();
+		asyncRequest
+			.mockResolvedValueOnce({
+				name: "projects/p/locations/l/reasoningEngines/9/sessions/sess",
+				updateTime: "2024-01-01T00:00:10.000Z",
+			})
+			.mockResolvedValueOnce({
+				sessionEvents: [
+					{
+						name: ".../e1",
+						invocationId: "i1",
+						author: "user",
+						timestamp: "2024-01-01T00:00:01.000Z",
+						content: { parts: [{ text: "one" }] },
+					},
+				],
+				nextPageToken: "tok&special",
+			})
+			.mockResolvedValueOnce({ nextPageToken: undefined });
+
+		const session = await service.getSession("app", "u", "sess");
+		expect(asyncRequest.mock.calls[2][0].path).toContain(
+			`pageToken=${encodeURIComponent("tok&special")}`,
+		);
+		expect(session?.events).toHaveLength(1);
+	});
+
+	it("fromApiEvent maps minimal events and decode helpers", () => {
+		const { service } = createService();
+		const event = (service as any).fromApiEvent({
+			name: "projects/p/locations/l/reasoningEngines/9/sessions/s/events/eid",
+			invocationId: "inv",
+			author: "agent",
+			timestamp: "2024-01-01T00:00:00.000Z",
+		});
+		expect(event.id).toBe("eid");
+		expect(event.actions).toBeInstanceOf(EventActions);
+		expect(event.content).toBeUndefined();
+		expect(event.errorCode).toBeUndefined();
+		expect(event.groundingMetadata).toBeUndefined();
+
+		expect((service as any).decodeContent(undefined)).toBeUndefined();
+		expect((service as any).decodeContent({ role: "user" })).toEqual({
+			role: "user",
+		});
+		expect((service as any).decodeGroundingMetadata(null)).toBeUndefined();
+		expect((service as any).decodeGroundingMetadata({ x: 1 })).toEqual({
+			x: 1,
+		});
+	});
+
+	it("fromApiEvent sets error fields and omits empty longRunningToolIds", () => {
+		const { service } = createService();
+		const event = (service as any).fromApiEvent({
+			name: ".../events/e",
+			invocationId: "inv",
+			author: "agent",
+			timestamp: "2024-01-01T00:00:00.000Z",
+			errorCode: "E1",
+			errorMessage: "failed",
+			eventMetadata: {
+				partial: true,
+				turnComplete: false,
+				interrupted: true,
+				branch: "b",
+				longRunningToolIds: null,
+				groundingMetadata: null,
+			},
+		});
+		expect(event.errorCode).toBe("E1");
+		expect(event.errorMessage).toBe("failed");
+		expect(event.partial).toBe(true);
+		expect(event.interrupted).toBe(true);
+		expect(event.longRunningToolIds).toBeUndefined();
+		expect(event.groundingMetadata).toBeUndefined();
+	});
+
+	it("convertEventToJson serializes default actions and nulls tool ids when absent", () => {
+		const { service } = createService();
+		const payload = (service as any).convertEventToJson(
+			new Event({
+				author: "agent",
+				invocationId: "inv",
+				timestamp: 10,
+			}),
+		);
+		expect(payload.actions).toMatchObject({
+			state_delta: {},
+			artifact_delta: {},
+		});
+		expect(payload.content).toBeUndefined();
+		expect(payload.event_metadata.long_running_tool_ids).toBeNull();
+		expect(payload.event_metadata.grounding_metadata).toBeUndefined();
+		expect(payload.timestamp).toEqual({ seconds: 10, nanos: 0 });
+	});
+
+	it("appendEvent posts minimal convertEventToJson with default action bag", async () => {
+		const { service, asyncRequest } = createService();
+		asyncRequest.mockResolvedValueOnce({});
+		const session = {
+			id: "sess",
+			appName: "app",
+			userId: "u",
+			state: {},
+			events: [] as Event[],
+			lastUpdateTime: 0,
+		};
+		const event = new Event({
+			author: "user",
+			invocationId: "inv-min",
+			timestamp: 3.25,
+			content: { parts: [{ text: "hi" }] },
+		});
+		await service.appendEvent(session, event);
+		expect(asyncRequest.mock.calls[0][0].request_dict).toEqual(
+			expect.objectContaining({
+				author: "user",
+				invocation_id: "inv-min",
+				timestamp: { seconds: 3, nanos: 250_000_000 },
+				content: { parts: [{ text: "hi" }] },
+				actions: expect.objectContaining({
+					state_delta: {},
+					artifact_delta: {},
+				}),
+			}),
+		);
+		expect(session.events).toHaveLength(1);
+	});
+
+	it("getSession logs and returns undefined when events listing throws", async () => {
+		const errorSpy = vi.spyOn(console, "error");
+		const { service, asyncRequest } = createService();
+		asyncRequest
+			.mockResolvedValueOnce({
+				name: "projects/p/locations/l/reasoningEngines/9/sessions/sess",
+				updateTime: "2024-01-01T00:00:00.000Z",
+			})
+			.mockRejectedValueOnce(new Error("events boom"));
+
+		await expect(
+			service.getSession("app", "u", "sess"),
+		).resolves.toBeUndefined();
+		expect(errorSpy).toHaveBeenCalledWith(
+			"Error getting session sess:",
+			expect.any(Error),
+		);
+	});
+
+	it("getReasoningEngineId rejects malformed resource names", () => {
+		const { service } = createService({ project: "p", location: "l" });
+		expect(() =>
+			(service as any).getReasoningEngineId(
+				"projects/p/locations/l/reasoningEngines/not-digits",
+			),
+		).toThrow(/not valid/);
+		expect((service as any).getReasoningEngineId("4242")).toBe("4242");
+	});
+
+	it("keeps events whose timestamp equals the session update time", async () => {
+		const { service, asyncRequest } = createService();
+		const updateTime = "2024-01-01T00:00:10.000Z";
+		asyncRequest
+			.mockResolvedValueOnce({
+				name: "projects/p/locations/l/reasoningEngines/9/sessions/sess",
+				updateTime,
+			})
+			.mockResolvedValueOnce({
+				sessionEvents: [
+					{
+						name: ".../e",
+						invocationId: "i",
+						author: "agent",
+						timestamp: updateTime,
+						content: { parts: [{ text: "boundary" }] },
+					},
+				],
+			});
+
+		const session = await service.getSession("app", "u", "sess");
+		expect(session?.events).toHaveLength(1);
+		expect(session?.events[0].content?.parts?.[0]?.text).toBe("boundary");
+	});
+
+	it("getApiClient constructs a Vertex GoogleGenAI client", () => {
+		const service = new VertexAiSessionService({
+			project: "proj-x",
+			location: "us-east1",
+			agentEngineId: "1",
+		});
+		const apiClient = { async_request: vi.fn() };
+		const GoogleGenAI = vi.fn(() => ({ _api_client: apiClient }));
+
+		const Module = require("node:module");
+		const original = Module.prototype.require;
+		Module.prototype.require = function (id: string, ...rest: unknown[]) {
+			if (id === "@google/genai") {
+				return { GoogleGenAI };
+			}
+			return original.apply(this, [id, ...rest] as [string]);
+		};
+
+		try {
+			const client = (service as any).getApiClient();
+			expect(GoogleGenAI).toHaveBeenCalledWith({
+				vertexai: true,
+				project: "proj-x",
+				location: "us-east1",
+			});
+			expect(client).toBe(apiClient);
+		} finally {
+			Module.prototype.require = original;
+		}
+	});
 });
