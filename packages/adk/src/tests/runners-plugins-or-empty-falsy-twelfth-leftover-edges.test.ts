@@ -4,11 +4,7 @@ import { BasePlugin } from "../plugins/base-plugin";
 import { Runner } from "../runners";
 import { InMemorySessionService } from "../sessions/in-memory-session-service";
 
-class NamedPlugin extends BasePlugin {
-	constructor(name: string) {
-		super(name);
-	}
-}
+class NamedPlugin extends BasePlugin {}
 
 /**
  * Twelfth leftover: Runner ctor `plugins || []` coalesces falsy plugin lists
