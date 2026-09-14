@@ -6,7 +6,6 @@ const {
 	close,
 	setRequestHandler,
 	removeRequestHandler,
-	transportClose,
 	StdioClientTransport,
 } = vi.hoisted(() => {
 	const transportClose = vi.fn();
@@ -16,7 +15,6 @@ const {
 		close: vi.fn(),
 		setRequestHandler: vi.fn(),
 		removeRequestHandler: vi.fn(),
-		transportClose,
 		StdioClientTransport: vi.fn(function StdioClientTransport() {
 			return { close: transportClose };
 		}),
