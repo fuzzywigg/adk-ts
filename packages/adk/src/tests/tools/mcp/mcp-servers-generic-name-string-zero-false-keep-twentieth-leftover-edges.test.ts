@@ -21,7 +21,7 @@ describe("mcp servers generic name string-zero/false keep twentieth leftover", (
 		expect(config.name).toBe(name);
 	});
 
-	it('"" still falls back to `${package} Client` (control)', () => {
+	it('"" still falls back to "<package> Client" (control)', () => {
 		const config = (McpGeneric("@example/pkg", {}, "") as any).config;
 		expect(config.name).toBe("@example/pkg Client");
 	});
