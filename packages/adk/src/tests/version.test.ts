@@ -7,4 +7,8 @@ describe("VERSION", () => {
 		expect(VERSION.length).toBeGreaterThan(0);
 		expect(VERSION).toMatch(/^\d+\.\d+\.\d+/);
 	});
+
+	it("exports the exact VERSION constant", () => {
+		expect(VERSION).toBe("0.1.0");
+	});
 });
