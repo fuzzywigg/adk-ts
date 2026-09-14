@@ -53,6 +53,6 @@ describe("instructions-utils formatValue falsy primitive sixth leftover edges", 
 
 	it("optional marker is not needed when the value is defined empty string", async () => {
 		mockContext.session.state = { empty: "" };
-		expect(await injectSessionState("A={empty}B", readonlyContext)).toBe("AB");
+		expect(await injectSessionState("A={empty}B", readonlyContext)).toBe("A=B");
 	});
 });
