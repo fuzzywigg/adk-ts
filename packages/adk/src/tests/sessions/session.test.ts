@@ -38,4 +38,36 @@ describe("Session", () => {
 		expect(session.events).toHaveLength(1);
 		expect(session.lastUpdateTime).toBe(42);
 	});
+
+	it("supports nested state values and empty events", () => {
+		const session: Session = {
+			id: "sess-3",
+			appName: "nested-app",
+			userId: "nested-user",
+			state: { profile: { name: "ada", roles: ["admin"] }, count: 0 },
+			events: [],
+			lastUpdateTime: 100,
+		};
+
+		expect(session.state.profile.name).toBe("ada");
+		expect(session.state.profile.roles).toEqual(["admin"]);
+		session.state.count = 2;
+		expect(session.state.count).toBe(2);
+	});
+
+	it("can hold multiple events in order", () => {
+		const session: Session = {
+			id: "sess-4",
+			appName: "app",
+			userId: "u",
+			state: {},
+			events: [],
+			lastUpdateTime: 0,
+		};
+		session.events.push(
+			{ author: "user", timestamp: 1 } as Session["events"][number],
+			{ author: "agent", timestamp: 2 } as Session["events"][number],
+		);
+		expect(session.events.map((e) => e.author)).toEqual(["user", "agent"]);
+	});
 });

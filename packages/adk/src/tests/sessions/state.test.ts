@@ -117,4 +117,36 @@ describe("State", () => {
 		expect(state["a"]).toBe("delta");
 		expect(state.get("a")).toBe("delta");
 	});
+
+	it("set overwrites both value and delta for the same key", () => {
+		const state = State.create({ count: 0 }, { count: 1 });
+		state.set("count", 5);
+		expect(state.get("count")).toBe(5);
+		expect(state.toDict()).toEqual({ count: 5 });
+		expect(state.hasDelta()).toBe(true);
+	});
+
+	it("update with empty object does not clear existing delta", () => {
+		const state = State.create({}, { pending: true });
+		state.update({});
+		expect(state.hasDelta()).toBe(true);
+		expect(state.get("pending")).toBe(true);
+	});
+
+	it("get default is ignored when key exists in delta only", () => {
+		const state = State.create({}, { secret: "x" });
+		expect(state.get("secret", "fallback")).toBe("x");
+	});
+
+	it("proxy set still works for keys that collide with method names only via underscore rule", () => {
+		const state = State.create({}, {});
+		state["custom"] = { nested: true };
+		expect(state.get("custom")).toEqual({ nested: true });
+		expect(state.has("custom")).toBe(true);
+	});
+
+	it("toDict merges value then delta so delta wins on conflict", () => {
+		const state = State.create({ a: 1, b: 2 }, { b: 9, c: 3 });
+		expect(state.toDict()).toEqual({ a: 1, b: 9, c: 3 });
+	});
 });

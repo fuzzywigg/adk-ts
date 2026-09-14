@@ -356,4 +356,110 @@ describe("InMemorySessionService", () => {
 		expect(await service.getSession("other", "user", "s1")).toBeUndefined();
 		expect(await service.getSession("app", "other", "s1")).toBeUndefined();
 	});
+
+	it("trims padded session ids on create and get", async () => {
+		const service = new InMemorySessionService();
+		const created = await service.createSession(
+			"app",
+			"user",
+			{ ok: true },
+			"  padded  ",
+		);
+		expect(created.id).toBe("padded");
+		expect((await service.getSession("app", "user", "padded"))?.state.ok).toBe(
+			true,
+		);
+	});
+
+	it("createSession without state defaults to empty object", async () => {
+		const service = new InMemorySessionService();
+		const session = await service.createSession("app", "user");
+		expect(session.state).toEqual({});
+		expect(session.events).toEqual([]);
+		expect(session.lastUpdateTime).toBeGreaterThan(0);
+	});
+
+	it("propagates app and user state across sibling sessions", async () => {
+		const service = new InMemorySessionService();
+		const first = await service.createSession("app", "user", {}, "s1");
+		await service.appendEvent(first, {
+			author: "agent",
+			timestamp: 1,
+			actions: {
+				stateDelta: {
+					[`${State.APP_PREFIX}theme`]: "dark",
+					[`${State.USER_PREFIX}locale`]: "en",
+				},
+			},
+		} as any);
+
+		const second = await service.createSession(
+			"app",
+			"user",
+			{ local: 1 },
+			"s2",
+		);
+		expect(second.state[`${State.APP_PREFIX}theme`]).toBe("dark");
+		expect(second.state[`${State.USER_PREFIX}locale`]).toBe("en");
+		expect(second.state.local).toBe(1);
+	});
+
+	it("skips mutating caller history for partial events but still applies app state deltas", async () => {
+		const service = new InMemorySessionService();
+		const session = await service.createSession("app", "user", {}, "s1");
+		await service.appendEvent(session, {
+			author: "agent",
+			partial: true,
+			timestamp: 5,
+			content: { parts: [{ text: "stream" }] },
+			actions: {
+				stateDelta: { [`${State.APP_PREFIX}x`]: 1 },
+			},
+		} as any);
+
+		expect(session.events).toHaveLength(0);
+		const fetched = await service.getSession("app", "user", "s1");
+		expect(fetched?.events).toHaveLength(0);
+		expect(fetched?.state[`${State.APP_PREFIX}x`]).toBe(1);
+	});
+
+	it("listSessions clears events and state on returned copies", async () => {
+		const service = new InMemorySessionService();
+		const session = await service.createSession("app", "user", { a: 1 }, "s1");
+		await service.appendEvent(session, {
+			author: "user",
+			timestamp: 1,
+			content: { parts: [{ text: "hi" }] },
+		} as any);
+
+		const listed = await service.listSessions("app", "user");
+		expect(listed.sessions).toHaveLength(1);
+		expect(listed.sessions[0].events).toEqual([]);
+		expect(listed.sessions[0].state).toEqual({});
+		expect(
+			(await service.getSession("app", "user", "s1"))?.events,
+		).toHaveLength(1);
+	});
+
+	it("appendEvent updates both caller session and storage lastUpdateTime", async () => {
+		const service = new InMemorySessionService();
+		const session = await service.createSession("app", "user", {}, "s1");
+		await service.appendEvent(session, {
+			author: "user",
+			timestamp: 1234.5,
+			content: { parts: [{ text: "t" }] },
+		} as any);
+		expect(session.lastUpdateTime).toBe(1234.5);
+		expect(
+			(await service.getSession("app", "user", "s1"))?.lastUpdateTime,
+		).toBe(1234.5);
+	});
+
+	it("sync getSession returns undefined for missing sessions", () => {
+		const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+		const service = new InMemorySessionService();
+		expect(service.getSessionSync("app", "user", "missing")).toBeUndefined();
+		expect(service.listSessionsSync("missing", "user").sessions).toEqual([]);
+		warn.mockRestore();
+	});
 });
