@@ -84,4 +84,58 @@ describe("LLMRegistry", () => {
 		LLMRegistry.registerModel("named", fakeModel);
 		expect(() => LLMRegistry.logRegisteredModels()).not.toThrow();
 	});
+
+	it("register attaches a pattern directly", () => {
+		LLMRegistry.register("^direct-.*$", FakeLlmClass);
+		expect(LLMRegistry.resolve("direct-1")?.name).toBe("FakeLlm");
+		expect(LLMRegistry.resolve("other")).toBeNull();
+	});
+
+	it("first registered overlapping pattern wins", () => {
+		class First {
+			constructor(public model: string) {}
+			static supportedModels() {
+				return ["^overlap-.*$"];
+			}
+		}
+		class Second {
+			constructor(public model: string) {}
+			static supportedModels() {
+				return ["^overlap-.*$"];
+			}
+		}
+		LLMRegistry.registerLLM(First as unknown as LlmClassLike);
+		LLMRegistry.registerLLM(Second as unknown as LlmClassLike);
+		expect(LLMRegistry.resolve("overlap-x")?.name).toBe("First");
+	});
+
+	it("clear wipes both class and instance maps", () => {
+		LLMRegistry.registerLLM(FakeLlmClass);
+		LLMRegistry.registerModel("named", fakeModel);
+		LLMRegistry.clear();
+		expect(LLMRegistry.resolve("fake-1")).toBeNull();
+		expect(LLMRegistry.hasModel("named")).toBe(false);
+	});
+
+	it("getModelOrCreate throws when neither instance nor class matches", () => {
+		expect(() => LLMRegistry.getModelOrCreate("totally-missing")).toThrow(
+			"No LLM class found for model: totally-missing",
+		);
+	});
+
+	it("registerLLM with empty supportedModels registers nothing", () => {
+		class EmptyLlm {
+			constructor(public model: string) {}
+			static supportedModels() {
+				return [];
+			}
+		}
+		LLMRegistry.registerLLM(EmptyLlm as unknown as LlmClassLike);
+		expect(LLMRegistry.resolve("anything")).toBeNull();
+	});
+
+	it("unregisterModel is a no-op for unknown names", () => {
+		expect(() => LLMRegistry.unregisterModel("ghost")).not.toThrow();
+		expect(LLMRegistry.hasModel("ghost")).toBe(false);
+	});
 });

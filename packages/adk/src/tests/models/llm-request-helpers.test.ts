@@ -79,4 +79,48 @@ describe("LlmRequest helpers", () => {
 			LlmRequest.extractTextFromContent([{ text: "a" }, { text: "b" }]),
 		).toBe("ab");
 	});
+
+	it("appends multiple tools into one functionDeclarations batch", () => {
+		const request = new LlmRequest();
+		const a = new DeclTool({ name: "tool_a", description: "Tool A helper" });
+		const b = new DeclTool({ name: "tool_b", description: "Tool B helper" });
+		request.appendTools([a, b]);
+		expect(Object.keys(request.toolsDict).sort()).toEqual(["tool_a", "tool_b"]);
+		expect(
+			(request.config?.tools?.[0] as any).functionDeclarations.map(
+				(d: any) => d.name,
+			),
+		).toEqual(["tool_a", "tool_b"]);
+	});
+
+	it("ignores tools that return undefined declarations among declared ones", () => {
+		const request = new LlmRequest();
+		const kept = new DeclTool({ name: "kept", description: "keep" });
+		const skipped = {
+			name: "skipped",
+			getDeclaration: () => undefined,
+		};
+		request.appendTools([skipped as any, kept]);
+		expect(request.toolsDict.kept).toBe(kept);
+		expect(request.toolsDict.skipped).toBeUndefined();
+		expect(
+			(request.config?.tools?.[0] as any).functionDeclarations,
+		).toHaveLength(1);
+	});
+
+	it("reads empty string parts from Content system instructions", () => {
+		const request = new LlmRequest({
+			config: {
+				systemInstruction: {
+					parts: [{ text: "" }, { text: "x" }, {}],
+				} as any,
+			},
+		});
+		expect(request.getSystemInstructionText()).toBe("x");
+	});
+
+	it("extractTextFromContent stringifies empty objects without parts", () => {
+		expect(LlmRequest.extractTextFromContent({})).toBe("[object Object]");
+		expect(LlmRequest.extractTextFromContent([])).toBe("");
+	});
 });

@@ -70,6 +70,22 @@ describe("OpenAiLlm", () => {
 			expect(msg).toEqual({ role: "system", content: "sys" });
 		});
 
+		it("uses empty string when system parts[0].text is missing", () => {
+			const msg = (llm as any).contentToOpenAiMessage({
+				role: "system",
+				parts: [{}],
+			});
+			expect(msg).toEqual({ role: "system", content: "" });
+		});
+
+		it("maps role model to assistant for single text", () => {
+			const msg = (llm as any).contentToOpenAiMessage({
+				role: "model",
+				parts: [{ text: "reply" }],
+			});
+			expect(msg).toEqual({ role: "assistant", content: "reply" });
+		});
+
 		it("should convert function call part", () => {
 			const content = {
 				parts: [
@@ -98,6 +114,25 @@ describe("OpenAiLlm", () => {
 			});
 		});
 
+		it("defaults empty functionCall id and args", () => {
+			const msg = (llm as any).contentToOpenAiMessage({
+				parts: [{ functionCall: { name: "noop" } }],
+			});
+			expect(msg).toEqual({
+				role: "assistant",
+				tool_calls: [
+					{
+						id: "",
+						type: "function",
+						function: {
+							name: "noop",
+							arguments: JSON.stringify({}),
+						},
+					},
+				],
+			});
+		});
+
 		it("should convert function response part", () => {
 			const content = {
 				parts: [
@@ -114,6 +149,17 @@ describe("OpenAiLlm", () => {
 				role: "tool",
 				tool_call_id: "id2",
 				content: JSON.stringify({ b: 2 }),
+			});
+		});
+
+		it("defaults empty functionResponse id and response", () => {
+			const msg = (llm as any).contentToOpenAiMessage({
+				parts: [{ functionResponse: {} }],
+			});
+			expect(msg).toEqual({
+				role: "tool",
+				tool_call_id: "",
+				content: JSON.stringify({}),
 			});
 		});
 
@@ -213,6 +259,11 @@ describe("OpenAiLlm", () => {
 			(llm as any).preprocessPart(part);
 			expect(part.inline_data).toBeUndefined();
 		});
+		it("deletes inline_data when data is present but mime_type is missing", () => {
+			const part = { inline_data: { data: "abc123" } };
+			(llm as any).preprocessPart(part);
+			expect(part.inline_data).toBeUndefined();
+		});
 		it("should keep valid inline_data", () => {
 			const part = { inline_data: { mime_type: "image/png", data: "abc" } };
 			(llm as any).preprocessPart(part);
@@ -236,6 +287,14 @@ describe("OpenAiLlm", () => {
 			});
 			expect((llm as any).hasInlineData(resp)).toBe(false);
 		});
+		it("returns false when content or parts are undefined", () => {
+			expect((llm as any).hasInlineData(new LlmResponse({}))).toBe(false);
+			expect(
+				(llm as any).hasInlineData(
+					new LlmResponse({ content: { role: "model" } as any }),
+				),
+			).toBe(false);
+		});
 	});
 
 	describe("client getter", () => {
@@ -251,6 +310,15 @@ describe("OpenAiLlm", () => {
 			process.env.OPENAI_API_KEY = "test-key";
 			const llm2 = new OpenAiLlm();
 			expect((llm2 as any).client).toBeDefined();
+		});
+
+		it("reuses the cached _client on subsequent access", () => {
+			process.env.OPENAI_API_KEY = "test-key";
+			const llm2 = new OpenAiLlm();
+			const first = (llm2 as any).client;
+			const second = (llm2 as any).client;
+			expect(second).toBe(first);
+			expect(OpenAI).toHaveBeenCalledTimes(1);
 		});
 	});
 
@@ -285,6 +353,21 @@ describe("OpenAiLlm", () => {
 			expect((llm as any).transformSchemaForOpenAi(null)).toBeNull();
 		});
 
+		it("transformSchemaForOpenAi lowercases oneOf and allOf entries", () => {
+			const transformed = (llm as any).transformSchemaForOpenAi({
+				oneOf: [{ type: "STRING" }, { type: "NUMBER" }],
+				allOf: [{ type: "OBJECT" }, { type: "NULL" }],
+			});
+			expect(transformed.oneOf.map((s: any) => s.type)).toEqual([
+				"string",
+				"number",
+			]);
+			expect(transformed.allOf.map((s: any) => s.type)).toEqual([
+				"object",
+				"null",
+			]);
+		});
+
 		it("functionDeclarationToOpenAiTool maps name description and params", () => {
 			const tool = (llm as any).functionDeclarationToOpenAiTool({
 				name: "lookup",
@@ -304,6 +387,20 @@ describe("OpenAiLlm", () => {
 						type: "object",
 						properties: { q: { type: "string" } },
 					},
+				},
+			});
+		});
+
+		it("functionDeclarationToOpenAiTool defaults missing description and parameters", () => {
+			const tool = (llm as any).functionDeclarationToOpenAiTool({
+				name: "bare",
+			});
+			expect(tool).toEqual({
+				type: "function",
+				function: {
+					name: "bare",
+					description: "",
+					parameters: {},
 				},
 			});
 		});
@@ -343,6 +440,44 @@ describe("OpenAiLlm", () => {
 			expect(response.finishReason).toBe("STOP");
 		});
 
+		it("openAiMessageToLlmResponse maps text-only without usage", () => {
+			const response = (llm as any).openAiMessageToLlmResponse(
+				{
+					message: { content: "only text" },
+					finish_reason: "stop",
+				},
+				undefined,
+			);
+			expect(response.content?.parts).toEqual([{ text: "only text" }]);
+			expect(response.usageMetadata).toBeUndefined();
+			expect(response.finishReason).toBe("STOP");
+		});
+
+		it("openAiMessageToLlmResponse maps tools-only content", () => {
+			const response = (llm as any).openAiMessageToLlmResponse({
+				message: {
+					content: null,
+					tool_calls: [
+						{
+							id: "only-tool",
+							type: "function",
+							function: { name: "ping", arguments: "{}" },
+						},
+					],
+				},
+				finish_reason: "tool_calls",
+			});
+			expect(response.content?.parts).toEqual([
+				{
+					functionCall: {
+						id: "only-tool",
+						name: "ping",
+						args: {},
+					},
+				},
+			]);
+		});
+
 		it("createChunkResponse handles thought text and tool call deltas", () => {
 			const thought = (llm as any).createChunkResponse({
 				content: "[thinking] draft",
@@ -375,6 +510,14 @@ describe("OpenAiLlm", () => {
 			expect(empty.content).toBeUndefined();
 		});
 
+		it("createChunkResponse treats regular content without thought flag", () => {
+			const regular = (llm as any).createChunkResponse({
+				content: "plain answer",
+			});
+			expect(regular.content?.parts?.[0]).toEqual({ text: "plain answer" });
+			expect((regular.content?.parts?.[0] as any).thought).toBeUndefined();
+		});
+
 		it("preprocessRequest clears labels and walks contents", () => {
 			const req = {
 				config: { labels: { env: "test" } },
@@ -391,6 +534,19 @@ describe("OpenAiLlm", () => {
 			expect(req.config.labels).toBeUndefined();
 			expect(req.contents[0].parts[0].inline_data).toBeUndefined();
 			expect(req.contents[0].parts[1]).toEqual({ text: "keep" });
+		});
+
+		it("preprocessRequest is a no-op without config and skips contents without parts", () => {
+			const noConfig = { contents: [{ parts: [{ text: "x" }] }] };
+			expect(() => (llm as any).preprocessRequest(noConfig)).not.toThrow();
+
+			const skipParts = {
+				config: { labels: { a: 1 } },
+				contents: [{ role: "user" }, { parts: [{ text: "ok" }] }],
+			};
+			(llm as any).preprocessRequest(skipParts);
+			expect(skipParts.config.labels).toBeUndefined();
+			expect(skipParts.contents[1].parts[0]).toEqual({ text: "ok" });
 		});
 	});
 
@@ -741,6 +897,265 @@ describe("OpenAiLlm", () => {
 			expect(
 				responses.some((r) => r.content?.parts?.[0]?.text === "only"),
 			).toBe(true);
+		});
+
+		it("maps prior functionCall and functionResponse history into outbound messages", async () => {
+			mockCreate.mockResolvedValue({
+				choices: [
+					{
+						message: { content: "done" },
+						finish_reason: "stop",
+					},
+				],
+				usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+			});
+
+			const request = baseRequest({
+				contents: [
+					{ role: "user", parts: [{ text: "run tool" }] },
+					{
+						role: "model",
+						parts: [
+							{
+								functionCall: {
+									id: "hist-1",
+									name: "lookup",
+									args: { q: "adk" },
+								},
+							},
+						],
+					},
+					{
+						role: "user",
+						parts: [
+							{
+								functionResponse: {
+									id: "hist-1",
+									response: { result: "ok" },
+								},
+							},
+						],
+					},
+				],
+			});
+
+			const responses: LlmResponse[] = [];
+			for await (const response of (llm as any).generateContentAsyncImpl(
+				request,
+				false,
+			)) {
+				responses.push(response);
+			}
+
+			expect(mockCreate).toHaveBeenCalledWith(
+				expect.objectContaining({
+					messages: [
+						{ role: "user", content: "run tool" },
+						{
+							role: "assistant",
+							tool_calls: [
+								{
+									id: "hist-1",
+									type: "function",
+									function: {
+										name: "lookup",
+										arguments: JSON.stringify({ q: "adk" }),
+									},
+								},
+							],
+						},
+						{
+							role: "tool",
+							tool_call_id: "hist-1",
+							content: JSON.stringify({ result: "ok" }),
+						},
+					],
+				}),
+			);
+			expect(responses[0].content?.parts?.[0]).toEqual({ text: "done" });
+		});
+
+		it("defaults stream tool_call index to 0 when omitted", async () => {
+			mockCreate.mockResolvedValue(
+				(async function* () {
+					yield {
+						choices: [
+							{
+								delta: {
+									tool_calls: [
+										{
+											id: "no-idx",
+											type: "function",
+											function: { name: "ping", arguments: "{}" },
+										},
+									],
+								},
+								finish_reason: null,
+							},
+						],
+					};
+					yield {
+						choices: [{ delta: {}, finish_reason: "tool_calls" }],
+						usage: {
+							prompt_tokens: 1,
+							completion_tokens: 1,
+							total_tokens: 2,
+						},
+					};
+				})(),
+			);
+
+			const responses: LlmResponse[] = [];
+			for await (const response of (llm as any).generateContentAsyncImpl(
+				baseRequest(),
+				true,
+			)) {
+				responses.push(response);
+			}
+
+			const final = responses.find((r) => r.finishReason === "STOP");
+			expect(final?.content?.parts).toEqual([
+				{
+					functionCall: {
+						id: "no-idx",
+						name: "ping",
+						args: {},
+					},
+				},
+			]);
+		});
+
+		it("finishes stream with thought, text, and tool calls together", async () => {
+			mockCreate.mockResolvedValue(
+				(async function* () {
+					yield {
+						choices: [
+							{
+								delta: { content: "[thinking] plan" },
+								finish_reason: null,
+							},
+						],
+					};
+					yield {
+						choices: [
+							{
+								delta: {
+									content: " answer",
+									tool_calls: [
+										{
+											index: 0,
+											id: "mix-1",
+											type: "function",
+											function: { name: "lookup", arguments: '{"q":"x"}' },
+										},
+									],
+								},
+								finish_reason: "tool_calls",
+							},
+						],
+						usage: {
+							prompt_tokens: 2,
+							completion_tokens: 4,
+							total_tokens: 6,
+						},
+					};
+				})(),
+			);
+
+			const responses: LlmResponse[] = [];
+			for await (const response of (llm as any).generateContentAsyncImpl(
+				baseRequest(),
+				true,
+			)) {
+				responses.push(response);
+			}
+
+			const final = responses.find((r) => r.finishReason === "STOP");
+			expect(final?.content?.parts).toEqual([
+				{ text: "[thinking] plan", thought: true },
+				{ text: " answer" },
+				{
+					functionCall: {
+						id: "mix-1",
+						name: "lookup",
+						args: { q: "x" },
+					},
+				},
+			]);
+		});
+
+		it("parses empty streamed tool arguments as {}", async () => {
+			mockCreate.mockResolvedValue(
+				(async function* () {
+					yield {
+						choices: [
+							{
+								delta: {
+									tool_calls: [
+										{
+											index: 0,
+											id: "empty-args",
+											type: "function",
+											function: { name: "noop", arguments: "" },
+										},
+									],
+								},
+								finish_reason: "tool_calls",
+							},
+						],
+					};
+				})(),
+			);
+
+			const responses: LlmResponse[] = [];
+			for await (const response of (llm as any).generateContentAsyncImpl(
+				baseRequest(),
+				true,
+			)) {
+				responses.push(response);
+			}
+
+			const final = responses.find((r) => r.finishReason === "STOP");
+			expect(final?.content?.parts?.[0]?.functionCall).toEqual({
+				id: "empty-args",
+				name: "noop",
+				args: {},
+			});
+		});
+
+		it("handles request with no config for non-stream generate", async () => {
+			mockCreate.mockResolvedValue({
+				choices: [
+					{
+						message: { content: "plain" },
+						finish_reason: "stop",
+					},
+				],
+			});
+
+			const request = new LlmRequest({
+				contents: [{ role: "user", parts: [{ text: "hi" }] }],
+			});
+
+			const responses: LlmResponse[] = [];
+			for await (const response of (llm as any).generateContentAsyncImpl(
+				request,
+				false,
+			)) {
+				responses.push(response);
+			}
+
+			expect(mockCreate).toHaveBeenCalledWith(
+				expect.objectContaining({
+					tools: undefined,
+					tool_choice: undefined,
+					max_tokens: undefined,
+					temperature: undefined,
+					top_p: undefined,
+				}),
+			);
+			expect(responses[0].content?.parts).toEqual([{ text: "plain" }]);
+			expect(responses[0].usageMetadata).toBeUndefined();
 		});
 	});
 });

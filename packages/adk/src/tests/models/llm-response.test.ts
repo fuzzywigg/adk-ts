@@ -17,6 +17,17 @@ describe("LlmResponse", () => {
 			expect(resp.errorMessage).toBe("fail");
 			expect(resp.usageMetadata).toEqual({ totalTokens: 5 });
 		});
+
+		it("leaves all fields undefined for empty data", () => {
+			const resp = new LlmResponse();
+			expect(resp.id).toBeUndefined();
+			expect(resp.content).toBeUndefined();
+			expect(resp.errorCode).toBeUndefined();
+			expect(resp.errorMessage).toBeUndefined();
+			expect(resp.usageMetadata).toBeUndefined();
+			expect(resp.finishReason).toBeUndefined();
+			expect(resp.error).toBeUndefined();
+		});
 	});
 
 	describe("create", () => {
@@ -53,6 +64,31 @@ describe("LlmResponse", () => {
 			expect(resp.content).toBeUndefined();
 		});
 
+		it("treats content without parts as an error candidate", () => {
+			const resp = LlmResponse.create({
+				candidates: [
+					{
+						content: { role: "model" } as any,
+						finishReason: "MAX_TOKENS",
+						finishMessage: "truncated",
+					},
+				],
+			});
+			expect(resp.errorCode).toBe("MAX_TOKENS");
+			expect(resp.errorMessage).toBe("truncated");
+			expect(resp.content).toBeUndefined();
+		});
+
+		it("uses only the first candidate when multiple are present", () => {
+			const resp = LlmResponse.create({
+				candidates: [
+					{ content: { parts: [{ text: "first" }] } },
+					{ content: { parts: [{ text: "second" }] } },
+				],
+			});
+			expect(resp.content).toEqual({ parts: [{ text: "first" }] });
+		});
+
 		it("should return error LlmResponse from promptFeedback if no candidates", () => {
 			const resp = LlmResponse.create({
 				promptFeedback: {
@@ -67,6 +103,18 @@ describe("LlmResponse", () => {
 			expect(resp.content).toBeUndefined();
 		});
 
+		it("treats empty candidates array like missing candidates", () => {
+			const resp = LlmResponse.create({
+				candidates: [],
+				promptFeedback: {
+					blockReason: "EMPTY",
+					blockReasonMessage: "no candidates",
+				},
+			});
+			expect(resp.errorCode).toBe("EMPTY");
+			expect(resp.errorMessage).toBe("no candidates");
+		});
+
 		it("should return UNKNOWN_ERROR if no candidates or promptFeedback", () => {
 			const resp = LlmResponse.create({
 				usageMetadata: { totalTokens: 0 } as any,
@@ -75,6 +123,15 @@ describe("LlmResponse", () => {
 			expect(resp.errorMessage).toBe("Unknown error.");
 			expect(resp.usageMetadata).toEqual({ totalTokens: 0 });
 			expect(resp.content).toBeUndefined();
+		});
+
+		it("preserves usageMetadata on UNKNOWN_ERROR without promptFeedback", () => {
+			const resp = LlmResponse.create({
+				candidates: [],
+				usageMetadata: { promptTokenCount: 3 } as any,
+			});
+			expect(resp.errorCode).toBe("UNKNOWN_ERROR");
+			expect(resp.usageMetadata).toEqual({ promptTokenCount: 3 });
 		});
 	});
 
@@ -101,6 +158,24 @@ describe("LlmResponse", () => {
 			expect(resp.errorMessage).toContain("boom");
 			expect(resp.error).toBeInstanceOf(Error);
 			expect(resp.error?.message).toBe("boom");
+		});
+
+		it("stringifies numbers and objects", () => {
+			const fromNumber = LlmResponse.fromError(42, { model: "m" });
+			expect(fromNumber.errorMessage).toContain("42");
+			expect(fromNumber.error?.message).toBe("42");
+
+			const fromObject = LlmResponse.fromError({ code: 7 });
+			expect(fromObject.errorMessage).toContain("[object Object]");
+			expect(fromObject.errorCode).toBe("UNKNOWN_ERROR");
+		});
+
+		it("keeps custom errorCode when model is omitted", () => {
+			const resp = LlmResponse.fromError(new Error("x"), {
+				errorCode: "CUSTOM",
+			});
+			expect(resp.errorCode).toBe("CUSTOM");
+			expect(resp.errorMessage).toContain("model unknown");
 		});
 	});
 });
