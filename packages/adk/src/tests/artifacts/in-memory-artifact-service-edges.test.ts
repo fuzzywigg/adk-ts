@@ -213,3 +213,80 @@ describe("InMemoryArtifactService leftover edges (post #113)", () => {
 		).rejects.toThrow(/Invalid artifact reference URI/);
 	});
 });
+
+describe("InMemoryArtifactService leftover edges (post #124)", () => {
+	const base = {
+		appName: "app",
+		userId: "user-1",
+		sessionId: "session-1",
+	};
+
+	it("rejects circular artifact refs instead of hanging", async () => {
+		const service = new InMemoryArtifactService();
+		const uriA = getArtifactUri({
+			...base,
+			filename: "a.txt",
+			version: 0,
+		});
+		const uriB = getArtifactUri({
+			...base,
+			filename: "b.txt",
+			version: 0,
+		});
+		await service.saveArtifact({
+			...base,
+			filename: "a.txt",
+			artifact: {
+				fileData: { fileUri: uriB, mimeType: "text/plain" },
+			},
+		});
+		await service.saveArtifact({
+			...base,
+			filename: "b.txt",
+			artifact: {
+				fileData: { fileUri: uriA, mimeType: "text/plain" },
+			},
+		});
+
+		await expect(
+			service.loadArtifact({ ...base, filename: "a.txt" }),
+		).rejects.toThrow();
+	});
+
+	it("resolves chained refs across three artifacts", async () => {
+		const service = new InMemoryArtifactService();
+		await service.saveArtifact({
+			...base,
+			filename: "leaf.txt",
+			artifact: { text: "payload" },
+		});
+		const leafUri = getArtifactUri({
+			...base,
+			filename: "leaf.txt",
+			version: 0,
+		});
+		await service.saveArtifact({
+			...base,
+			filename: "mid.txt",
+			artifact: {
+				fileData: { fileUri: leafUri, mimeType: "text/plain" },
+			},
+		});
+		const midUri = getArtifactUri({
+			...base,
+			filename: "mid.txt",
+			version: 0,
+		});
+		await service.saveArtifact({
+			...base,
+			filename: "root.txt",
+			artifact: {
+				fileData: { fileUri: midUri, mimeType: "text/plain" },
+			},
+		});
+
+		await expect(
+			service.loadArtifact({ ...base, filename: "root.txt" }),
+		).resolves.toEqual({ text: "payload" });
+	});
+});

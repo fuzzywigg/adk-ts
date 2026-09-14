@@ -343,6 +343,41 @@ describe("McpSamplingHandler", () => {
 		);
 	});
 
+	it("keeps optional text alongside valid image and audio inlineData", () => {
+		const handler = new McpSamplingHandler(async () => "ok");
+		const imageParts = (handler as any).convertMcpContentToADKParts({
+			type: "image",
+			text: "photo caption",
+			data: Buffer.from("img").toString("base64"),
+			mimeType: "image/png",
+		});
+		expect(imageParts).toEqual([
+			{ text: "photo caption" },
+			{
+				inlineData: {
+					data: Buffer.from("img").toString("base64"),
+					mimeType: "image/png",
+				},
+			},
+		]);
+
+		const audioParts = (handler as any).convertMcpContentToADKParts({
+			type: "audio",
+			text: "clip note",
+			data: Buffer.from("aud").toString("base64"),
+			mimeType: "audio/wav",
+		});
+		expect(audioParts).toEqual([
+			{ text: "clip note" },
+			{
+				inlineData: {
+					data: Buffer.from("aud").toString("base64"),
+					mimeType: "audio/wav",
+				},
+			},
+		]);
+	});
+
 	it("converts empty LlmResponse content into empty assistant text", async () => {
 		const handler = new McpSamplingHandler(async () => {
 			return { content: undefined } as any;

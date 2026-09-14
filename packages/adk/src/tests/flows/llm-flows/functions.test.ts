@@ -1222,3 +1222,139 @@ describe("function call helpers leftover edges", () => {
 		expect(ids.size).toBe(10);
 	});
 });
+
+describe("handleFunctionCallsAsync leftover edges (post #124)", () => {
+	it("lets beforeToolCallback mutate argsForTool in place before runAsync", async () => {
+		const runAsync = vi.fn(async (args) => ({ got: args }));
+		const tool = new FakeTool(
+			{ name: "echo_tool", description: "Echoes input args" },
+			runAsync,
+		);
+		const before = vi.fn(async (_tool, args) => {
+			args.mutated = true;
+			args.x = 99;
+			return null;
+		});
+
+		await handleFunctionCallsAsync(
+			makeInvocationContext({
+				name: "llm-agent",
+				canonicalModel: "gpt-4o",
+				canonicalBeforeToolCallbacks: [before],
+				canonicalAfterToolCallbacks: [],
+			}),
+			functionCallEvent([{ name: "echo_tool", id: "c1", args: { x: 1 } }]),
+			{ echo_tool: tool },
+		);
+
+		expect(runAsync).toHaveBeenCalledWith({ x: 99, mutated: true });
+	});
+
+	it("stops afterToolCallbacks after the first truthy override", async () => {
+		const tool = new FakeTool(
+			{ name: "echo_tool", description: "Echoes input args" },
+			async () => ({ original: true }),
+		);
+		const first = vi.fn(async () => null);
+		const second = vi.fn(async () => ({ overridden: true }));
+		const third = vi.fn(async () => ({ never: true }));
+
+		const result = await handleFunctionCallsAsync(
+			makeInvocationContext({
+				name: "llm-agent",
+				canonicalModel: "gpt-4o",
+				canonicalBeforeToolCallbacks: [],
+				canonicalAfterToolCallbacks: [first, second, third],
+			}),
+			functionCallEvent([{ name: "echo_tool", id: "c1" }]),
+			{ echo_tool: tool },
+		);
+
+		expect(first).toHaveBeenCalled();
+		expect(second).toHaveBeenCalled();
+		expect(third).not.toHaveBeenCalled();
+		expect(result?.getFunctionResponses()[0].response).toEqual({
+			overridden: true,
+		});
+	});
+
+	it("propagates toolContext.actions mutations onto the response event", async () => {
+		class ActionsTool extends BaseTool {
+			constructor() {
+				super({ name: "echo_tool", description: "Echoes input args" });
+			}
+			async runAsync(_args: Record<string, any>, context: ToolContext) {
+				context.actions.escalate = true;
+				context.actions.skipSummarization = true;
+				context.actions.stateDelta = { fromTool: 1 };
+				return { ok: true };
+			}
+		}
+		const tool = new ActionsTool();
+
+		const result = await handleFunctionCallsAsync(
+			makeInvocationContext({
+				name: "llm-agent",
+				canonicalModel: "gpt-4o",
+				canonicalBeforeToolCallbacks: [],
+				canonicalAfterToolCallbacks: [],
+			}),
+			functionCallEvent([{ name: "echo_tool", id: "c1" }]),
+			{ echo_tool: tool },
+		);
+
+		expect(result?.actions.escalate).toBe(true);
+		expect(result?.actions.skipSummarization).toBe(true);
+		expect(result?.actions.stateDelta).toEqual({ fromTool: 1 });
+	});
+
+	it("skips long-running tools that return empty string, 0, or false", async () => {
+		const empty = new FakeTool(
+			{
+				name: "empty",
+				description: "Long running empty",
+				isLongRunning: true,
+			},
+			async () => "",
+		);
+		const zero = new FakeTool(
+			{
+				name: "zero",
+				description: "Long running zero",
+				isLongRunning: true,
+			},
+			async () => 0,
+		);
+		const falsy = new FakeTool(
+			{
+				name: "falsy",
+				description: "Long running false",
+				isLongRunning: true,
+			},
+			async () => false,
+		);
+		const keep = new FakeTool(
+			{ name: "keep", description: "Quick tool helper" },
+			async () => ({ kept: true }),
+		);
+
+		const result = await handleFunctionCallsAsync(
+			makeInvocationContext({
+				name: "llm-agent",
+				canonicalModel: "gpt-4o",
+				canonicalBeforeToolCallbacks: [],
+				canonicalAfterToolCallbacks: [],
+			}),
+			functionCallEvent([
+				{ name: "empty", id: "e" },
+				{ name: "zero", id: "z" },
+				{ name: "falsy", id: "f" },
+				{ name: "keep", id: "k" },
+			]),
+			{ empty, zero, falsy, keep },
+		);
+
+		expect(result?.getFunctionResponses()).toHaveLength(1);
+		expect(result?.getFunctionResponses()[0].response).toEqual({ kept: true });
+	});
+});

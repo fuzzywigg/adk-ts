@@ -1514,3 +1514,113 @@ describe("BaseLlmFlow leftover toolsDict/parts/callback edges", () => {
 		expect(result?.content?.parts?.[0]).toEqual({ text: "from-third" });
 	});
 });
+
+describe("BaseLlmFlow leftover edges (post #124)", () => {
+	it("_handleBeforeModelCallback returns undefined when all callbacks are falsy", async () => {
+		const flow = new InspectableFlow();
+		const agent = {
+			name: "cb-agent",
+			canonicalBeforeModelCallbacks: [
+				() => undefined,
+				async () => null,
+				() => 0,
+				() => "",
+			],
+		};
+		const result = await flow._handleBeforeModelCallback(
+			makeCtx({ agent }),
+			new LlmRequest(),
+			new Event({ id: "me", author: "cb-agent" }),
+		);
+		expect(result).toBeUndefined();
+	});
+
+	it("_handleAfterModelCallback returns undefined when all callbacks are falsy", async () => {
+		const flow = new InspectableFlow();
+		const agent = {
+			name: "cb-agent",
+			canonicalAfterModelCallbacks: [
+				() => undefined,
+				async () => null,
+				() => false,
+			],
+		};
+		const result = await flow._handleAfterModelCallback(
+			makeCtx({ agent }),
+			{ content: { parts: [{ text: "raw" }] } } as LlmResponse,
+			new Event({ id: "me", author: "cb-agent" }),
+		);
+		expect(result).toBeUndefined();
+	});
+
+	it("warns when supportCfc is enabled during _callLlmAsync", async () => {
+		const flow = new InspectableFlow();
+		const warn = vi.spyOn((flow as any).logger, "warn");
+		const agent = {
+			name: "cfc-agent",
+			canonicalModel: {
+				model: "fake",
+				generateContentAsync: vi.fn(async function* () {
+					yield { content: { parts: [{ text: "ok" }] } };
+				}),
+			},
+		};
+		const ctx = makeCtx({
+			agent,
+			runConfig: { streamingMode: "none", supportCfc: true },
+		});
+		const llmRequest = new LlmRequest();
+		llmRequest.contents = [{ role: "user", parts: [{ text: "hi" }] }];
+
+		await collect(
+			flow._callLlmAsync(
+				ctx,
+				llmRequest,
+				new Event({ id: "m1", author: "cfc-agent" }),
+			),
+		);
+
+		expect(warn).toHaveBeenCalledWith(
+			"CFC (supportCfc) not fully implemented, using standard flow.",
+		);
+	});
+
+	it("drops tool objects whose functionDeclarations are all duplicates", async () => {
+		const flow = new InspectableFlow();
+		const agent = {
+			name: "dedup-agent",
+			canonicalModel: {
+				model: "fake",
+				generateContentAsync: vi.fn(async function* () {
+					yield { content: { parts: [{ text: "ok" }] } };
+				}),
+			},
+		};
+		const ctx = makeCtx({ agent });
+		const llmRequest = new LlmRequest();
+		llmRequest.config = {
+			tools: [
+				{ functionDeclarations: [{ name: "alpha" }, { name: "beta" }] },
+				{
+					functionDeclarations: [{ name: "alpha" }, { name: "beta" }],
+				},
+			],
+		} as any;
+		llmRequest.contents = [{ role: "user", parts: [{ text: "hi" }] }];
+
+		await collect(
+			flow._callLlmAsync(
+				ctx,
+				llmRequest,
+				new Event({ id: "m1", author: "dedup-agent" }),
+			),
+		);
+
+		const tools = llmRequest.config?.tools as any[];
+		expect(tools).toHaveLength(1);
+		expect(tools[0].functionDeclarations).toEqual([
+			{ name: "alpha" },
+			{ name: "beta" },
+		]);
+	});
+});

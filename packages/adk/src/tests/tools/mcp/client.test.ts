@@ -151,14 +151,35 @@ describe("McpClientService.initialize", () => {
 	});
 
 	it("times out slow connections when timeout is configured", async () => {
-		connect.mockImplementation(
-			() => new Promise((resolve) => setTimeout(resolve, 50)),
-		);
+		vi.useFakeTimers();
+		connect.mockImplementation(() => new Promise(() => {}));
 		const service = new McpClientService(stdioConfig({ timeout: 5 }));
-
-		await expect(service.initialize()).rejects.toMatchObject({
+		const pending = service.initialize();
+		const expectation = expect(pending).rejects.toMatchObject({
 			type: McpErrorType.TIMEOUT_ERROR,
 		});
+		await vi.advanceTimersByTimeAsync(5);
+		await expectation;
+		vi.useRealTimers();
+	});
+
+	it("clears connection timeout after a successful connect wins the race", async () => {
+		vi.useFakeTimers();
+		const unhandled: unknown[] = [];
+		const onUnhandled = (reason: unknown) => {
+			unhandled.push(reason);
+		};
+		process.on("unhandledRejection", onUnhandled);
+
+		connect.mockResolvedValue(undefined);
+		const service = new McpClientService(stdioConfig({ timeout: 100 }));
+		await service.initialize();
+		await vi.advanceTimersByTimeAsync(200);
+
+		process.off("unhandledRejection", onUnhandled);
+		expect(unhandled).toEqual([]);
+		expect(service.isConnected()).toBe(true);
+		vi.useRealTimers();
 	});
 
 	it("creates SSE transport with merged headers and timeout", async () => {
@@ -740,12 +761,12 @@ describe("McpClientService sampling wrap and setSamplingHandler leftovers", () =
 		};
 
 		service.setSamplingHandler(async () => "ok");
-		await new Promise((resolve) => setTimeout(resolve, 0));
-
-		expect(errorSpy).toHaveBeenCalledWith(
-			"Failed to update ADK sampling handler:",
-			expect.any(Error),
-		);
+		await vi.waitFor(() => {
+			expect(errorSpy).toHaveBeenCalledWith(
+				"Failed to update ADK sampling handler:",
+				expect.any(Error),
+			);
+		});
 		errorSpy.mockRestore();
 	});
 

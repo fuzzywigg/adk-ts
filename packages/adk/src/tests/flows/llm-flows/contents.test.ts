@@ -1819,3 +1819,123 @@ describe("contents requestProcessor leftover edges", () => {
 		expect(llmRequest.contents.map((c) => c.parts?.[0]?.text)).toContain("go");
 	});
 });
+
+describe("contents requestProcessor leftover edges (post #124)", () => {
+	it("merges later async functionResponses that overwrite the same call id", async () => {
+		const llmRequest = new LlmRequest();
+		const events = [
+			new Event({
+				author: "assistant",
+				content: {
+					role: "model",
+					parts: [
+						{
+							functionCall: {
+								id: "c1",
+								name: "tool_a",
+								args: {},
+							},
+						},
+						{
+							functionCall: {
+								id: "c2",
+								name: "tool_b",
+								args: {},
+							},
+						},
+					],
+				},
+			}),
+			new Event({
+				author: "user",
+				content: {
+					role: "user",
+					parts: [
+						{
+							functionResponse: {
+								id: "c1",
+								name: "tool_a",
+								response: { a: "stale" },
+							},
+						},
+					],
+				},
+			}),
+			new Event({
+				author: "user",
+				content: {
+					role: "user",
+					parts: [
+						{
+							functionResponse: {
+								id: "c1",
+								name: "tool_a",
+								response: { a: "fresh" },
+							},
+						},
+						{
+							functionResponse: {
+								id: "c2",
+								name: "tool_b",
+								response: { b: 2 },
+							},
+						},
+					],
+				},
+			}),
+			userEvent("done"),
+		];
+
+		await drain(
+			requestProcessor.runAsync(
+				ctx(duckAgent("assistant", "default"), events),
+				llmRequest,
+			),
+		);
+
+		const merged = llmRequest.contents.find((c) =>
+			c.parts?.some((p) => p.functionResponse),
+		);
+		const responses = merged?.parts
+			?.filter((p) => p.functionResponse)
+			.map((p) => p.functionResponse);
+		expect(responses).toEqual(
+			expect.arrayContaining([
+				expect.objectContaining({ id: "c1", response: { a: "fresh" } }),
+				expect.objectContaining({ id: "c2", response: { b: 2 } }),
+			]),
+		);
+		expect(responses?.filter((r) => r?.id === "c1")).toHaveLength(1);
+	});
+
+	it("drops only the rewind target invocation while keeping earlier history", async () => {
+		const llmRequest = new LlmRequest();
+		const events = [
+			userEvent("keep-early", { invocationId: "inv-a", timestamp: 1 }),
+			userEvent("drop-me", { invocationId: "inv-b", timestamp: 2 }),
+			new Event({
+				author: "user",
+				invocationId: "inv-rewind",
+				timestamp: 3,
+				content: { role: "user", parts: [{ text: "rewind-marker" }] },
+				actions: new EventActions({
+					rewindBeforeInvocationId: "inv-b",
+				}),
+			}),
+			userEvent("keep-late", { invocationId: "inv-c", timestamp: 4 }),
+		];
+
+		await drain(
+			requestProcessor.runAsync(
+				ctx(duckAgent("assistant", "default"), events),
+				llmRequest,
+			),
+		);
+
+		const texts = llmRequest.contents.map((c) => c.parts?.[0]?.text);
+		expect(texts).toContain("keep-early");
+		expect(texts).toContain("keep-late");
+		expect(texts).not.toContain("drop-me");
+		expect(texts).not.toContain("rewind-marker");
+	});
+});

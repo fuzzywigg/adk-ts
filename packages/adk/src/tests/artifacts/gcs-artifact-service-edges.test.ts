@@ -160,3 +160,65 @@ describe("GcsArtifactService leftover edges (post #113)", () => {
 		expect(getFilesMock).toHaveBeenCalledTimes(2);
 	});
 });
+
+describe("GcsArtifactService leftover edges (post #124)", () => {
+	const base = {
+		appName: "app",
+		userId: "user-1",
+		sessionId: "sess-1",
+	};
+
+	beforeEach(() => {
+		vi.clearAllMocks();
+		bucketMock.mockImplementation(() => ({
+			file: fileMock,
+			getFiles: getFilesMock,
+		}));
+		fileMock.mockImplementation(() => ({
+			save: saveMock,
+			getMetadata: getMetadataMock,
+			download: downloadMock,
+			delete: deleteMock,
+		}));
+		saveMock.mockResolvedValue(undefined);
+		deleteMock.mockResolvedValue(undefined);
+	});
+
+	it("propagates blob.save rejection when inlineData.data is undefined", async () => {
+		getFilesMock.mockResolvedValue([[]]);
+		saveMock.mockRejectedValueOnce(new Error("cannot save undefined"));
+		const service = new GcsArtifactService("b");
+		await expect(
+			service.saveArtifact({
+				...base,
+				filename: "empty.bin",
+				artifact: {
+					inlineData: {
+						data: undefined as any,
+						mimeType: "application/octet-stream",
+					},
+				},
+			}),
+		).rejects.toThrow(/cannot save undefined/);
+		expect(saveMock).toHaveBeenCalledWith(undefined, expect.any(Object));
+	});
+
+	it("passes through mimeType when saving undefined data payloads", async () => {
+		getFilesMock.mockResolvedValue([[]]);
+		const service = new GcsArtifactService("b");
+		await service.saveArtifact({
+			...base,
+			filename: "typed.bin",
+			artifact: {
+				inlineData: {
+					data: undefined as any,
+					mimeType: "application/pdf",
+				},
+			},
+		});
+		expect(saveMock).toHaveBeenCalledWith(undefined, {
+			contentType: "application/pdf",
+			preconditionOpts: { ifGenerationMatch: 0 },
+		});
+	});
+});

@@ -478,3 +478,30 @@ describe("McpToolset offline helpers", () => {
 		expect(close).toHaveBeenCalled();
 	});
 });
+
+describe("McpToolset leftover edges (post #124)", () => {
+	it("stores tools when cacheConfig.enabled is undefined but still re-lists next getTools", async () => {
+		const toolset = new McpToolset({
+			...baseConfig,
+			cacheConfig: { enabled: undefined as unknown as boolean },
+		});
+		const first = await toolset.getTools();
+		expect(first.map((t) => t.name)).toEqual(["keep", "drop"]);
+		expect((toolset as any).tools.map((t: any) => t.name)).toEqual([
+			"keep",
+			"drop",
+		]);
+		await toolset.getTools();
+		expect(listTools).toHaveBeenCalledTimes(2);
+	});
+
+	it("propagates toolFilter predicate throws during getTools", async () => {
+		const toolset = new McpToolset(baseConfig, () => {
+			throw new Error("filter boom");
+		});
+		await expect(toolset.getTools()).rejects.toMatchObject({
+			type: McpErrorType.CONNECTION_ERROR,
+			message: expect.stringContaining("filter boom"),
+		});
+	});
+});

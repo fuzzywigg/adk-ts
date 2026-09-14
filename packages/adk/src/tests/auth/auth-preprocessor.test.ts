@@ -872,7 +872,9 @@ describe("auth requestProcessor leftover edges", () => {
 						name: "auth-agent",
 						canonicalTools: async () => [tool],
 					},
-					events: [originalCall, eucCall, emptyAuthor, eucResponse],
+					// Falsy author must be AFTER the user EUC response so reverse scan
+					// hits `!event.author` continue before the real user event.
+					events: [originalCall, eucCall, eucResponse, emptyAuthor],
 				}),
 				new LlmRequest(),
 			),
@@ -1783,7 +1785,7 @@ describe("auth requestProcessor null-author leftover", () => {
 						name: "auth-agent",
 						canonicalTools: async () => [tool],
 					},
-					events: [originalCall, eucCall, nullAuthor, eucResponse],
+					events: [originalCall, eucCall, eucResponse, nullAuthor],
 				}),
 				new LlmRequest(),
 			),
@@ -1795,6 +1797,123 @@ describe("auth requestProcessor null-author leftover", () => {
 			originalCall,
 			{ secure_api: tool },
 			new Set(["tool-null-author"]),
+		);
+		warn.mockRestore();
+	});
+});
+
+describe("auth requestProcessor leftover edges (post #124)", () => {
+	it("overwrites temp credential keys that collide on the same Date.now ms", () => {
+		vi.useFakeTimers();
+		vi.setSystemTime(new Date("2024-06-01T12:00:00.000Z"));
+		const callStore = (
+			requestProcessor as unknown as {
+				parseAndStoreAuthResponse: (
+					authHandler: AuthHandler,
+					invocationContext: InvocationContext,
+				) => void;
+			}
+		).parseAndStoreAuthResponse.bind(requestProcessor);
+
+		const makeHandler = (apiKey: string) =>
+			new AuthHandler({
+				authConfig: new AuthConfig({
+					authScheme: { type: "apiKey" } as any,
+				}),
+				credential: { apiKey } as any,
+			});
+
+		const state: Record<string, unknown> = {};
+		const ctx = baseCtx({ state });
+		callStore(makeHandler("first"), ctx);
+		callStore(makeHandler("second"), ctx);
+
+		const keys = Object.keys(state).filter((k) => k.startsWith("temp:"));
+		expect(keys).toHaveLength(1);
+		expect(state[keys[0]]).toEqual({ apiKey: "second" });
+		vi.useRealTimers();
+	});
+
+	it("continues past non-user authors before the first user EUC response", async () => {
+		handleFunctionCallsAsyncMock.mockResolvedValue(null);
+		const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+		const originalCall = new Event({
+			author: "auth-agent",
+			content: {
+				role: "model",
+				parts: [
+					{
+						functionCall: {
+							id: "tool-skip-agent",
+							name: "secure_api",
+							args: {},
+						},
+					},
+				],
+			},
+		});
+		const eucCall = new Event({
+			author: "auth-agent",
+			content: {
+				role: "model",
+				parts: [
+					{
+						functionCall: {
+							id: "euc-skip-agent",
+							name: REQUEST_EUC_FUNCTION_CALL_NAME,
+							args: JSON.stringify({
+								function_call_id: "tool-skip-agent",
+							}) as any,
+						},
+					},
+				],
+			},
+		});
+		const eucResponse = new Event({
+			author: "user",
+			content: {
+				role: "user",
+				parts: [
+					{
+						functionResponse: {
+							id: "euc-skip-agent",
+							name: REQUEST_EUC_FUNCTION_CALL_NAME,
+							response: JSON.stringify({
+								authScheme: { type: "apiKey" },
+								rawAuthCredential: { apiKey: "k" },
+							}),
+						},
+					},
+				],
+			},
+		});
+		const trailingAgent = new Event({
+			author: "auth-agent",
+			content: {
+				role: "model",
+				parts: [{ text: "post-auth chatter" }],
+			},
+		});
+
+		await collect(
+			requestProcessor.runAsync(
+				baseCtx({
+					agent: {
+						name: "auth-agent",
+						canonicalTools: async () => [{ name: "secure_api" }],
+					},
+					events: [originalCall, eucCall, eucResponse, trailingAgent],
+				}),
+				new LlmRequest(),
+			),
+		);
+
+		expect(handleFunctionCallsAsyncMock).toHaveBeenCalledWith(
+			expect.anything(),
+			originalCall,
+			{ secure_api: { name: "secure_api" } },
+			new Set(["tool-skip-agent"]),
 		);
 		warn.mockRestore();
 	});

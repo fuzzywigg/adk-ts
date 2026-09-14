@@ -470,6 +470,7 @@ describe("DatabaseSessionService (sqlite :memory:)", () => {
 	});
 
 	it("logs when initializeDatabase fails during construction", async () => {
+		vi.useFakeTimers();
 		const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
 		const { DatabaseSessionService } = await import(
 			"../../sessions/database-session-service"
@@ -487,11 +488,12 @@ describe("DatabaseSessionService (sqlite :memory:)", () => {
 		};
 
 		new DatabaseSessionService({ db: db as any });
-		await new Promise((r) => setTimeout(r, 20));
+		await vi.runAllTimersAsync();
 		expect(errorSpy).toHaveBeenCalledWith(
 			"Failed to initialize database:",
 			expect.any(Error),
 		);
+		vi.useRealTimers();
 	});
 
 	it("updateSessionState assigns null/undefined instead of deleting keys", () => {
@@ -1259,5 +1261,91 @@ describe("DatabaseSessionService (sqlite :memory:)", () => {
 		expect(sparse.error_code).toBeNull();
 		expect(sparse.error_message).toBeNull();
 		expect(sparse.interrupted).toBeNull();
+	});
+});
+
+describe("DatabaseSessionService leftover edges (post #124)", () => {
+	let service: DatabaseSessionService;
+
+	beforeEach(() => {
+		vi.spyOn(console, "error").mockImplementation(() => {});
+		service = createSqliteSessionService(":memory:");
+	});
+
+	afterEach(async () => {
+		vi.restoreAllMocks();
+	});
+
+	it("app-only stateDelta does not bump sessions.update_time for stale checks", async () => {
+		const session = await service.createSession("app", "user", {}, "app-only");
+		const before = session.lastUpdateTime;
+
+		await service.appendEvent(
+			session,
+			new Event({
+				author: "user",
+				content: { role: "user", parts: [{ text: "bump-app" }] },
+				actions: new EventActions({
+					stateDelta: { [`${State.APP_PREFIX}flag`]: "v1" },
+				}),
+			}),
+		);
+
+		expect(session.lastUpdateTime).toBe(before);
+		expect(session.state[`${State.APP_PREFIX}flag`]).toBe("v1");
+
+		await expect(
+			service.appendEvent(
+				session,
+				new Event({
+					author: "user",
+					content: { role: "user", parts: [{ text: "still-ok" }] },
+				}),
+			),
+		).resolves.toBeDefined();
+	});
+
+	it("event-only append keeps equal update_time so a follow-up append succeeds", async () => {
+		const session = await service.createSession("app", "user", {}, "evt-only");
+		const first = await service.appendEvent(
+			session,
+			new Event({
+				author: "user",
+				content: { role: "user", parts: [{ text: "one" }] },
+			}),
+		);
+		const mid = session.lastUpdateTime;
+		const second = await service.appendEvent(
+			session,
+			new Event({
+				author: "user",
+				content: { role: "user", parts: [{ text: "two" }] },
+			}),
+		);
+		expect(first).toBeDefined();
+		expect(second).toBeDefined();
+		expect(session.lastUpdateTime).toBe(mid);
+	});
+
+	it("parallel createSession during background init does not race schema setup", async () => {
+		const Database = require("better-sqlite3");
+		const { Kysely, SqliteDialect } = await import("kysely");
+		const { DatabaseSessionService } = await import(
+			"../../sessions/database-session-service"
+		);
+		const db = new Kysely({
+			dialect: new SqliteDialect({
+				database: new Database(":memory:"),
+			}),
+		});
+		const racing = new DatabaseSessionService({ db });
+		const [a, b] = await Promise.all([
+			racing.createSession("app", "u1", { n: 1 }, "race-a"),
+			racing.createSession("app", "u2", { n: 2 }, "race-b"),
+		]);
+		expect(a.id).toBe("race-a");
+		expect(b.id).toBe("race-b");
+		expect(await racing.getSession("app", "u1", "race-a")).toBeDefined();
+		expect(await racing.getSession("app", "u2", "race-b")).toBeDefined();
 	});
 });

@@ -625,3 +625,43 @@ describe("output-schema responseProcessor leftover edges", () => {
 		});
 	});
 });
+
+describe("output-schema responseProcessor leftover edges (post #124)", () => {
+	it("falls through empty fenced blocks to prose/raw trimming", async () => {
+		const schema = z.object({ n: z.number() });
+		const response = new LlmResponse({
+			content: {
+				role: "model",
+				parts: [{ text: '```json\n```\n{"n":7}' }],
+			},
+		});
+		await collect(
+			responseProcessor.runAsync(
+				makeContext({ name: "empty-fence", outputSchema: schema }),
+				response,
+			),
+		);
+		expect(JSON.parse(response.content?.parts?.[0]?.text ?? "{}")).toEqual({
+			n: 7,
+		});
+	});
+
+	it("falls through whitespace-only fences to following JSON lines", async () => {
+		const schema = z.object({ ok: z.boolean() });
+		const response = new LlmResponse({
+			content: {
+				role: "model",
+				parts: [{ text: '```\n   \n```\n{"ok":true}' }],
+			},
+		});
+		await collect(
+			responseProcessor.runAsync(
+				makeContext({ name: "ws-fence", outputSchema: schema }),
+				response,
+			),
+		);
+		expect(JSON.parse(response.content?.parts?.[0]?.text ?? "{}")).toEqual({
+			ok: true,
+		});
+	});
+});

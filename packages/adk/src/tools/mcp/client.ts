@@ -64,9 +64,9 @@ export class McpClientService {
 			const connectPromise = client.connect(this.transport);
 
 			if (this.config.timeout) {
-				// Create a timeout promise
+				let timeoutId: ReturnType<typeof setTimeout> | undefined;
 				const timeoutPromise = new Promise((_, reject) => {
-					setTimeout(() => {
+					timeoutId = setTimeout(() => {
 						reject(
 							new McpError(
 								`MCP client connection timed out after ${this.config.timeout}ms`,
@@ -76,10 +76,14 @@ export class McpClientService {
 					}, this.config.timeout);
 				});
 
-				// Race the connection against the timeout
-				await Promise.race([connectPromise, timeoutPromise]);
+				try {
+					await Promise.race([connectPromise, timeoutPromise]);
+				} finally {
+					if (timeoutId !== undefined) {
+						clearTimeout(timeoutId);
+					}
+				}
 			} else {
-				// No timeout, just wait for connection
 				await connectPromise;
 			}
 

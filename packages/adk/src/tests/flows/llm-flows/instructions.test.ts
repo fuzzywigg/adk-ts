@@ -505,3 +505,28 @@ describe("instructions requestProcessor leftover edges", () => {
 		expect(text).not.toContain("$schema");
 	});
 });
+
+describe("instructions requestProcessor leftover edges (post #124)", () => {
+	it("appends schema guidance and IMPORTANT note for boolean-only schemas", async () => {
+		const agent = {
+			name: "bool-schema",
+			canonicalModel: "gpt-4o",
+			instruction: "reply",
+			rootAgent: { name: "root" },
+			outputSchema: z.object({ ok: z.boolean() }),
+			canonicalInstruction: async () => ["reply", true] as [string, boolean],
+		};
+		const llmRequest = new LlmRequest();
+		await drain(
+			requestProcessor.runAsync(
+				{ agent } as unknown as InvocationContext,
+				llmRequest,
+			),
+		);
+		const text = llmRequest.getSystemInstructionText() ?? "";
+		expect(text).toContain("reply");
+		expect(text).toContain("application/json");
+		expect(text).toContain('"ok"');
+		expect(text).toContain("IMPORTANT: After any tool calls");
+	});
+});
