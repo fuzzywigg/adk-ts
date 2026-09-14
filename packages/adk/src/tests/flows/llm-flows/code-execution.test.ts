@@ -1764,4 +1764,351 @@ describe("code-execution helper polish", () => {
 			),
 		).toBeUndefined();
 	});
+
+	it("skips user contents with empty parts during inline extract", () => {
+		const state = State.create({}, {});
+		const ctx = new CodeExecutorContext(state);
+		const llmRequest = new LlmRequest({
+			contents: [
+				{ role: "user", parts: [] },
+				{ role: "user" } as any,
+				{
+					role: "user",
+					parts: [{ inlineData: { mimeType: "text/csv", data: "a\n1" } }],
+				},
+			],
+		});
+
+		const files = extractAndReplaceInlineFiles(ctx, llmRequest);
+		expect(files).toHaveLength(1);
+		expect(files[0].name).toBe("data_3_1.csv");
+	});
+
+	it("normalizes filenames that are only an extension to empty var then explore", () => {
+		const code = getDataFilePreprocessingCode({
+			name: ".csv",
+			content: "",
+			mimeType: "text/csv",
+		});
+		expect(code).toContain("= pd.read_csv('.csv')");
+		expect(code).toContain("explore_df(");
+	});
+});
+
+describe("requestProcessor and responseProcessor additional edges", () => {
+	it("converts every content that ends with executableCode in one request", async () => {
+		const executor = new StubExecutor({
+			optimizeDataFile: false,
+			codeBlockDelimiters: [["<<", ">>"]],
+			executionResultDelimiters: ["[[", "]]"],
+		});
+		const agent = new LlmAgent({
+			name: "coder",
+			model: "gpt-4o",
+			codeExecutor: executor,
+		});
+		const llmRequest = new LlmRequest({
+			model: "gpt-4o",
+			contents: [
+				{
+					role: "model",
+					parts: [{ executableCode: { code: "a=1", language: "PYTHON" } }],
+				},
+				{
+					role: "model",
+					parts: [
+						{ text: "note" },
+						{ executableCode: { code: "b=2", language: "PYTHON" } },
+					],
+				},
+			],
+		});
+
+		await collect(requestProcessor.runAsync(makeInvocation(agent), llmRequest));
+
+		expect(llmRequest.contents?.[0].parts?.[0]).toEqual({ text: "<<a=1>>" });
+		expect(llmRequest.contents?.[1].parts?.[1]).toEqual({ text: "<<b=2>>" });
+	});
+
+	it("leaves contents with empty parts untouched during convert", async () => {
+		const executor = new StubExecutor({ optimizeDataFile: false });
+		const agent = new LlmAgent({
+			name: "coder",
+			model: "gpt-4o",
+			codeExecutor: executor,
+		});
+		const llmRequest = new LlmRequest({
+			model: "gpt-4o",
+			contents: [
+				{ role: "model", parts: [] },
+				{ role: "user", parts: [{ text: "hi" }] },
+			],
+		});
+
+		await collect(requestProcessor.runAsync(makeInvocation(agent), llmRequest));
+
+		expect(llmRequest.contents?.[0].parts).toEqual([]);
+		expect(llmRequest.contents?.[1].parts?.[0]).toEqual({ text: "hi" });
+	});
+
+	it("propagates branch onto preprocess and execution result events", async () => {
+		const executor = new StubExecutor({
+			optimizeDataFile: true,
+			codeBlockDelimiters: [["```python\n", "\n```"]],
+			executionResultDelimiters: ["```tool_outputs\n", "\n```"],
+		});
+		const agent = new LlmAgent({
+			name: "coder",
+			model: "gpt-4o",
+			codeExecutor: executor,
+		});
+		const llmRequest = new LlmRequest({
+			model: "gpt-4o",
+			contents: [
+				{
+					role: "user",
+					parts: [
+						{ text: "analyze" },
+						{ inlineData: { mimeType: "text/csv", data: "a,b\n1,2" } },
+					],
+				},
+			],
+		});
+
+		const events = await collect(
+			requestProcessor.runAsync(
+				makeInvocation(agent, { branch: "feature/csv" }),
+				llmRequest,
+			),
+		);
+
+		expect(events).toHaveLength(2);
+		expect((events[0] as any).branch).toBe("feature/csv");
+		expect((events[1] as any).branch).toBe("feature/csv");
+		expect((events[0] as any).author).toBe("coder");
+		expect((events[1] as any).author).toBe("coder");
+	});
+
+	it("responseProcessor preserves branch and invocationId on both yielded events", async () => {
+		const executor = new StubExecutor({
+			codeBlockDelimiters: [["```python\n", "\n```"]],
+			executionResultDelimiters: ["```tool_outputs\n", "\n```"],
+		});
+		const agent = new LlmAgent({
+			name: "coder",
+			model: "gpt-4o",
+			codeExecutor: executor,
+		});
+
+		const events = await collect(
+			responseProcessor.runAsync(
+				makeInvocation(agent, {
+					branch: "live/branch",
+					invocationId: "inv-branch",
+				}),
+				{
+					partial: false,
+					content: {
+						role: "model",
+						parts: [{ text: "```python\nprint('b')\n```" }],
+					},
+				} as LlmResponse,
+			),
+		);
+
+		expect(events).toHaveLength(2);
+		expect((events[0] as any).branch).toBe("live/branch");
+		expect((events[0] as any).invocationId).toBe("inv-branch");
+		expect((events[1] as any).branch).toBe("live/branch");
+		expect((events[1] as any).invocationId).toBe("inv-branch");
+	});
+
+	it("requestProcessor skips LlmAgent when codeExecutor is unset", async () => {
+		const agent = new LlmAgent({
+			name: "coder",
+			model: "gpt-4o",
+		});
+		const llmRequest = new LlmRequest({
+			model: "gpt-4o",
+			contents: [
+				{
+					role: "model",
+					parts: [{ executableCode: { code: "x", language: "PYTHON" } }],
+				},
+			],
+		});
+
+		const events = await collect(
+			requestProcessor.runAsync(makeInvocation(agent), llmRequest),
+		);
+
+		expect(events).toEqual([]);
+		expect(llmRequest.contents?.[0].parts?.[0]?.executableCode).toBeDefined();
+	});
+
+	it("does not convert codeExecutionResult when it is not the last part alone", async () => {
+		const executor = new StubExecutor({
+			optimizeDataFile: false,
+			codeBlockDelimiters: [["```python\n", "\n```"]],
+			executionResultDelimiters: ["OUT:", ":END"],
+		});
+		const agent = new LlmAgent({
+			name: "coder",
+			model: "gpt-4o",
+			codeExecutor: executor,
+		});
+		const llmRequest = new LlmRequest({
+			model: "gpt-4o",
+			contents: [
+				{
+					role: "model",
+					parts: [
+						{
+							codeExecutionResult: {
+								outcome: "OUTCOME_OK",
+								output: "first",
+							},
+						},
+						{ text: "trailing text keeps result structured" },
+					],
+				},
+			],
+		});
+
+		await collect(requestProcessor.runAsync(makeInvocation(agent), llmRequest));
+
+		expect(llmRequest.contents?.[0].role).toBe("model");
+		expect(
+			llmRequest.contents?.[0].parts?.[0]?.codeExecutionResult?.output,
+		).toBe("first");
+		expect(llmRequest.contents?.[0].parts?.[1]).toEqual({
+			text: "trailing text keeps result structured",
+		});
+	});
+
+	it("preprocess marks the csv file processed after a successful explore run", async () => {
+		const executor = new StubExecutor({
+			optimizeDataFile: true,
+			codeBlockDelimiters: [["```python\n", "\n```"]],
+			executionResultDelimiters: ["```tool_outputs\n", "\n```"],
+		});
+		const agent = new LlmAgent({
+			name: "coder",
+			model: "gpt-4o",
+			codeExecutor: executor,
+		});
+		const state = State.create({}, {});
+		const llmRequest = new LlmRequest({
+			model: "gpt-4o",
+			contents: [
+				{
+					role: "user",
+					parts: [
+						{ text: "analyze" },
+						{ inlineData: { mimeType: "text/csv", data: "a,b\n1,2" } },
+					],
+				},
+			],
+		});
+
+		await collect(
+			requestProcessor.runAsync(
+				makeInvocation(agent, {
+					session: {
+						id: "sess-1",
+						appName: "app",
+						userId: "u",
+						state,
+						events: [],
+					},
+				}),
+				llmRequest,
+			),
+		);
+
+		const ctx = new CodeExecutorContext(state);
+		expect(ctx.getProcessedFileNames()).toContain("data_1_2.csv");
+		expect(ctx.getInputFiles().map((f) => f.name)).toContain("data_1_2.csv");
+	});
+
+	it("response path with default delimiters extracts tool_code style blocks", async () => {
+		const executor = new StubExecutor();
+		const agent = new LlmAgent({
+			name: "coder",
+			model: "gpt-4o",
+			codeExecutor: executor,
+		});
+
+		const events = await collect(
+			responseProcessor.runAsync(makeInvocation(agent), {
+				partial: false,
+				content: {
+					role: "model",
+					parts: [{ text: "`tool_code\nprint('default')\n`" }],
+				},
+			} as LlmResponse),
+		);
+
+		expect(executor.executeCode).toHaveBeenCalledOnce();
+		expect(executor.executeCode.mock.calls[0][1].code).toContain(
+			"print('default')",
+		);
+		expect(events).toHaveLength(2);
+	});
+
+	it("skips inline image data and only replaces supported csv mime types", async () => {
+		const state = State.create({}, {});
+		const ctx = new CodeExecutorContext(state);
+		const llmRequest = new LlmRequest({
+			contents: [
+				{
+					role: "user",
+					parts: [
+						{ inlineData: { mimeType: "image/jpeg", data: "jpg" } },
+						{ inlineData: { mimeType: "text/csv", data: "h\n1" } },
+						{ inlineData: { mimeType: "application/json", data: "{}" } },
+					],
+				},
+			],
+		});
+
+		const files = extractAndReplaceInlineFiles(ctx, llmRequest);
+		expect(files).toHaveLength(1);
+		expect(files[0].name).toBe("data_1_2.csv");
+		expect(llmRequest.contents?.[0].parts?.[0]?.inlineData?.mimeType).toBe(
+			"image/jpeg",
+		);
+		expect(llmRequest.contents?.[0].parts?.[2]?.inlineData?.mimeType).toBe(
+			"application/json",
+		);
+	});
+
+	it("postProcess includes stateDelta from the code executor context", async () => {
+		const state = State.create({}, {});
+		const ctx = new CodeExecutorContext(state);
+		ctx.updateCodeExecutionResult("inv-delta", "print(1)", "1", "");
+		const saveArtifact = vi.fn(async () => 1);
+
+		const event = await postProcessCodeExecutionResult(
+			{
+				agent: { name: "coder" },
+				session: {
+					id: "s1",
+					appName: "app",
+					userId: "u",
+					state: {},
+					events: [],
+				},
+				invocationId: "inv-delta",
+				appName: "app",
+				userId: "u",
+				artifactService: { saveArtifact },
+			} as unknown as InvocationContext,
+			ctx,
+			{ stdout: "1", stderr: "", outputFiles: [] },
+		);
+
+		expect(event.actions.stateDelta).toEqual(ctx.getStateDelta());
+		expect(Object.keys(event.actions.stateDelta).length).toBeGreaterThan(0);
+	});
 });
