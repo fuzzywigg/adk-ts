@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { FileOperationsTool } from "../../../tools/common/file-operations-tool";
 import type { ToolContext } from "../../../tools/tool-context";
 
@@ -472,5 +472,205 @@ describe("FileOperationsTool", () => {
 			makeContext(),
 		);
 		expect(readResult.data).toBe("new");
+	});
+
+	it("stringifies non-Error throws from fs.readFile", async () => {
+		const spy = vi.spyOn(fs, "readFile").mockRejectedValue("disk-gone");
+		const result = await tool.runAsync(
+			{ operation: "read", filepath: "x.txt" },
+			makeContext(),
+		);
+		expect(result).toEqual({
+			success: false,
+			error: "Failed to read file: disk-gone",
+		});
+		spy.mockRestore();
+	});
+
+	it("stringifies non-Error throws from fs.writeFile", async () => {
+		const spy = vi.spyOn(fs, "writeFile").mockRejectedValue("write-denied");
+		const result = await tool.runAsync(
+			{ operation: "write", filepath: "x.txt", content: "hi" },
+			makeContext(),
+		);
+		expect(result).toEqual({
+			success: false,
+			error: "Failed to write to file: write-denied",
+		});
+		spy.mockRestore();
+	});
+
+	it("stringifies non-Error throws from fs.appendFile", async () => {
+		const spy = vi.spyOn(fs, "appendFile").mockRejectedValue({ code: "EIO" });
+		const result = await tool.runAsync(
+			{ operation: "append", filepath: "x.txt", content: "more" },
+			makeContext(),
+		);
+		expect(result.success).toBe(false);
+		expect(result.error).toBe("Failed to append to file: [object Object]");
+		spy.mockRestore();
+	});
+
+	it("stringifies non-Error throws from fs.unlink", async () => {
+		const spy = vi.spyOn(fs, "unlink").mockRejectedValue(404);
+		const result = await tool.runAsync(
+			{ operation: "delete", filepath: "x.txt" },
+			makeContext(),
+		);
+		expect(result).toEqual({
+			success: false,
+			error: "Failed to delete file: 404",
+		});
+		spy.mockRestore();
+	});
+
+	it("stringifies non-Error throws from fs.readdir", async () => {
+		const spy = vi.spyOn(fs, "readdir").mockRejectedValue("not-a-dir");
+		const result = await tool.runAsync(
+			{ operation: "list", filepath: "." },
+			makeContext(),
+		);
+		expect(result).toEqual({
+			success: false,
+			error: "Failed to list directory: not-a-dir",
+		});
+		spy.mockRestore();
+	});
+
+	it("stringifies non-Error throws from fs.mkdir during makeDirectory", async () => {
+		const spy = vi.spyOn(fs, "mkdir").mockRejectedValue("mkdir-blocked");
+		const result = await tool.runAsync(
+			{ operation: "mkdir", filepath: "new-dir" },
+			makeContext(),
+		);
+		expect(result).toEqual({
+			success: false,
+			error: "Failed to create directory: mkdir-blocked",
+		});
+		spy.mockRestore();
+	});
+
+	it("stringifies non-Error throws from the top-level runAsync catch", async () => {
+		const original = (tool as any).validatePath.bind(tool);
+		(tool as any).validatePath = () => {
+			throw "top-level-denied";
+		};
+		try {
+			const result = await tool.runAsync(
+				{ operation: "exists", filepath: "x.txt" },
+				makeContext(),
+			);
+			expect(result).toEqual({
+				success: false,
+				error: "top-level-denied",
+			});
+		} finally {
+			(tool as any).validatePath = original;
+		}
+	});
+});
+
+describe("FileOperationsTool non-Error throw matrices", () => {
+	it("stringifies non-Error throws from fs operations for each verb", async () => {
+		const fsPromises = await import("node:fs/promises");
+		const cases: Array<{
+			operation: string;
+			filepath: string;
+			content?: string;
+			spyOn:
+				| "readFile"
+				| "writeFile"
+				| "appendFile"
+				| "unlink"
+				| "readdir"
+				| "mkdir";
+			needle: string;
+		}> = [
+			{
+				operation: "read",
+				filepath: "r.txt",
+				spyOn: "readFile",
+				needle: "Failed to read file: boom-read",
+			},
+			{
+				operation: "write",
+				filepath: "w.txt",
+				content: "x",
+				spyOn: "writeFile",
+				needle: "Failed to write to file: boom-write",
+			},
+			{
+				operation: "append",
+				filepath: "a.txt",
+				content: "x",
+				spyOn: "appendFile",
+				needle: "Failed to append to file: boom-append",
+			},
+			{
+				operation: "delete",
+				filepath: "d.txt",
+				spyOn: "unlink",
+				needle: "Failed to delete file: boom-delete",
+			},
+			{
+				operation: "list",
+				filepath: ".",
+				spyOn: "readdir",
+				needle: "Failed to list directory: boom-list",
+			},
+			{
+				operation: "mkdir",
+				filepath: "m",
+				spyOn: "mkdir",
+				needle: "Failed to create directory: boom-mkdir",
+			},
+		];
+
+		for (const testCase of cases) {
+			const spy = vi
+				.spyOn(fsPromises, testCase.spyOn)
+				.mockRejectedValue(`boom-${testCase.operation}`);
+
+			const result = await tool.runAsync(
+				{
+					operation: testCase.operation as any,
+					filepath: testCase.filepath,
+					content: testCase.content,
+				},
+				makeContext(),
+			);
+
+			expect(result.success).toBe(false);
+			expect(result.error).toBe(testCase.needle);
+			spy.mockRestore();
+		}
+	});
+
+	it("stringifies non-Error throws from the outer runAsync catch", async () => {
+		const spy = vi.spyOn(tool as any, "resolvePath").mockImplementation(() => {
+			throw "path-boom";
+		});
+
+		const result = await tool.runAsync(
+			{ operation: "read", filepath: "x.txt" },
+			makeContext(),
+		);
+		expect(result).toEqual({ success: false, error: "path-boom" });
+		spy.mockRestore();
+	});
+
+	it("stringifies non-Error throws from fileExists via outer catch", async () => {
+		const existsSpy = vi
+			.spyOn(tool as any, "fileExists")
+			.mockImplementation(async () => {
+				throw "exists-boom";
+			});
+
+		const result = await tool.runAsync(
+			{ operation: "exists", filepath: "z.txt" },
+			makeContext(),
+		);
+		expect(result).toEqual({ success: false, error: "exists-boom" });
+		existsSpy.mockRestore();
 	});
 });

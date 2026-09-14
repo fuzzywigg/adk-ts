@@ -582,4 +582,58 @@ describe("AgentTool", () => {
 			"chosen",
 		);
 	});
+
+	it("falls back when agent instruction is a non-string object", () => {
+		const agent = makeStubAgent({
+			description: "Agent object-instruction fallback",
+		});
+		(agent as { instruction: unknown }).instruction = {
+			kind: "dynamic",
+			resolve: async () => "x",
+		};
+		const tool = new AgentTool({
+			name: "obj_instruction",
+			description: "Tool-level description",
+			agent,
+		});
+
+		expect(tool.getDeclaration().description).toBe("Tool-level description");
+	});
+
+	it("uses agent-derived description when instruction is a number", () => {
+		const agent = makeStubAgent({
+			description: "from-agent-desc",
+		});
+		(agent as { instruction: unknown }).instruction = 42;
+		const tool = new AgentTool({ name: "num_instruction", agent });
+
+		expect(tool.getDeclaration().description).toBe("from-agent-desc");
+	});
+
+	it("still runs when agent instruction is non-string", async () => {
+		const agent = makeStubAgent({
+			runAsync: async function* () {
+				yield new Event({
+					author: "stub_agent",
+					content: { role: "model", parts: [{ text: "ran" }] },
+				});
+			},
+		});
+		(agent as { instruction: unknown }).instruction = async () => "dynamic";
+		const tool = new AgentTool({ name: "dyn_run", agent });
+		const { context } = makeToolContext(agent);
+
+		await expect(tool.runAsync({ input: "x" }, context)).resolves.toBe("ran");
+	});
+
+	it("wraps failure when swapped agent cannot runAsync (non-LlmAgent shape)", async () => {
+		const agent = makeStubAgent();
+		const tool = new AgentTool({ name: "plain_agent", agent });
+		const { context } = makeToolContext(agent);
+		(tool as any).agent = { name: "plain", description: "not an llm agent" };
+
+		await expect(tool.runAsync({ input: "x" }, context)).rejects.toThrow(
+			/Agent tool execution failed:/,
+		);
+	});
 });
