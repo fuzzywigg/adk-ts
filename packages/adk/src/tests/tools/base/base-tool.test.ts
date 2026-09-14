@@ -969,3 +969,82 @@ describe("BaseTool", () => {
 		expect(tool.validateArguments({ anything: true })).toBe(true);
 	});
 });
+
+describe("BaseTool leftover processLlmRequest and safeExecute edges", () => {
+	it("initializes functionDeclarations when a getter flips from present to missing", async () => {
+		class DeclTool extends BaseTool {
+			getDeclaration() {
+				return {
+					name: this.name,
+					description: this.description,
+					parameters: {
+						type: Type.OBJECT,
+						properties: {},
+					},
+				};
+			}
+			async runAsync() {
+				return {};
+			}
+		}
+
+		const tool = new DeclTool({
+			name: "flip_decl",
+			description: "Flips functionDeclarations visibility",
+		});
+		const request = new LlmRequest({
+			config: {
+				tools: [{} as any],
+			},
+		});
+
+		let reads = 0;
+		Object.defineProperty(request.config!.tools![0], "functionDeclarations", {
+			configurable: true,
+			enumerable: true,
+			get() {
+				reads++;
+				// findToolWithFunctionDeclarations reads twice (truthy + length)
+				if (reads <= 2) {
+					return [{ name: "seed" }];
+				}
+				return undefined;
+			},
+			set(value) {
+				Object.defineProperty(
+					request.config!.tools![0],
+					"functionDeclarations",
+					{
+						configurable: true,
+						enumerable: true,
+						writable: true,
+						value,
+					},
+				);
+			},
+		});
+
+		await tool.processLlmRequest(makeContext(), request);
+		expect((request.config?.tools?.[0] as any).functionDeclarations).toEqual(
+			expect.arrayContaining([expect.objectContaining({ name: "flip_decl" })]),
+		);
+	});
+
+	it('safeExecute uses "Unknown error occurred" when the retry loop never runs', async () => {
+		const tool = new StubTool({
+			name: "never_runs",
+			description: "Negative max retries skips the loop",
+			shouldRetryOnFailure: true,
+			maxRetryAttempts: -1,
+		});
+		const error = vi.spyOn(console, "error").mockImplementation(() => {});
+		const result = await tool.safeExecute({ query: "x" }, makeContext());
+		expect(result).toEqual({
+			error: "Execution failed",
+			message: "Unknown error occurred",
+			tool: "never_runs",
+		});
+		expect(error).not.toHaveBeenCalled();
+		error.mockRestore();
+	});
+});
