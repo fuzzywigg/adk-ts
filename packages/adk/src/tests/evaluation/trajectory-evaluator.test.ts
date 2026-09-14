@@ -275,4 +275,45 @@ describe("TrajectoryEvaluator", () => {
 		const result = await evaluator.evaluateInvocations([actual], [expected]);
 		expect(result.overallScore).toBe(0);
 	});
+
+	it("passes empty tool trajectories as a perfect match", async () => {
+		const empty = invocation({
+			toolUses: [],
+			intermediateResponses: [],
+		});
+		const result = await evaluator.evaluateInvocations([empty], [empty]);
+		expect(result.overallScore).toBe(1);
+		expect(result.overallEvalStatus).toBe(EvalStatus.PASSED);
+	});
+
+	it("fails when tool counts differ even if names overlap", async () => {
+		const actual = invocation({
+			toolUses: [
+				{ name: "search", args: { q: "a" } },
+				{ name: "search", args: { q: "b" } },
+			],
+			intermediateResponses: [],
+		});
+		const expected = invocation({
+			toolUses: [{ name: "search", args: { q: "a" } }],
+			intermediateResponses: [],
+		});
+		const result = await evaluator.evaluateInvocations([actual], [expected]);
+		expect(result.overallScore).toBe(0);
+		expect(result.overallEvalStatus).toBe(EvalStatus.FAILED);
+	});
+
+	it("matches tools when arg values are deeply equal objects", async () => {
+		const actual = invocation({
+			toolUses: [{ name: "write", args: { meta: { a: 1, b: [2] } } }],
+			intermediateResponses: [],
+		});
+		const expected = invocation({
+			toolUses: [{ name: "write", args: { meta: { a: 1, b: [2] } } }],
+			intermediateResponses: [],
+		});
+		const result = await evaluator.evaluateInvocations([actual], [expected]);
+		expect(result.overallScore).toBe(1);
+		expect(result.overallEvalStatus).toBe(EvalStatus.PASSED);
+	});
 });

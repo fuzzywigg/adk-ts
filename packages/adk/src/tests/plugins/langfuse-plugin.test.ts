@@ -1468,4 +1468,45 @@ describe("LangfusePlugin", () => {
 
 		expect((plugin as any).modelsUsed.size).toBe(0);
 	});
+
+	it("afterRunCallback handles Event results without content via instanceof branch", async () => {
+		const plugin = new LangfusePlugin({ publicKey: "pk", secretKey: "sk" });
+		const inv = makeInvocation({ invocationId: "inv-event-result" });
+		await plugin.beforeRunCallback({ invocationContext: inv });
+
+		const serializeSpy = vi.spyOn(plugin as any, "serializeContent");
+		const plainSpy = vi.spyOn(plugin as any, "toPlainText");
+		const bareEvent = new Event({ author: "agent" });
+
+		await plugin.afterRunCallback({
+			invocationContext: inv,
+			result: bareEvent,
+		});
+
+		expect(bareEvent instanceof Event).toBe(true);
+		expect(serializeSpy).toHaveBeenCalledWith(bareEvent.content);
+		expect(plainSpy).toHaveBeenCalledWith(bareEvent.content);
+		serializeSpy.mockRestore();
+		plainSpy.mockRestore();
+	});
+
+	it("toPlainText unwraps duck objects with nested content property", async () => {
+		const plugin = new LangfusePlugin({ publicKey: "pk", secretKey: "sk" });
+		const inv = makeInvocation({ invocationId: "inv-nested-content" });
+		await plugin.beforeRunCallback({ invocationContext: inv });
+		updateMock.mockClear();
+
+		await plugin.afterRunCallback({
+			invocationContext: inv,
+			result: {
+				content: { role: "model", parts: [{ text: "nested-plain" }] },
+			},
+		});
+
+		expect(updateMock).toHaveBeenCalledWith(
+			expect.objectContaining({
+				output: "nested-plain",
+			}),
+		);
+	});
 });

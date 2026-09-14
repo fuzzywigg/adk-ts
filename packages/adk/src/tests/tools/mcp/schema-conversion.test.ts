@@ -326,4 +326,17 @@ describe("schema-conversion", () => {
 			title: "x",
 		});
 	});
+
+	it("infers OBJECT when schema only has a description hint", () => {
+		expect(normalizeJsonSchema({ description: "opaque blob" })).toEqual({
+			type: Type.OBJECT,
+			description: "opaque blob",
+		});
+	});
+
+	it("infers OBJECT for empty schemas with no structural hints", () => {
+		expect(normalizeJsonSchema({})).toEqual({
+			type: Type.OBJECT,
+		});
+	});
 });

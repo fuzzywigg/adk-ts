@@ -667,5 +667,34 @@ describe("AnthropicLlm", () => {
 			expect(response.finishReason).toBe("STOP");
 			expect(response.usageMetadata?.totalTokenCount).toBe(6);
 		});
+
+		it("forwards non-array message content from contentToAnthropicMessage", async () => {
+			vi.spyOn(
+				anthropicLlm as any,
+				"contentToAnthropicMessage",
+			).mockReturnValue({
+				role: "user",
+				content: "plain string content",
+			});
+
+			const request = {
+				contents: [{ role: "user", parts: [{ text: "ignored" }] }],
+				config: {},
+				getSystemInstructionText: vi.fn().mockReturnValue(""),
+			} as unknown as LlmRequest;
+
+			await anthropicLlm["generateContentAsyncImpl"](request).next();
+
+			expect(mockMessagesCreate).toHaveBeenCalledWith(
+				expect.objectContaining({
+					messages: [
+						{
+							role: "user",
+							content: "plain string content",
+						},
+					],
+				}),
+			);
+		});
 	});
 });

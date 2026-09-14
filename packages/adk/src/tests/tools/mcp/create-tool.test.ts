@@ -273,4 +273,61 @@ describe("convertMcpToolToBaseTool", () => {
 			spy.mockRestore();
 		}
 	});
+
+	it("wraps non-McpError constructor failures as INVALID_SCHEMA_ERROR", async () => {
+		await expect(
+			convertMcpToolToBaseTool({
+				mcpTool: new Proxy(
+					{},
+					{
+						get() {
+							throw new Error("adapter boom");
+						},
+					},
+				) as any,
+			}),
+		).rejects.toMatchObject({
+			name: "McpError",
+			type: McpErrorType.INVALID_SCHEMA_ERROR,
+			message: expect.stringContaining("Failed to create tool from MCP tool"),
+		});
+	});
+
+	it("rethrows McpError thrown while constructing the adapter", async () => {
+		await expect(
+			convertMcpToolToBaseTool({
+				mcpTool: new Proxy(
+					{},
+					{
+						get() {
+							throw new McpError("typed ctor", McpErrorType.CONNECTION_ERROR);
+						},
+					},
+				) as any,
+			}),
+		).rejects.toMatchObject({
+			name: "McpError",
+			type: McpErrorType.CONNECTION_ERROR,
+			message: "typed ctor",
+		});
+	});
+
+	it("wraps non-Error constructor throws via String()", async () => {
+		await expect(
+			convertMcpToolToBaseTool({
+				mcpTool: new Proxy(
+					{},
+					{
+						get() {
+							throw "string-ctor-fail";
+						},
+					},
+				) as any,
+			}),
+		).rejects.toMatchObject({
+			name: "McpError",
+			type: McpErrorType.INVALID_SCHEMA_ERROR,
+			message: expect.stringContaining("string-ctor-fail"),
+		});
+	});
 });

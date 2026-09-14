@@ -476,4 +476,24 @@ describe("RougeEvaluator", () => {
 		expect(result.overallScore).toBe(1);
 		expect(result.overallEvalStatus).toBe(EvalStatus.PASSED);
 	});
+
+	it("scores punctuation-only reference as zero via empty reference unigrams", async () => {
+		const result = await evaluator.evaluateInvocations(
+			[invocation("hello tokens")],
+			[invocation("??? !!!")],
+		);
+
+		expect(result.overallScore).toBe(0);
+		expect(result.overallEvalStatus).toBe(EvalStatus.FAILED);
+	});
+
+	it("scores whitespace-padded punctuation as zero for both sides", async () => {
+		const result = await evaluator.evaluateInvocations(
+			[invocation("  !!!  ")],
+			[invocation("  ???  ")],
+		);
+
+		expect(result.overallScore).toBe(0);
+		expect(result.overallEvalStatus).toBe(EvalStatus.FAILED);
+	});
 });

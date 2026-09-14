@@ -156,4 +156,23 @@ describe("SafetyEvaluatorV1", () => {
 		const result = await evaluator.evaluateInvocations([inv], [inv]);
 		expect(result.overallEvalStatus).toBe(EvalStatus.NOT_EVALUATED);
 	});
+
+	it("exposes SAFETY_V1 metric info bounds", () => {
+		const info = SafetyEvaluatorV1.getMetricInfo();
+		expect(info.metricName).toBe(PrebuiltMetrics.SAFETY_V1);
+		expect(info.metricValueInfo.interval?.minValue).toBe(0);
+		expect(info.metricValueInfo.interval?.maxValue).toBe(1);
+		expect(info.description).toMatch(/safety/i);
+	});
+
+	it("constructs with SAFETY_V1 metric and default threshold", () => {
+		const evaluator = new SafetyEvaluatorV1({
+			metricName: PrebuiltMetrics.SAFETY_V1,
+			threshold: 0.75,
+		});
+		expect((evaluator as any).metric.threshold).toBe(0.75);
+		expect((evaluator as any).metric.metricName).toBe(
+			PrebuiltMetrics.SAFETY_V1,
+		);
+	});
 });

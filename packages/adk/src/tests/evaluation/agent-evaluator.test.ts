@@ -1281,4 +1281,16 @@ describe("AgentEvaluator helper conversions", () => {
 	it("returns empty string for content without parts", () => {
 		expect((AgentEvaluator as any)._convertContentToText({})).toBe("");
 	});
+
+	it("rejects device paths that are neither files nor directories", async () => {
+		await expect(
+			(AgentEvaluator as any)._loadDataset("/dev/null"),
+		).rejects.toThrow(/Invalid input path: \/dev\/null/);
+	});
+
+	it("rejects socket-like character devices under /dev", async () => {
+		await expect(
+			(AgentEvaluator as any)._loadDataset("/dev/zero"),
+		).rejects.toThrow(/Invalid input path/);
+	});
 });

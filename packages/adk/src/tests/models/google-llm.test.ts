@@ -720,5 +720,122 @@ describe("GoogleLlm", () => {
 				),
 			).toBe(false);
 		});
+
+		it("yields final STOP leftover with both thought and text buffers", async () => {
+			const stream = (async function* () {
+				yield {
+					candidates: [
+						{
+							content: {
+								parts: [{ text: "think-", thought: true }],
+							},
+						},
+					],
+					usageMetadata: { totalTokenCount: 1 },
+				};
+				yield {
+					candidates: [
+						{
+							content: {
+								parts: [{ text: "ing", thought: true }],
+							},
+						},
+					],
+					usageMetadata: { totalTokenCount: 2 },
+				};
+				yield {
+					candidates: [
+						{
+							content: { parts: [{ text: "answer" }] },
+							finishReason: "STOP",
+						},
+					],
+					usageMetadata: { totalTokenCount: 3 },
+				};
+			})();
+
+			const generateContentStream = vi.fn().mockResolvedValue(stream);
+			(GoogleGenAI as unknown as ReturnType<typeof vi.fn>).mockImplementation(
+				() => ({
+					models: {
+						generateContent: vi.fn(),
+						generateContentStream,
+					},
+				}),
+			);
+
+			const llm = new GoogleLlm();
+			const responses: any[] = [];
+			for await (const response of (llm as any).generateContentAsyncImpl(
+				{
+					contents: [{ role: "user", parts: [{ text: "q" }] }],
+					config: {},
+				},
+				true,
+			)) {
+				responses.push(response);
+			}
+
+			const leftover = responses.find(
+				(r) =>
+					!r.partial &&
+					r.content?.parts?.length === 2 &&
+					(r.content.parts[0] as any).thought === true &&
+					r.content.parts[0].text === "think-ing" &&
+					r.content.parts[1].text === "answer",
+			);
+			expect(leftover).toBeTruthy();
+			expect(leftover?.usageMetadata?.totalTokenCount).toBe(3);
+		});
+
+		it("yields final STOP leftover for a single text chunk that already carries STOP", async () => {
+			const stream = (async function* () {
+				yield {
+					candidates: [
+						{
+							content: { parts: [{ text: "done" }] },
+							finishReason: "STOP",
+						},
+					],
+					usageMetadata: { totalTokenCount: 1 },
+				};
+			})();
+
+			const generateContentStream = vi.fn().mockResolvedValue(stream);
+			(GoogleGenAI as unknown as ReturnType<typeof vi.fn>).mockImplementation(
+				() => ({
+					models: {
+						generateContent: vi.fn(),
+						generateContentStream,
+					},
+				}),
+			);
+
+			const llm = new GoogleLlm();
+			const responses: any[] = [];
+			for await (const response of (llm as any).generateContentAsyncImpl(
+				{
+					contents: [{ role: "user", parts: [{ text: "q" }] }],
+					config: {},
+				},
+				true,
+			)) {
+				responses.push(response);
+			}
+
+			expect(
+				responses.some(
+					(r) => r.partial && r.content?.parts?.[0]?.text === "done",
+				),
+			).toBe(true);
+			expect(
+				responses.some(
+					(r) =>
+						!r.partial &&
+						r.content?.parts?.length === 1 &&
+						r.content.parts[0].text === "done",
+				),
+			).toBe(true);
+		});
 	});
 });

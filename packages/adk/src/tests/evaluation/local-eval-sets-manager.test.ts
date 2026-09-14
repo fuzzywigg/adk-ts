@@ -1,7 +1,7 @@
 import { promises as fs } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { EvalCase } from "../../evaluation/eval-case";
 import type { EvalSet } from "../../evaluation/eval-set";
 import { LocalEvalSetsManager } from "../../evaluation/local-eval-sets-manager";
@@ -287,5 +287,18 @@ describe("LocalEvalSetsManager", () => {
 		await manager.deleteEvalCase(appName, "set-1", "drop");
 		const fetched = await manager.getEvalSet(appName, "set-1");
 		expect(fetched?.evalCases.map((c) => c.evalId)).toEqual(["keep"]);
+	});
+
+	it("listEvalSets returns [] when readdir yields ENOENT after mkdir race", async () => {
+		const evalSetsPath = path.join(basePath, appName, "eval_sets");
+		await fs.mkdir(evalSetsPath, { recursive: true });
+		const readdirSpy = vi
+			.spyOn(fs, "readdir")
+			.mockRejectedValueOnce(
+				Object.assign(new Error("gone"), { code: "ENOENT" }),
+			);
+
+		await expect(manager.listEvalSets(appName)).resolves.toEqual([]);
+		readdirSpy.mockRestore();
 	});
 });
