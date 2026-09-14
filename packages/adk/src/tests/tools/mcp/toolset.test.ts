@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { McpErrorType } from "../../../tools/mcp/types";
+import { McpError, McpErrorType } from "../../../tools/mcp/types";
 
 const initialize = vi.fn();
 const close = vi.fn();
@@ -7,23 +7,22 @@ const setSamplingHandler = vi.fn();
 const removeSamplingHandler = vi.fn();
 const listTools = vi.fn();
 const callTool = vi.fn();
+const convertMcpToolToBaseTool = vi.fn();
+const McpClientServiceMock = vi.fn();
 
 vi.mock("../../../tools/mcp/client", () => ({
-	McpClientService: vi.fn(function McpClientService() {
-		return {
-			initialize: async () => {
-				await initialize();
-				return {
-					listTools,
-					callTool,
-				};
-			},
-			close,
-			setSamplingHandler,
-			removeSamplingHandler,
-		};
-	}),
+	McpClientService: McpClientServiceMock,
 }));
+
+vi.mock("../../../tools/mcp/create-tool", async (importOriginal) => {
+	const actual =
+		await importOriginal<typeof import("../../../tools/mcp/create-tool")>();
+	return {
+		...actual,
+		convertMcpToolToBaseTool: (...args: unknown[]) =>
+			convertMcpToolToBaseTool(...args),
+	};
+});
 
 const { McpToolset, getMcpTools } = await import("../../../tools/mcp");
 
@@ -37,6 +36,13 @@ const baseConfig = {
 	},
 };
 
+function fakeBaseTool(name: string) {
+	return {
+		name,
+		description: `${name} tool`,
+	} as any;
+}
+
 beforeEach(() => {
 	initialize.mockReset();
 	close.mockReset();
@@ -44,6 +50,9 @@ beforeEach(() => {
 	removeSamplingHandler.mockReset();
 	listTools.mockReset();
 	callTool.mockReset();
+	convertMcpToolToBaseTool.mockReset();
+	McpClientServiceMock.mockReset();
+
 	initialize.mockResolvedValue(undefined);
 	close.mockResolvedValue(undefined);
 	listTools.mockResolvedValue({
@@ -59,6 +68,24 @@ beforeEach(() => {
 				inputSchema: { type: "object", properties: {} },
 			},
 		],
+	});
+	convertMcpToolToBaseTool.mockImplementation(async ({ mcpTool }: any) =>
+		fakeBaseTool(mcpTool.name),
+	);
+
+	McpClientServiceMock.mockImplementation(function McpClientService() {
+		return {
+			initialize: async () => {
+				await initialize();
+				return {
+					listTools,
+					callTool,
+				};
+			},
+			close,
+			setSamplingHandler,
+			removeSamplingHandler,
+		};
 	});
 });
 
@@ -83,6 +110,15 @@ describe("McpToolset offline helpers", () => {
 		);
 		expect((byFn as any).isSelected({ name: "ok_one" })).toBe(true);
 		expect((byFn as any).isSelected({ name: "nope" })).toBe(false);
+	});
+
+	it("isSelected falls through to true for non-array non-function filters", () => {
+		const toolset = new McpToolset(baseConfig);
+		(toolset as any).toolFilter = "not-a-real-filter";
+		expect((toolset as any).isSelected({ name: "anything" })).toBe(true);
+
+		(toolset as any).toolFilter = 42;
+		expect((toolset as any).isSelected({ name: "still-ok" })).toBe(true);
 	});
 
 	it("convertADKToolsToMCP maps tool declarations", () => {
@@ -164,6 +200,51 @@ describe("McpToolset offline helpers", () => {
 		});
 	});
 
+	it("getTools rethrows existing McpError instances unchanged", async () => {
+		const original = new McpError(
+			"typed list failure",
+			McpErrorType.CONNECTION_ERROR,
+		);
+		listTools.mockRejectedValue(original);
+		const toolset = new McpToolset(baseConfig);
+		await expect(toolset.getTools()).rejects.toBe(original);
+	});
+
+	it("getTools continues when individual tool conversion fails", async () => {
+		listTools.mockResolvedValue({
+			tools: [
+				{
+					name: "bad",
+					description: "fails conversion",
+					inputSchema: { type: "object", properties: {} },
+				},
+				{
+					name: "good",
+					description: "succeeds",
+					inputSchema: { type: "object", properties: {} },
+				},
+			],
+		});
+		convertMcpToolToBaseTool.mockImplementation(async ({ mcpTool }: any) => {
+			if (mcpTool.name === "bad") {
+				throw new Error("schema boom");
+			}
+			return fakeBaseTool(mcpTool.name);
+		});
+		const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+		const toolset = new McpToolset(baseConfig);
+		const tools = await toolset.getTools();
+
+		expect(tools).toHaveLength(1);
+		expect(tools[0].name).toBe("good");
+		expect(errorSpy).toHaveBeenCalledWith(
+			expect.stringContaining('Failed to create tool from MCP tool "bad"'),
+			expect.any(Error),
+		);
+		errorSpy.mockRestore();
+	});
+
 	it("does not cache tools when cacheConfig.enabled is false", async () => {
 		const toolset = new McpToolset({
 			...baseConfig,
@@ -175,12 +256,55 @@ describe("McpToolset offline helpers", () => {
 		expect(listTools).toHaveBeenCalledTimes(2);
 	});
 
+	it("does not early-return cached tools when cacheConfig.enabled is undefined", async () => {
+		const toolset = new McpToolset(baseConfig);
+		(toolset as any).tools = [fakeBaseTool("stale")];
+
+		await toolset.getTools();
+		expect(listTools).toHaveBeenCalledTimes(1);
+		expect((toolset as any).tools.map((t: any) => t.name)).toEqual([
+			"keep",
+			"drop",
+		]);
+	});
+
 	it("close and dispose are idempotent", async () => {
 		const toolset = new McpToolset(baseConfig);
 		await toolset.close();
 		await toolset.close();
 		await toolset.dispose();
 		expect(close).toHaveBeenCalled();
+	});
+
+	it("close logs success when debug is enabled", async () => {
+		const log = vi.spyOn(console, "log").mockImplementation(() => {});
+		const toolset = new McpToolset({ ...baseConfig, debug: true });
+		await toolset.close();
+		expect(log).toHaveBeenCalledWith(
+			expect.stringContaining("MCP toolset closed successfully"),
+		);
+		log.mockRestore();
+	});
+
+	it("close logs errors from client close and clears isClosing", async () => {
+		close.mockRejectedValue(new Error("close boom"));
+		const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+		const toolset = new McpToolset(baseConfig);
+
+		await expect(toolset.close()).resolves.toBeUndefined();
+		expect(errorSpy).toHaveBeenCalledWith(
+			"Error closing MCP toolset:",
+			expect.any(Error),
+		);
+		expect((toolset as any).isClosing).toBe(false);
+		errorSpy.mockRestore();
+	});
+
+	it("close returns early while already closing", async () => {
+		const toolset = new McpToolset(baseConfig);
+		(toolset as any).isClosing = true;
+		await toolset.close();
+		expect(close).not.toHaveBeenCalled();
 	});
 
 	it("refreshTools clears cached tools before refetch", async () => {
@@ -210,6 +334,24 @@ describe("McpToolset offline helpers", () => {
 		log.mockRestore();
 	});
 
+	it("setSamplingHandler recreates clientService when nulled", () => {
+		const toolset = new McpToolset(baseConfig);
+		(toolset as any).clientService = null;
+		McpClientServiceMock.mockClear();
+
+		toolset.setSamplingHandler(vi.fn() as any);
+
+		expect(McpClientServiceMock).toHaveBeenCalledTimes(1);
+		expect(setSamplingHandler).toHaveBeenCalled();
+	});
+
+	it("removeSamplingHandler is a no-op when clientService is null", () => {
+		const toolset = new McpToolset(baseConfig);
+		(toolset as any).clientService = null;
+		expect(() => toolset.removeSamplingHandler()).not.toThrow();
+		expect(removeSamplingHandler).not.toHaveBeenCalled();
+	});
+
 	it("getMcpTools fetches then closes the temporary toolset", async () => {
 		const tools = await getMcpTools(baseConfig, ["keep"]);
 		expect(tools).toHaveLength(1);
@@ -217,10 +359,67 @@ describe("McpToolset offline helpers", () => {
 		expect(close).toHaveBeenCalled();
 	});
 
+	it("getMcpTools still returns tools when close rejects", async () => {
+		const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+		const closeSpy = vi
+			.spyOn(McpToolset.prototype, "close")
+			.mockRejectedValue(new Error("late close failure"));
+
+		try {
+			const tools = await getMcpTools(baseConfig, ["keep"]);
+			expect(tools).toHaveLength(1);
+			expect(errorSpy).toHaveBeenCalledWith(
+				"Error closing toolset:",
+				expect.any(Error),
+			);
+		} finally {
+			closeSpy.mockRestore();
+			errorSpy.mockRestore();
+		}
+	});
+
+	it("getMcpTools accepts predicate filters", async () => {
+		const tools = await getMcpTools(
+			baseConfig,
+			(tool: { name: string }) => tool.name === "drop",
+		);
+		expect(tools.map((t) => t.name)).toEqual(["drop"]);
+	});
+
 	it("recreates clientService when cleared before initialize", async () => {
 		const toolset = new McpToolset(baseConfig);
 		(toolset as any).clientService = null;
+		McpClientServiceMock.mockClear();
 		await toolset.initialize();
+		expect(McpClientServiceMock).toHaveBeenCalledTimes(1);
 		expect(initialize).toHaveBeenCalled();
+	});
+
+	it("getTools recreates clientService when nulled before listing", async () => {
+		const toolset = new McpToolset(baseConfig, ["keep"]);
+		(toolset as any).clientService = null;
+		McpClientServiceMock.mockClear();
+
+		const tools = await toolset.getTools();
+		expect(tools).toHaveLength(1);
+		expect(McpClientServiceMock).toHaveBeenCalled();
+		expect(listTools).toHaveBeenCalled();
+	});
+
+	it("passes ToolContext into predicate filters during getTools", async () => {
+		const seen: unknown[] = [];
+		const toolset = new McpToolset(baseConfig, (tool, context) => {
+			seen.push({ name: tool.name, context });
+			return tool.name === "keep";
+		});
+		const context = { invocationId: "inv-1" } as any;
+		const tools = await toolset.getTools(context);
+		expect(tools.map((t) => t.name)).toEqual(["keep"]);
+		expect(seen).toEqual(
+			expect.arrayContaining([
+				{ name: "keep", context },
+				{ name: "drop", context },
+			]),
+		);
 	});
 });

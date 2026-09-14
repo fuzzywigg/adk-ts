@@ -360,6 +360,208 @@ describe("GoogleLlm", () => {
 			).toBe(true);
 		});
 
+		it("aggregates thought parts separately from normal text during stream merges", async () => {
+			const stream = (async function* () {
+				yield {
+					candidates: [
+						{
+							content: {
+								parts: [{ text: "reason-", thought: true }],
+							},
+						},
+					],
+					usageMetadata: { totalTokenCount: 1 },
+				};
+				yield {
+					candidates: [
+						{
+							content: {
+								parts: [{ text: "ing", thought: true }],
+							},
+						},
+					],
+					usageMetadata: { totalTokenCount: 2 },
+				};
+				yield {
+					candidates: [{ content: { parts: [{ text: "answer" }] } }],
+					usageMetadata: { totalTokenCount: 3 },
+				};
+				yield {
+					candidates: [{ content: { parts: [] } }],
+					usageMetadata: { totalTokenCount: 3 },
+				};
+			})();
+
+			const generateContentStream = vi.fn().mockResolvedValue(stream);
+			(GoogleGenAI as unknown as ReturnType<typeof vi.fn>).mockImplementation(
+				() => ({
+					models: {
+						generateContent: vi.fn(),
+						generateContentStream,
+					},
+				}),
+			);
+
+			const llm = new GoogleLlm();
+			const responses: any[] = [];
+			for await (const response of (llm as any).generateContentAsyncImpl(
+				{
+					contents: [{ role: "user", parts: [{ text: "hi" }] }],
+					config: {},
+				},
+				true,
+			)) {
+				responses.push(response);
+			}
+
+			expect(
+				responses.some(
+					(r) =>
+						r.partial &&
+						r.content?.parts?.[0]?.text === "reason-" &&
+						(r.content?.parts?.[0] as any)?.thought === true,
+				),
+			).toBe(true);
+
+			const merged = responses.find(
+				(r) =>
+					!r.partial &&
+					Array.isArray(r.content?.parts) &&
+					r.content.parts.length === 2,
+			);
+			expect(merged?.content?.parts).toEqual([
+				{ text: "reason-ing", thought: true },
+				{ text: "answer" },
+			]);
+			expect(merged?.usageMetadata?.totalTokenCount).toBe(3);
+		});
+
+		it("yields leftover thought-only text on STOP finish reason", async () => {
+			const stream = (async function* () {
+				yield {
+					candidates: [
+						{
+							content: {
+								parts: [{ text: "ponder", thought: true }],
+							},
+						},
+					],
+					usageMetadata: { totalTokenCount: 1 },
+				};
+				yield {
+					candidates: [
+						{
+							content: { parts: [{ text: "" }] },
+							finishReason: "STOP",
+						},
+					],
+					usageMetadata: { totalTokenCount: 2 },
+				};
+			})();
+
+			const generateContentStream = vi.fn().mockResolvedValue(stream);
+			(GoogleGenAI as unknown as ReturnType<typeof vi.fn>).mockImplementation(
+				() => ({
+					models: {
+						generateContent: vi.fn(),
+						generateContentStream,
+					},
+				}),
+			);
+
+			const llm = new GoogleLlm();
+			const responses: any[] = [];
+			for await (const response of (llm as any).generateContentAsyncImpl(
+				{
+					contents: [{ role: "user", parts: [{ text: "think" }] }],
+					config: {},
+				},
+				true,
+			)) {
+				responses.push(response);
+			}
+
+			const leftover = responses.find(
+				(r) =>
+					!r.partial &&
+					r.content?.parts?.length === 1 &&
+					r.content.parts[0].text === "ponder" &&
+					(r.content.parts[0] as any).thought === true,
+			);
+			expect(leftover).toBeTruthy();
+			expect(leftover?.usageMetadata?.totalTokenCount).toBe(2);
+		});
+
+		it("skips merge yield when inlineData is present on an empty-text chunk", async () => {
+			const stream = (async function* () {
+				yield {
+					candidates: [{ content: { parts: [{ text: "pre" }] } }],
+					usageMetadata: { totalTokenCount: 1 },
+				};
+				yield {
+					candidates: [
+						{
+							content: {
+								parts: [
+									{
+										inlineData: {
+											mimeType: "image/png",
+											data: "abc",
+										},
+									},
+								],
+							},
+						},
+					],
+					usageMetadata: { totalTokenCount: 2 },
+				};
+				yield {
+					candidates: [
+						{
+							content: { parts: [{ text: "" }] },
+							finishReason: "STOP",
+						},
+					],
+					usageMetadata: { totalTokenCount: 3 },
+				};
+			})();
+
+			const generateContentStream = vi.fn().mockResolvedValue(stream);
+			(GoogleGenAI as unknown as ReturnType<typeof vi.fn>).mockImplementation(
+				() => ({
+					models: {
+						generateContent: vi.fn(),
+						generateContentStream,
+					},
+				}),
+			);
+
+			const llm = new GoogleLlm();
+			const responses: any[] = [];
+			for await (const response of (llm as any).generateContentAsyncImpl(
+				{
+					contents: [{ role: "user", parts: [{ text: "img" }] }],
+					config: {},
+				},
+				true,
+			)) {
+				responses.push(response);
+			}
+
+			const mergedPlain = responses.filter(
+				(r) =>
+					!r.partial &&
+					r.content?.parts?.[0]?.text === "pre" &&
+					r.content?.parts?.length === 1,
+			);
+			expect(mergedPlain.length).toBeGreaterThanOrEqual(1);
+			expect(
+				responses.some(
+					(r) => r.content?.parts?.[0]?.inlineData?.data === "abc",
+				),
+			).toBe(true);
+		});
+
 		it("uses the instance model when request.model is omitted", async () => {
 			const generateContent = vi.fn().mockResolvedValue({
 				candidates: [{ content: { parts: [{ text: "ok" }] } }],

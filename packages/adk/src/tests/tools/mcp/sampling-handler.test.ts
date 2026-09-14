@@ -298,4 +298,70 @@ describe("McpSamplingHandler", () => {
 			message: "typed",
 		});
 	});
+
+	it("wraps non-Error throws as SAMPLING_ERROR with string message", async () => {
+		const handler = new McpSamplingHandler(async () => {
+			throw "string-boom";
+		});
+		await expect(
+			handler.handleSamplingRequest(textRequest()),
+		).rejects.toMatchObject({
+			type: McpErrorType.SAMPLING_ERROR,
+			message: expect.stringContaining("string-boom"),
+		});
+	});
+
+	it("maps unknown content types and default media mime types via converter", () => {
+		const handler = new McpSamplingHandler(async () => "ok");
+		expect(
+			(handler as any).convertMcpContentToADKParts({
+				type: "weird-type",
+				text: "ignored",
+			}),
+		).toEqual([{ text: "[Unknown content type]" }]);
+
+		const imageParts = (handler as any).convertMcpContentToADKParts({
+			type: "image",
+			data: Buffer.from("img").toString("base64"),
+		});
+		expect(imageParts[0].inlineData).toEqual(
+			expect.objectContaining({
+				mimeType: "image/jpeg",
+				data: Buffer.from("img").toString("base64"),
+			}),
+		);
+
+		const audioParts = (handler as any).convertMcpContentToADKParts({
+			type: "audio",
+			data: Buffer.from("aud").toString("base64"),
+		});
+		expect(audioParts[0].inlineData).toEqual(
+			expect.objectContaining({
+				mimeType: "audio/mpeg",
+				data: Buffer.from("aud").toString("base64"),
+			}),
+		);
+	});
+
+	it("converts empty LlmResponse content into empty assistant text", async () => {
+		const handler = new McpSamplingHandler(async () => {
+			return { content: undefined } as any;
+		});
+		const result = await handler.handleSamplingRequest(textRequest());
+		expect(result).toMatchObject({
+			role: "assistant",
+			content: { type: "text", text: "" },
+		});
+	});
+
+	it("converts LlmResponse with empty parts array into empty text", async () => {
+		const handler = new McpSamplingHandler(async () => {
+			return { content: { parts: [] } } as any;
+		});
+		const result = await handler.handleSamplingRequest(textRequest());
+		expect(result).toMatchObject({
+			role: "assistant",
+			content: { type: "text", text: "" },
+		});
+	});
 });
