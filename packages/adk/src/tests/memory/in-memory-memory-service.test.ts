@@ -806,4 +806,49 @@ describe("InMemoryMemoryService", () => {
 		});
 		expect(hits.memories.map((m) => m.author)).toEqual(["a", "b"]);
 	});
+
+	it("skips events missing content or parts during search", async () => {
+		const service = new InMemoryMemoryService();
+		await service.addSessionToMemory(
+			makeSession({
+				events: [
+					{
+						author: "user",
+						timestamp: 1,
+						content: { parts: [{ text: "Keep Prague cold" }] },
+					} as any,
+				],
+			}),
+		);
+
+		const userSessions = (service as any)._sessionEvents.get("app/user") as Map<
+			string,
+			any[]
+		>;
+		const events = userSessions.get("session-1")!;
+		events.push({ author: "user", timestamp: 2 } as any);
+		events.push({ author: "user", timestamp: 3, content: {} } as any);
+		events.push({
+			author: "user",
+			timestamp: 4,
+			content: { parts: null },
+		} as any);
+		events.push({
+			author: "user",
+			timestamp: 5,
+			content: { parts: [{ text: "Prague should still match" }] },
+		} as any);
+
+		const hits = await service.searchMemory({
+			appName: "app",
+			userId: "user",
+			query: "prague",
+		});
+		expect(hits.memories).toHaveLength(2);
+		expect(
+			hits.memories.every((m) =>
+				m.content?.parts?.some((p) => p.text?.toLowerCase().includes("prague")),
+			),
+		).toBe(true);
+	});
 });

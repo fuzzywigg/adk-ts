@@ -2285,6 +2285,108 @@ describe("Runner.runAsync", () => {
 		await expect(gen.next()).rejects.toBe("string-boom");
 		expect(debugSpy).toHaveBeenCalled();
 	});
+
+	it("continues with findAgent(author) when the last session event is a function response", () => {
+		const child = new LlmAgent({
+			name: "fr_author_agent",
+			model: "gemini-2.0-flash-exp",
+		});
+		const root = new LlmAgent({
+			name: "root_agent",
+			model: "gemini-2.0-flash-exp",
+			subAgents: [child],
+		});
+		const localRunner = new Runner({
+			appName: "runner-app",
+			agent: root,
+			sessionService,
+		});
+
+		const callEvent = new Event({
+			author: "fr_author_agent",
+			content: {
+				role: "model",
+				parts: [
+					{
+						functionCall: {
+							id: "call_direct_fr",
+							name: "lookup",
+							args: {},
+						},
+					},
+				],
+			},
+		});
+		const responseEvent = new Event({
+			author: "user",
+			content: {
+				role: "user",
+				parts: [
+					{
+						functionResponse: {
+							id: "call_direct_fr",
+							name: "lookup",
+							response: { ok: true },
+						},
+					},
+				],
+			},
+		});
+		const session = {
+			id: "s-fr-find-agent",
+			appName: "runner-app",
+			userId: "u1",
+			state: {},
+			events: [callEvent, responseEvent],
+			lastUpdateTime: 0,
+		} as Session;
+
+		const findSpy = vi.spyOn(root, "findAgent");
+		const chosen = (localRunner as any)._findAgentToRun(session, root);
+
+		expect(findSpy).toHaveBeenCalledWith("fr_author_agent");
+		expect(chosen).toBe(child);
+	});
+
+	it("sets userContent to null when newMessage is omitted from the invocation context", () => {
+		const session = {
+			id: "s-omit-msg",
+			appName: "runner-app",
+			userId: "u1",
+			state: {},
+			events: [],
+			lastUpdateTime: 0,
+		} as Session;
+
+		const ctx = (runner as any)._newInvocationContext(session, {
+			runConfig: new RunConfig(),
+		});
+		expect(ctx.userContent).toBeNull();
+	});
+
+	it("runs with omitted newMessage and leaves userContent null on the agent context", async () => {
+		await sessionService.createSession("runner-app", "u1", {}, "s-omit-run");
+		let seenUserContent: unknown = "unset";
+		vi.spyOn(agent, "runAsync").mockImplementation(async function* (ctx) {
+			seenUserContent = ctx.userContent;
+			yield new Event({
+				author: "root_agent",
+				content: { role: "model", parts: [{ text: "no-user-msg" }] },
+			});
+		});
+
+		const events: Event[] = [];
+		for await (const event of runner.runAsync({
+			userId: "u1",
+			sessionId: "s-omit-run",
+			newMessage: undefined as any,
+		})) {
+			events.push(event);
+		}
+
+		expect(seenUserContent).toBeNull();
+		expect(events[0].content?.parts?.[0]?.text).toBe("no-user-msg");
+	});
 });
 
 describe("_findFunctionCallEventIfLastEventIsFunctionResponse leftovers", () => {

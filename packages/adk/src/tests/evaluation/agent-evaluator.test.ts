@@ -1293,4 +1293,27 @@ describe("AgentEvaluator helper conversions", () => {
 			(AgentEvaluator as any)._loadDataset("/dev/zero"),
 		).rejects.toThrow(/Invalid input path/);
 	});
+
+	it("wraps directory-loaded JSON objects that are not arrays", async () => {
+		const dir = await makeTempDir();
+		await fs.writeFile(
+			path.join(dir, "single.test.json"),
+			JSON.stringify({
+				query: "solo",
+				reference: "answer",
+				expected_tool_use: [],
+			}),
+		);
+
+		const loaded = await (AgentEvaluator as any)._loadDataset(dir);
+		expect(loaded).toEqual([
+			[
+				{
+					query: "solo",
+					reference: "answer",
+					expected_tool_use: [],
+				},
+			],
+		]);
+	});
 });

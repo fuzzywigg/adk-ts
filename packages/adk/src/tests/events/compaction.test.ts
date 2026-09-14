@@ -1718,6 +1718,50 @@ describe("Event Compaction", () => {
 			]);
 		});
 
+		it("falls back to timestamp 0 when invocation map lookup is missing", async () => {
+			const config: EventsCompactionConfig = {
+				compactionInterval: 1,
+				overlapSize: 0,
+			};
+
+			await sessionService.appendEvent(
+				session,
+				new Event({
+					invocationId: "inv-missing-ts",
+					author: "agent",
+					content: { parts: [{ text: "present" }] },
+					timestamp: 50,
+				}),
+			);
+			session = await refreshSession(session);
+
+			const originalGet = Map.prototype.get;
+			const spy = vi.spyOn(Map.prototype, "get").mockImplementation(function (
+				this: Map<unknown, unknown>,
+				key,
+			) {
+				const value = originalGet.call(this, key);
+				if (typeof key === "string" && typeof value === "number") {
+					return undefined;
+				}
+				return value;
+			});
+
+			try {
+				await runCompactionForSlidingWindow(
+					config,
+					session,
+					sessionService,
+					mockSummarizer,
+				);
+			} finally {
+				spy.mockRestore();
+			}
+
+			// (undefined || 0) > lastCompacted(0) is false, so compaction does not run
+			expect(mockSummarizer.maybeSummarizeEvents).not.toHaveBeenCalled();
+		});
+
 		it("ignores events without invocationId when building the invocation map", async () => {
 			const config: EventsCompactionConfig = {
 				compactionInterval: 2,
