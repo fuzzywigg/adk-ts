@@ -400,4 +400,56 @@ describe("PluginManager", () => {
 		);
 		expect(values).toHaveLength(12);
 	});
+
+	it("continues when a plugin has the callback method deleted", async () => {
+		const stripped = new TestPlugin("stripped", { ignored: true });
+		(stripped as { beforeRunCallback?: unknown }).beforeRunCallback = undefined;
+		expect(stripped.beforeRunCallback).toBeUndefined();
+
+		const answering = new TestPlugin("answering", { hit: true });
+		const manager = new PluginManager({
+			plugins: [stripped, answering],
+		});
+
+		await expect(
+			manager.runBeforeRunCallback({ invocationContext: {} as any }),
+		).resolves.toEqual({ hit: true });
+		expect(answering.beforeRunCalls).toBe(1);
+	});
+
+	it("close skips plugins with deleted close among plugins that implement it", async () => {
+		const close = vi.fn(async () => undefined);
+		const withClose = new ClosePlugin("with-close", close);
+		const withoutClose = new TestPlugin("without-close");
+		(withoutClose as { close?: unknown }).close = undefined;
+		expect(withoutClose.close).toBeUndefined();
+
+		const manager = new PluginManager({
+			plugins: [withoutClose, withClose],
+			closeTimeout: 1000,
+		});
+
+		await expect(manager.close()).resolves.toBeUndefined();
+		expect(close).toHaveBeenCalledOnce();
+	});
+
+	it("stringifies non-Error object throws in the wrapper message", async () => {
+		class ObjectThrowPlugin extends BasePlugin {
+			constructor() {
+				super("object-throw");
+			}
+			async beforeRunCallback(): Promise<any> {
+				throw { code: 42, reason: "nope" };
+			}
+		}
+		const manager = new PluginManager({
+			plugins: [new ObjectThrowPlugin()],
+		});
+
+		await expect(
+			manager.runBeforeRunCallback({ invocationContext: {} as any }),
+		).rejects.toThrow(
+			/Error in plugin 'object-throw' during 'beforeRunCallback' callback: \[object Object\]/,
+		);
+	});
 });

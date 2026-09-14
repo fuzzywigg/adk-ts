@@ -1509,4 +1509,156 @@ describe("LangfusePlugin", () => {
 			}),
 		);
 	});
+
+	it("toPlainText directly unwraps nested content wrappers and Event.content", () => {
+		const plugin = new LangfusePlugin({ publicKey: "pk", secretKey: "sk" });
+		const toPlainText = (plugin as any).toPlainText.bind(plugin);
+
+		expect(
+			toPlainText({
+				content: { role: "model", parts: [{ text: "direct-nested" }] },
+			}),
+		).toBe("direct-nested");
+
+		expect(
+			toPlainText({
+				content: {
+					content: { role: "model", parts: [{ text: "double-nested" }] },
+				},
+			}),
+		).toBe("double-nested");
+
+		const event = new Event({
+			author: "root",
+			content: { role: "model", parts: [{ text: "event-content" }] },
+		});
+		expect(toPlainText(event)).toBe("event-content");
+		expect(event.constructor.name).toBe("Event");
+	});
+
+	it("serializePart treats missing inlineData.data as dataSize 0", async () => {
+		const plugin = new LangfusePlugin({ publicKey: "pk", secretKey: "sk" });
+		const inv = makeInvocation({ invocationId: "inv-inline-missing" });
+		await plugin.beforeRunCallback({ invocationContext: inv });
+		eventMock.mockClear();
+
+		const event = new Event({
+			invocationId: "inv-inline-missing",
+			author: "root",
+			partial: true,
+			content: {
+				role: "user",
+				parts: [
+					{
+						inlineData: {
+							mimeType: "application/octet-stream",
+						},
+					},
+				],
+			},
+		});
+
+		await plugin.onEventCallback({ invocationContext: inv, event });
+		expect(eventMock).toHaveBeenCalledWith(
+			expect.objectContaining({
+				input: expect.objectContaining({
+					parts: [
+						expect.objectContaining({
+							inlineData: {
+								mimeType: "application/octet-stream",
+								dataSize: 0,
+							},
+						}),
+					],
+				}),
+			}),
+		);
+	});
+
+	it("recordTokenUsage treats nullish input/output/total as zero", async () => {
+		const plugin = new LangfusePlugin({ publicKey: "pk", secretKey: "sk" });
+		const inv = makeInvocation({ invocationId: "inv-nullish-tokens" });
+		const callbackContext = makeCallbackContext(inv);
+		await plugin.beforeAgentCallback({ agent: inv.agent, callbackContext });
+
+		const llmRequest = new LlmRequest({ model: "m-nullish" });
+		await plugin.beforeModelCallback({ callbackContext, llmRequest });
+		await plugin.afterModelCallback({
+			callbackContext,
+			llmRequest,
+			llmResponse: new LlmResponse({
+				content: { role: "model", parts: [{ text: "t" }] },
+				usageMetadata: {
+					promptTokenCount: undefined,
+					candidatesTokenCount: undefined,
+					totalTokenCount: undefined,
+				} as any,
+			}),
+		});
+
+		(plugin as any).recordTokenUsage("inv-nullish-tokens", {
+			input: null,
+			output: undefined,
+			total: null,
+		});
+
+		expect((plugin as any).tokenUsage.get("inv-nullish-tokens")).toEqual({
+			inputTokens: 0,
+			outputTokens: 0,
+			totalTokens: 0,
+		});
+
+		updateMock.mockClear();
+		await plugin.afterRunCallback({
+			invocationContext: inv,
+			result: "done",
+		});
+		expect(updateMock).toHaveBeenCalledWith(
+			expect.objectContaining({
+				metadata: expect.objectContaining({
+					usage: { input: 0, output: 0, total: 0 },
+				}),
+			}),
+		);
+	});
+
+	it("afterRunCallback prefers structured output when outputText is empty", async () => {
+		const plugin = new LangfusePlugin({ publicKey: "pk", secretKey: "sk" });
+		const inv = makeInvocation({ invocationId: "inv-empty-text" });
+		await plugin.beforeRunCallback({ invocationContext: inv });
+		updateMock.mockClear();
+
+		await plugin.afterRunCallback({
+			invocationContext: inv,
+			result: {
+				role: "model",
+				parts: [
+					{
+						inlineData: {
+							mimeType: "image/png",
+							data: "YQ==",
+						},
+					},
+				],
+			},
+		});
+
+		expect(updateMock).toHaveBeenCalledWith(
+			expect.objectContaining({
+				output: expect.objectContaining({
+					role: "model",
+					parts: [
+						expect.objectContaining({
+							inlineData: expect.objectContaining({
+								mimeType: "image/png",
+							}),
+						}),
+					],
+				}),
+				metadata: expect.objectContaining({
+					outputText: "",
+				}),
+			}),
+		);
+	});
 });

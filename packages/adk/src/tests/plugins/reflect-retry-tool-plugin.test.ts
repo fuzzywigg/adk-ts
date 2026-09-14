@@ -319,4 +319,55 @@ describe("ReflectAndRetryToolPlugin", () => {
 			}),
 		).rejects.toThrow(/Unknown scope: invalid-scope/);
 	});
+
+	it("uses ToolError on exceed path when error is nullish or nameless", async () => {
+		const plugin = new ReflectAndRetryToolPlugin({
+			maxRetries: 1,
+			throwExceptionIfRetryExceeded: false,
+		});
+		const tool = makeTool("nameless");
+		const toolContext = makeToolContext("inv-nameless");
+
+		await plugin.onToolErrorCallback({
+			tool,
+			toolArgs: {},
+			toolContext,
+			error: new Error("seed"),
+		});
+
+		const nullishExceeded = await plugin.onToolErrorCallback({
+			tool,
+			toolArgs: {},
+			toolContext,
+			error: null,
+		});
+		expect(nullishExceeded?.error_type).toBe("ToolError");
+		expect(nullishExceeded?.retry_count).toBe(1);
+		expect(nullishExceeded?.reflection_guidance).toContain(
+			"retry limit exceeded",
+		);
+
+		const plugin2 = new ReflectAndRetryToolPlugin({
+			maxRetries: 1,
+			throwExceptionIfRetryExceeded: false,
+		});
+		const ctx2 = makeToolContext("inv-nameless-2");
+		await plugin2.onToolErrorCallback({
+			tool,
+			toolArgs: {},
+			toolContext: ctx2,
+			error: new Error("seed"),
+		});
+		const namelessExceeded = await plugin2.onToolErrorCallback({
+			tool,
+			toolArgs: { q: 1 },
+			toolContext: ctx2,
+			error: { message: "no-name-field" },
+		});
+		expect(namelessExceeded?.error_type).toBe("ToolError");
+		expect(namelessExceeded?.error_details).toBe("[object Object]");
+		expect(namelessExceeded?.reflection_guidance).toContain(
+			"retry limit exceeded",
+		);
+	});
 });
