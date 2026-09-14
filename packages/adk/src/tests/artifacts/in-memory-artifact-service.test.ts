@@ -140,6 +140,18 @@ describe("InMemoryArtifactService", () => {
 		).toBeNull();
 	});
 
+	it("treats empty text as empty content and returns null", async () => {
+		const service = new InMemoryArtifactService();
+		await service.saveArtifact({
+			...base,
+			filename: "blank-text.txt",
+			artifact: { text: "" },
+		});
+		expect(
+			await service.loadArtifact({ ...base, filename: "blank-text.txt" }),
+		).toBeNull();
+	});
+
 	it("throws on invalid artifact reference URIs", async () => {
 		const service = new InMemoryArtifactService();
 		await service.saveArtifact({

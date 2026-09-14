@@ -76,6 +76,18 @@ describe("GcsArtifactService", () => {
 		expect(bucketMock).toHaveBeenCalledWith("my-bucket");
 	});
 
+	it("throws when artifact has no inlineData on save", async () => {
+		getFilesMock.mockResolvedValueOnce([[]]);
+		const service = new GcsArtifactService("b");
+		await expect(
+			service.saveArtifact({
+				...base,
+				filename: "missing-inline.txt",
+				artifact: { text: "no-inline" } as any,
+			}),
+		).rejects.toThrow();
+	});
+
 	it("saveArtifact starts at version 0 then increments from max", async () => {
 		getFilesMock.mockResolvedValueOnce([[]]);
 		const service = new GcsArtifactService("b");
