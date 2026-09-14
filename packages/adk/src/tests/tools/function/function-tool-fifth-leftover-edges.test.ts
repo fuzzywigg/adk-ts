@@ -93,13 +93,15 @@ describe("FunctionTool fifth leftover edges (TOKENMAXX)", () => {
 		);
 	});
 
-	it("uses function name and JSDoc description when options omitted", () => {
-		/**
-		 * Greets a user warmly
-		 */
-		function greet_user() {
-			return { hi: true };
-		}
+	it("uses function name and JSDoc description embedded in toString", () => {
+		const greet_user = withSource(
+			() => ({ hi: true }),
+			`/**
+ * Greets a user warmly
+ */
+function greet_user() { return { hi: true }; }`,
+			"greet_user",
+		);
 		const tool = new FunctionTool(greet_user);
 		expect(tool.name).toBe("greet_user");
 		expect(tool.description).toContain("Greets a user warmly");

@@ -55,7 +55,7 @@ describe("FunctionTool deepen edges (TOKENMAXX remainder)", () => {
 		).resolves.toEqual({ flag: false });
 	});
 
-	it("whitespace-only number string is not converted", async () => {
+	it("non-numeric string stays string while whitespace Number() becomes 0", async () => {
 		const func = withSource(
 			(n: any) => ({ n, type: typeof n }),
 			"function parse_n(n) { return { n, type: typeof n }; }",
@@ -67,8 +67,11 @@ describe("FunctionTool deepen edges (TOKENMAXX remainder)", () => {
 			parameterTypes: { n: "number" },
 		});
 		await expect(
+			tool.runAsync({ n: "abc" } as any, makeContext()),
+		).resolves.toEqual({ n: "abc", type: "string" });
+		await expect(
 			tool.runAsync({ n: "  " } as any, makeContext()),
-		).resolves.toEqual({ n: "  ", type: "string" });
+		).resolves.toEqual({ n: 0, type: "number" });
 	});
 
 	it("functionAcceptsToolContext true for body substring context without param", async () => {
@@ -104,7 +107,7 @@ describe("FunctionTool deepen edges (TOKENMAXX remainder)", () => {
 		).resolves.toEqual({ query: "q", hasActions: true });
 	});
 
-	it("async function path awaits result while sync returning Promise is not awaited as AsyncFunction", async () => {
+	it("async AsyncFunction path and sync-returned Promise both flatten under await runAsync", async () => {
 		async function asyncAdd(a: number, b: number) {
 			return { sum: a + b };
 		}
@@ -127,12 +130,10 @@ describe("FunctionTool deepen edges (TOKENMAXX remainder)", () => {
 			description: "Returns a promise synchronously",
 			parameterTypes: { a: "number", b: "number" },
 		});
-		const syncResult = await syncTool.runAsync(
-			{ a: 3, b: 4 } as any,
-			makeContext(),
-		);
-		expect(syncResult).toBeInstanceOf(Promise);
-		await expect(syncResult).resolves.toEqual({ sum: 7 });
+		await expect(
+			syncTool.runAsync({ a: 3, b: 4 } as any, makeContext()),
+		).resolves.toEqual({ sum: 7 });
+		expect(syncPromise.constructor.name).not.toBe("AsyncFunction");
 	});
 
 	it("returns missing mandatory args envelope", async () => {

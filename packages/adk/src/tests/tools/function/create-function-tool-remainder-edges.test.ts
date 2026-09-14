@@ -1,17 +1,33 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import Module from "node:module";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createFunctionTool } from "../../../tools/function";
+import * as functionToolModule from "../../../tools/function/function-tool";
 import { FunctionTool } from "../../../tools/function/function-tool";
 import type { ToolContext } from "../../../tools/tool-context";
+
+const originalRequire = Module.prototype.require;
+beforeAll(() => {
+	Module.prototype.require = function (
+		this: NodeModule,
+		id: string,
+		...rest: unknown[]
+	) {
+		if (id === "./function-tool" || id === "./function-tool.js") {
+			return functionToolModule;
+		}
+		return originalRequire.apply(this, [id, ...rest] as [string]);
+	} as typeof Module.prototype.require;
+});
+
+afterAll(() => {
+	Module.prototype.require = originalRequire;
+});
 
 function makeContext(): ToolContext {
 	return { actions: {} } as ToolContext;
 }
 
 describe("createFunctionTool remainder edges (TOKENMAXX)", () => {
-	afterEach(() => {
-		vi.restoreAllMocks();
-	});
-
 	it("forwards name description long-running and retry options", async () => {
 		function ping() {
 			return { ok: true };
@@ -38,11 +54,13 @@ describe("createFunctionTool remainder edges (TOKENMAXX)", () => {
 		function named_probe() {
 			return 1;
 		}
-		const tool = createFunctionTool(named_probe);
+		const tool = createFunctionTool(named_probe, {
+			description: "Named probe without options.name",
+		});
 		expect(tool.name).toBe("named_probe");
 	});
 
-	it("factory does not accept parameterTypes in its public options typing path", async () => {
+	it("factory public options path stringifies without parameterTypes", async () => {
 		function add(a: number, b: number) {
 			return { sum: a + b };
 		}

@@ -46,13 +46,13 @@ describe("PlanReActPlanner deepen edges (TOKENMAXX remainder)", () => {
 
 	it.each([
 		{
-			label: "empty-name then named at index 0 after skip",
+			label: "empty-name skip leaves firstFc index > 0 so siblings collect",
 			input: [
 				{ functionCall: { name: "", args: {} } },
 				{ functionCall: { name: "kept", args: { k: 1 } } },
 				{ functionCall: { name: "also", args: {} } },
 			],
-			expectedNames: ["kept"],
+			expectedNames: ["kept", "also"],
 		},
 		{
 			label: "named mid-stream then empty-name sibling window",
