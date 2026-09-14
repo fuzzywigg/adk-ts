@@ -355,4 +355,97 @@ describe("output-schema responseProcessor", () => {
 		expect(response.errorMessage).toContain("plain failure");
 		expect(response.errorCode).toBe("OUTPUT_SCHEMA_VALIDATION_FAILED");
 	});
+
+	it("treats empty-string text parts as empty when joining response text", async () => {
+		const schema = z.object({ answer: z.string() });
+		const response = new LlmResponse({
+			content: {
+				role: "model",
+				parts: [
+					{ text: "" },
+					{ text: '{"answer":"ok"}' },
+					{ text: undefined as any },
+				],
+			},
+		});
+
+		const events = await collect(
+			responseProcessor.runAsync(
+				makeContext({ name: "schema-agent", outputSchema: schema }),
+				response,
+			),
+		);
+
+		expect(events).toEqual([]);
+		expect(JSON.parse(response.content?.parts?.[1]?.text ?? "{}")).toEqual({
+			answer: "ok",
+		});
+	});
+
+	it("truncates long responseContent in validation error logging", async () => {
+		const schema = z.object({ answer: z.string() });
+		const longInvalid = `{"nope":"${"x".repeat(220)}"}`;
+		const response = new LlmResponse({
+			content: {
+				role: "model",
+				parts: [{ text: longInvalid }],
+			},
+		});
+
+		const events = await collect(
+			responseProcessor.runAsync(
+				makeContext({ name: "schema-agent", outputSchema: schema }),
+				response,
+			),
+		);
+
+		expect(events).toHaveLength(1);
+		expect(response.errorCode).toBe("OUTPUT_SCHEMA_VALIDATION_FAILED");
+		expect(response.errorMessage).toBeTruthy();
+		expect(longInvalid.length).toBeGreaterThan(200);
+	});
+
+	it("joins multiple valid text fragments before parsing", async () => {
+		const schema = z.object({ answer: z.string(), n: z.number() });
+		const response = new LlmResponse({
+			content: {
+				role: "model",
+				parts: [{ text: '{"answer":' }, { text: '"joined","n":3}' }],
+			},
+		});
+
+		const events = await collect(
+			responseProcessor.runAsync(
+				makeContext({ name: "schema-agent", outputSchema: schema }),
+				response,
+			),
+		);
+
+		expect(events).toEqual([]);
+		expect(JSON.parse(response.content?.parts?.[0]?.text ?? "{}")).toEqual({
+			answer: "joined",
+			n: 3,
+		});
+	});
+
+	it("still validates partial streaming responses when content is present", async () => {
+		const schema = z.object({ answer: z.string() });
+		const response = new LlmResponse({
+			partial: true,
+			content: {
+				role: "model",
+				parts: [{ text: '{"answer":"partial"}' }],
+			},
+		});
+		const events = await collect(
+			responseProcessor.runAsync(
+				makeContext({ name: "schema-agent", outputSchema: schema }),
+				response,
+			),
+		);
+		expect(events).toEqual([]);
+		expect(JSON.parse(response.content?.parts?.[0]?.text ?? "{}")).toEqual({
+			answer: "partial",
+		});
+	});
 });

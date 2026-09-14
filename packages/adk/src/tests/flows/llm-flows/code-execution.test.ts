@@ -636,4 +636,349 @@ describe("code-execution helpers", () => {
 		);
 		expect(ctx.getErrorCount("inv-err")).toBe(0);
 	});
+
+	it("requestProcessor no-ops convert when LlmAgent codeExecutor is not BaseCodeExecutor", async () => {
+		const agent = new LlmAgent({
+			name: "coder",
+			model: "gpt-4o",
+			codeExecutor: { optimizeDataFile: true } as any,
+		});
+		const llmRequest = new LlmRequest({
+			model: "gpt-4o",
+			contents: [
+				{
+					role: "user",
+					parts: [
+						{ text: "keep me" },
+						{ executableCode: { code: "print(1)" } },
+					],
+				},
+			],
+		});
+		const before = structuredClone(llmRequest.contents);
+		const events = await collect(
+			requestProcessor.runAsync(
+				{
+					agent,
+					invocationId: "inv-duck-exec",
+					session: { id: "s1", state: {}, events: [] },
+				} as unknown as InvocationContext,
+				llmRequest,
+			),
+		);
+		expect(events).toEqual([]);
+		expect(llmRequest.contents).toEqual(before);
+	});
+
+	it("requestProcessor skips csv preprocess when errorRetryAttempts are exhausted", async () => {
+		class StubExecutor extends BaseCodeExecutor {
+			executeCode = vi.fn(async () => ({
+				stdout: "",
+				stderr: "",
+				outputFiles: [],
+			}));
+		}
+		const executor = new StubExecutor({
+			optimizeDataFile: true,
+			errorRetryAttempts: 0,
+		});
+		const state = State.create({}, {});
+		const cex = new CodeExecutorContext(state);
+		cex.incrementErrorCount("inv-pre-max");
+		const llmRequest = new LlmRequest({
+			model: "gpt-4o",
+			contents: [
+				{
+					role: "user",
+					parts: [
+						{ text: "analyze" },
+						{ inlineData: { mimeType: "text/csv", data: "a,b\n1,2" } },
+					],
+				},
+			],
+		});
+
+		const events = await collect(
+			requestProcessor.runAsync(
+				{
+					agent: new LlmAgent({
+						name: "coder",
+						model: "gpt-4o",
+						codeExecutor: executor,
+					}),
+					invocationId: "inv-pre-max",
+					session: { id: "s1", state, events: [] },
+					artifactService: { saveArtifact: vi.fn(async () => 1) },
+				} as unknown as InvocationContext,
+				llmRequest,
+			),
+		);
+
+		expect(events).toEqual([]);
+		expect(executor.executeCode).not.toHaveBeenCalled();
+	});
+
+	it("requestProcessor skips preprocessing code for unsupported pre-seeded input files", async () => {
+		class StubExecutor extends BaseCodeExecutor {
+			executeCode = vi.fn(async () => ({
+				stdout: "ok",
+				stderr: "",
+				outputFiles: [],
+			}));
+		}
+		const executor = new StubExecutor({
+			optimizeDataFile: true,
+			codeBlockDelimiters: [["```python\n", "\n```"]],
+			executionResultDelimiters: ["```tool_outputs\n", "\n```"],
+		});
+		const state = State.create({}, {});
+		const cex = new CodeExecutorContext(state);
+		cex.addInputFiles([
+			{ name: "notes.pdf", content: "", mimeType: "application/pdf" },
+			{ name: "data.csv", content: "a,b\n1,2", mimeType: "text/csv" },
+		]);
+		const llmRequest = new LlmRequest({
+			model: "gpt-4o",
+			contents: [{ role: "user", parts: [{ text: "go" }] }],
+		});
+
+		await collect(
+			requestProcessor.runAsync(
+				{
+					agent: new LlmAgent({
+						name: "coder",
+						model: "gpt-4o",
+						codeExecutor: executor,
+					}),
+					invocationId: "inv-mixed-files",
+					appName: "app",
+					userId: "u",
+					session: { id: "s1", state, events: [] },
+					artifactService: { saveArtifact: vi.fn(async () => 1) },
+				} as unknown as InvocationContext,
+				llmRequest,
+			),
+		);
+
+		expect(executor.executeCode).toHaveBeenCalledTimes(1);
+		expect(executor.executeCode.mock.calls[0][1].code).toContain(
+			"pd.read_csv('data.csv')",
+		);
+		expect(cex.getProcessedFileNames()).toContain("data.csv");
+		expect(cex.getProcessedFileNames()).not.toContain("notes.pdf");
+	});
+
+	it("responseProcessor no-ops when codeExecutor is not BaseCodeExecutor", async () => {
+		const events = await collect(
+			responseProcessor.runAsync(
+				{
+					agent: {
+						name: "coder",
+						codeExecutor: { fake: true },
+					},
+					session: { state: {}, events: [] },
+				} as unknown as InvocationContext,
+				{
+					partial: false,
+					content: {
+						role: "model",
+						parts: [{ text: "```python\nprint(1)\n```" }],
+					},
+				} as LlmResponse,
+			),
+		);
+		expect(events).toEqual([]);
+	});
+
+	it("responseProcessor no-ops for missing content", async () => {
+		class StubExecutor extends BaseCodeExecutor {
+			executeCode = vi.fn(async () => ({
+				stdout: "",
+				stderr: "",
+				outputFiles: [],
+			}));
+		}
+		const executor = new StubExecutor();
+		const agent = new LlmAgent({
+			name: "coder",
+			codeExecutor: executor,
+		});
+
+		expect(
+			await collect(
+				responseProcessor.runAsync(
+					{
+						agent,
+						session: { state: {}, events: [] },
+					} as unknown as InvocationContext,
+					{ partial: false } as LlmResponse,
+				),
+			),
+		).toEqual([]);
+		expect(executor.executeCode).not.toHaveBeenCalled();
+	});
+
+	it("requestProcessor converts executableCode parts using codeBlockDelimiters", async () => {
+		class StubExecutor extends BaseCodeExecutor {
+			executeCode = vi.fn(async () => ({
+				stdout: "",
+				stderr: "",
+				outputFiles: [],
+			}));
+		}
+		const executor = new StubExecutor({
+			optimizeDataFile: false,
+			codeBlockDelimiters: [["```python\n", "\n```"]],
+			executionResultDelimiters: ["```tool_outputs\n", "\n```"],
+		});
+		const llmRequest = new LlmRequest({
+			model: "gpt-4o",
+			contents: [
+				{
+					role: "model",
+					parts: [
+						{
+							executableCode: { language: "PYTHON", code: "print('hi')" },
+						},
+					],
+				},
+			],
+		});
+
+		await collect(
+			requestProcessor.runAsync(
+				{
+					agent: new LlmAgent({
+						name: "coder",
+						model: "gpt-4o",
+						codeExecutor: executor,
+					}),
+					session: { id: "s1", state: {}, events: [] },
+				} as unknown as InvocationContext,
+				llmRequest,
+			),
+		);
+
+		expect(llmRequest.contents?.[0].parts?.[0].text).toContain("```python");
+		expect(llmRequest.contents?.[0].parts?.[0].text).toContain("print('hi')");
+		expect(llmRequest.contents?.[0].parts?.[0].executableCode).toBeUndefined();
+	});
+
+	it("requestProcessor converts single-part codeExecutionResult and sets role user", async () => {
+		class StubExecutor extends BaseCodeExecutor {
+			executeCode = vi.fn(async () => ({
+				stdout: "",
+				stderr: "",
+				outputFiles: [],
+			}));
+		}
+		const executor = new StubExecutor({
+			optimizeDataFile: false,
+			codeBlockDelimiters: [["```python\n", "\n```"]],
+			executionResultDelimiters: ["```tool_outputs\n", "\n```"],
+		});
+		const llmRequest = new LlmRequest({
+			model: "gpt-4o",
+			contents: [
+				{
+					role: "model",
+					parts: [
+						{
+							codeExecutionResult: {
+								outcome: "OUTCOME_OK",
+								output: "42",
+							},
+						},
+					],
+				},
+			],
+		});
+
+		await collect(
+			requestProcessor.runAsync(
+				{
+					agent: new LlmAgent({
+						name: "coder",
+						model: "gpt-4o",
+						codeExecutor: executor,
+					}),
+					session: { id: "s1", state: {}, events: [] },
+				} as unknown as InvocationContext,
+				llmRequest,
+			),
+		);
+
+		expect(llmRequest.contents?.[0].role).toBe("user");
+		expect(llmRequest.contents?.[0].parts?.[0].text).toContain(
+			"```tool_outputs",
+		);
+		expect(llmRequest.contents?.[0].parts?.[0].text).toContain("42");
+	});
+
+	it("responseProcessor passes executionId when executor is stateful", async () => {
+		class StubExecutor extends BaseCodeExecutor {
+			executeCode = vi.fn(async () => ({
+				stdout: "1",
+				stderr: "",
+				outputFiles: [],
+			}));
+		}
+		const executor = new StubExecutor({
+			stateful: true,
+			codeBlockDelimiters: [["```python\n", "\n```"]],
+			executionResultDelimiters: ["```tool_outputs\n", "\n```"],
+		});
+		const saveArtifact = vi.fn(async () => 1);
+
+		await collect(
+			responseProcessor.runAsync(
+				{
+					agent: new LlmAgent({
+						name: "coder",
+						model: "gpt-4o",
+						codeExecutor: executor,
+					}),
+					invocationId: "inv-stateful",
+					appName: "app",
+					userId: "u",
+					session: {
+						id: "sess-stateful",
+						appName: "app",
+						userId: "u",
+						state: {},
+						events: [],
+					},
+					artifactService: { saveArtifact },
+				} as unknown as InvocationContext,
+				{
+					partial: false,
+					content: {
+						role: "model",
+						parts: [{ text: "```python\nprint(1)\n```" }],
+					},
+				} as LlmResponse,
+			),
+		);
+
+		expect(executor.executeCode).toHaveBeenCalledWith(
+			expect.anything(),
+			expect.objectContaining({
+				executionId: "sess-stateful",
+			}),
+		);
+	});
+
+	it("hasCodeExecutor is true only when codeExecutor property exists", () => {
+		expect(hasCodeExecutor({ name: "a", codeExecutor: {} })).toBe(true);
+		expect(hasCodeExecutor({ name: "a" })).toBe(false);
+		expect(hasCodeExecutor(null)).toBeFalsy();
+		expect(hasCodeExecutor("x")).toBeFalsy();
+	});
+
+	it("DATA_FILE_UTIL_MAP exposes csv loader template", () => {
+		expect(DATA_FILE_UTIL_MAP["text/csv"].extension).toBe(".csv");
+		expect(DATA_FILE_UTIL_MAP["text/csv"].loaderCodeTemplate).toContain(
+			"pd.read_csv",
+		);
+	});
 });

@@ -1262,4 +1262,275 @@ describe("contents requestProcessor", () => {
 				.sort(),
 		).toEqual(["c1", "c2"]);
 	});
+
+	it("builds empty contents for default includeContents with empty session", async () => {
+		const llmRequest = new LlmRequest();
+		await drain(
+			requestProcessor.runAsync(
+				ctx(duckAgent("assistant", "default"), []),
+				llmRequest,
+			),
+		);
+		expect(llmRequest.contents).toEqual([]);
+	});
+
+	it("leaves history unchanged when latest event is malformed without getFunctionResponses", async () => {
+		const llmRequest = new LlmRequest();
+		const malformed = new Event({
+			author: "user",
+			content: {
+				role: "user",
+				parts: [{ text: "latest-malformed" }],
+			},
+		});
+		(malformed as any).getFunctionResponses = undefined;
+		(malformed as any).getFunctionCalls = undefined;
+		const events = [
+			userEvent("earlier"),
+			agentEvent("assistant", "reply"),
+			malformed,
+		];
+
+		await drain(
+			requestProcessor.runAsync(
+				ctx(duckAgent("assistant", "default"), events),
+				llmRequest,
+			),
+		);
+
+		expect(llmRequest.contents.map((c) => c.parts?.[0]?.text)).toEqual([
+			"earlier",
+			"reply",
+			"latest-malformed",
+		]);
+	});
+
+	it("skips malformed events while reverse-searching for async functionCall", async () => {
+		const llmRequest = new LlmRequest();
+		const malformed = new Event({
+			author: "assistant",
+			content: {
+				role: "model",
+				parts: [{ text: "broken-mid" }],
+			},
+		});
+		(malformed as any).getFunctionCalls = undefined;
+		(malformed as any).getFunctionResponses = undefined;
+
+		const events = [
+			userEvent("start"),
+			new Event({
+				author: "assistant",
+				content: {
+					role: "model",
+					parts: [{ functionCall: { id: "c9", name: "tool", args: {} } }],
+				},
+			}),
+			malformed,
+			new Event({
+				author: "user",
+				content: {
+					role: "user",
+					parts: [
+						{
+							functionResponse: {
+								id: "other",
+								name: "other_tool",
+								response: { n: 1 },
+							},
+						},
+					],
+				},
+			}),
+			new Event({
+				author: "user",
+				content: {
+					role: "user",
+					parts: [
+						{
+							functionResponse: {
+								id: "c9",
+								name: "tool",
+								response: { ok: true },
+							},
+						},
+					],
+				},
+			}),
+		];
+
+		await drain(
+			requestProcessor.runAsync(
+				ctx(duckAgent("assistant", "default"), events),
+				llmRequest,
+			),
+		);
+
+		expect(
+			llmRequest.contents.some((c) =>
+				c.parts?.some((p) => p.functionCall?.id === "c9"),
+			),
+		).toBe(true);
+		expect(
+			llmRequest.contents.some((c) =>
+				c.parts?.some((p) => p.functionResponse?.id === "c9"),
+			),
+		).toBe(true);
+		expect(llmRequest.contents[0].parts?.[0]?.text).toBe("start");
+	});
+
+	it("skips malformed events while collecting intermediate async functionResponses", async () => {
+		const llmRequest = new LlmRequest();
+		const malformed = new Event({
+			author: "user",
+			content: {
+				role: "user",
+				parts: [{ text: "mid-broken" }],
+			},
+		});
+		(malformed as any).getFunctionCalls = undefined;
+		(malformed as any).getFunctionResponses = undefined;
+
+		const events = [
+			new Event({
+				author: "assistant",
+				content: {
+					role: "model",
+					parts: [
+						{ functionCall: { id: "c1", name: "tool_a", args: {} } },
+						{ functionCall: { id: "c2", name: "tool_b", args: {} } },
+					],
+				},
+			}),
+			new Event({
+				author: "user",
+				content: {
+					role: "user",
+					parts: [
+						{
+							functionResponse: {
+								id: "c1",
+								name: "tool_a",
+								response: { a: 1 },
+							},
+						},
+					],
+				},
+			}),
+			malformed,
+			new Event({
+				author: "user",
+				content: {
+					role: "user",
+					parts: [
+						{
+							functionResponse: {
+								id: "c2",
+								name: "tool_b",
+								response: { b: 2 },
+							},
+						},
+					],
+				},
+			}),
+		];
+
+		await drain(
+			requestProcessor.runAsync(
+				ctx(duckAgent("assistant", "default"), events),
+				llmRequest,
+			),
+		);
+
+		const merged = llmRequest.contents.find((c) =>
+			c.parts?.some((p) => p.functionResponse),
+		);
+		expect(
+			merged?.parts
+				?.map((p) => p.functionResponse?.id)
+				.filter(Boolean)
+				.sort(),
+		).toEqual(["c1", "c2"]);
+		expect(llmRequest.contents.map((c) => c.parts?.[0]?.text)).toContain(
+			"mid-broken",
+		);
+	});
+
+	it("preserves branch-filtered foreign events and current-turn user text", async () => {
+		const llmRequest = new LlmRequest();
+		const events = [
+			userEvent("root-user", { branch: "root" }),
+			agentEvent("other-agent", "foreign reply", { branch: "root" }),
+			userEvent("leaf-user", { branch: "root.leaf" }),
+		];
+
+		await drain(
+			requestProcessor.runAsync(
+				ctx(duckAgent("assistant", "default"), events, "root.leaf"),
+				llmRequest,
+			),
+		);
+
+		expect(llmRequest.contents.map((c) => c.parts?.[0]?.text)).toEqual(
+			expect.arrayContaining(["leaf-user"]),
+		);
+	});
+
+	it("drops auth request function calls from contents history", async () => {
+		const llmRequest = new LlmRequest();
+		const events = [
+			userEvent("hello"),
+			new Event({
+				author: "assistant",
+				content: {
+					role: "model",
+					parts: [
+						{
+							functionCall: {
+								id: "auth-1",
+								name: REQUEST_EUC_FUNCTION_CALL_NAME,
+								args: {},
+							},
+						},
+					],
+				},
+			}),
+			new Event({
+				author: "user",
+				content: {
+					role: "user",
+					parts: [
+						{
+							functionResponse: {
+								id: "auth-1",
+								name: REQUEST_EUC_FUNCTION_CALL_NAME,
+								response: { token: "x" },
+							},
+						},
+					],
+				},
+			}),
+			userEvent("after-auth"),
+		];
+
+		await drain(
+			requestProcessor.runAsync(
+				ctx(duckAgent("assistant", "default"), events),
+				llmRequest,
+			),
+		);
+
+		expect(
+			llmRequest.contents.some((c) =>
+				c.parts?.some(
+					(p) =>
+						p.functionCall?.name === REQUEST_EUC_FUNCTION_CALL_NAME ||
+						p.functionResponse?.name === REQUEST_EUC_FUNCTION_CALL_NAME,
+				),
+			),
+		).toBe(false);
+		expect(llmRequest.contents.map((c) => c.parts?.[0]?.text)).toEqual(
+			expect.arrayContaining(["hello", "after-auth"]),
+		);
+	});
 });

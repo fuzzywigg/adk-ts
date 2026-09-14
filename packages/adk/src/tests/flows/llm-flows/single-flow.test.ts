@@ -33,4 +33,21 @@ describe("SingleFlow", () => {
 		expect(flow.responseProcessors[1]).toBe(outputSchemaResponseProcessor);
 		expect(flow.responseProcessors[2]).toBe(codeExecutionResponseProcessor);
 	});
+
+	it("creates independent processor arrays per instance", () => {
+		const a = new SingleFlow();
+		const b = new SingleFlow();
+		expect(a.requestProcessors).not.toBe(b.requestProcessors);
+		expect(a.responseProcessors).not.toBe(b.responseProcessors);
+		expect(a.requestProcessors).toEqual(b.requestProcessors);
+		expect(a.responseProcessors).toEqual(b.responseProcessors);
+	});
+
+	it("does not include agent transfer on SingleFlow", () => {
+		const flow = new SingleFlow();
+		expect(
+			flow.requestProcessors.some((p) => p === (globalThis as any).__never),
+		).toBe(false);
+		expect(flow.requestProcessors).toHaveLength(8);
+	});
 });

@@ -50,4 +50,43 @@ describe("identity requestProcessor", () => {
 			'The description about you is "Writes TypeScript"',
 		);
 	});
+
+	it("appends after existing system instructions", async () => {
+		const llmRequest = new LlmRequest();
+		llmRequest.appendInstructions(["Be concise."]);
+		await collect(
+			requestProcessor.runAsync(
+				{ agent: { name: "helper" } } as InvocationContext,
+				llmRequest,
+			),
+		);
+		const text = llmRequest.getSystemInstructionText() ?? "";
+		expect(text.startsWith("Be concise.")).toBe(true);
+		expect(text).toContain('Your internal name is "helper"');
+	});
+
+	it("treats empty description as absent", async () => {
+		const llmRequest = new LlmRequest();
+		await collect(
+			requestProcessor.runAsync(
+				{
+					agent: { name: "blank", description: "" },
+				} as InvocationContext,
+				llmRequest,
+			),
+		);
+		const text = llmRequest.getSystemInstructionText() ?? "";
+		expect(text).toContain('Your internal name is "blank"');
+		expect(text).not.toContain("The description about you");
+	});
+
+	it("yields no events", async () => {
+		const events = await collect(
+			requestProcessor.runAsync(
+				{ agent: { name: "silent" } } as InvocationContext,
+				new LlmRequest(),
+			),
+		);
+		expect(events).toEqual([]);
+	});
 });
