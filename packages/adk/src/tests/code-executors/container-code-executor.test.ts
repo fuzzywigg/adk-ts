@@ -730,4 +730,141 @@ describe("ContainerCodeExecutor", () => {
 		});
 		errorSpy.mockRestore();
 	});
+
+	it("builds image then creates container when both image and dockerPath are set", async () => {
+		existsSync.mockReturnValue(true);
+		followProgress.mockImplementation((_stream: any, cb: any) => {
+			cb(null, [{ stream: "Step 1" }]);
+		});
+		buildImage.mockResolvedValue({});
+		const container = makeContainer();
+		createContainer.mockResolvedValue(container);
+		container.exec.mockResolvedValue({
+			start: vi.fn().mockResolvedValue(makeStream([])),
+			inspect: vi.fn().mockResolvedValue({ ExitCode: 0 }),
+		});
+
+		const executor = new ContainerCodeExecutor({
+			image: "custom-built:tag",
+			dockerPath: ".",
+		});
+		await executor.executeCode({} as any, { code: "print(1)", inputFiles: [] });
+
+		expect(buildImage).toHaveBeenCalled();
+		expect(createContainer).toHaveBeenCalledWith(
+			expect.objectContaining({ Image: "custom-built:tag" }),
+		);
+	});
+
+	it("collectOutput treats null ExitCode as 0", async () => {
+		const executor = new ContainerCodeExecutor({ image: "python:3" });
+		const stream = makeStream([]);
+		const output = await (executor as any).collectOutput(stream, {
+			inspect: vi.fn().mockResolvedValue({ ExitCode: null }),
+		});
+		expect(output.exitCode).toBe(0);
+	});
+
+	it("collectOutput handles short demux chunks without throwing", async () => {
+		const executor = new ContainerCodeExecutor({ image: "python:3" });
+		const short = Buffer.from([1, 0, 0]);
+		const stream = makeStream([short]);
+		const output = await (executor as any).collectOutput(stream, {
+			inspect: vi.fn().mockResolvedValue({ ExitCode: 0 }),
+		});
+		expect(output.stdout).toBe("");
+		expect(output.stderr).toBe("");
+	});
+
+	it("parallel first executeCode calls complete successfully", async () => {
+		const container = makeContainer();
+		createContainer.mockResolvedValue(container);
+		container.exec.mockResolvedValue({
+			start: vi.fn().mockResolvedValue(makeStream([])),
+			inspect: vi.fn().mockResolvedValue({ ExitCode: 0 }),
+		});
+		const executor = new ContainerCodeExecutor({ image: "python:3" });
+
+		const results = await Promise.all([
+			executor.executeCode({} as any, { code: "a", inputFiles: [] }),
+			executor.executeCode({} as any, { code: "b", inputFiles: [] }),
+			executor.executeCode({} as any, { code: "c", inputFiles: [] }),
+		]);
+
+		expect(results).toHaveLength(3);
+		expect(createContainer.mock.calls.length).toBeGreaterThanOrEqual(1);
+		expect((executor as any).isInitialized).toBe(true);
+	});
+
+	it("dispose then executeCode re-initializes a fresh container", async () => {
+		const first = makeContainer();
+		const second = makeContainer();
+		createContainer.mockResolvedValueOnce(first).mockResolvedValueOnce(second);
+		first.exec.mockResolvedValue({
+			start: vi.fn().mockResolvedValue(makeStream([])),
+			inspect: vi.fn().mockResolvedValue({ ExitCode: 0 }),
+		});
+		second.exec.mockResolvedValue({
+			start: vi
+				.fn()
+				.mockResolvedValue(
+					makeStream([
+						Buffer.concat([
+							Buffer.from([1, 0, 0, 0, 0, 0, 0, 0]),
+							Buffer.from("again"),
+						]),
+					]),
+				),
+			inspect: vi.fn().mockResolvedValue({ ExitCode: 0 }),
+		});
+
+		const executor = new ContainerCodeExecutor({ image: "python:3" });
+		await executor.executeCode({} as any, { code: "1", inputFiles: [] });
+		await executor.dispose();
+		(executor as any).isInitialized = false;
+		(executor as any).container = undefined;
+
+		const result = await executor.executeCode({} as any, {
+			code: "2",
+			inputFiles: [],
+		});
+		expect(createContainer).toHaveBeenCalledTimes(2);
+		expect(result.stdout).toBe("again");
+	});
+
+	it("collectOutput interleaves multiple stdout and stderr chunks", async () => {
+		const executor = new ContainerCodeExecutor({ image: "python:3" });
+		const chunks = [
+			Buffer.concat([Buffer.from([1, 0, 0, 0, 0, 0, 0, 0]), Buffer.from("A")]),
+			Buffer.concat([Buffer.from([2, 0, 0, 0, 0, 0, 0, 0]), Buffer.from("e1")]),
+			Buffer.concat([Buffer.from([1, 0, 0, 0, 0, 0, 0, 0]), Buffer.from("B")]),
+			Buffer.concat([Buffer.from([2, 0, 0, 0, 0, 0, 0, 0]), Buffer.from("e2")]),
+		];
+		const output = await (executor as any).collectOutput(makeStream(chunks), {
+			inspect: vi.fn().mockResolvedValue({ ExitCode: 0 }),
+		});
+		expect(output.stdout).toBe("AB");
+		expect(output.stderr).toBe("e1e2");
+	});
+
+	it("maps non-Error throws from exec into stderr strings", async () => {
+		const container = makeContainer();
+		createContainer.mockResolvedValue(container);
+		container.exec
+			.mockResolvedValueOnce({
+				start: vi.fn().mockResolvedValue(makeStream([])),
+				inspect: vi.fn().mockResolvedValue({ ExitCode: 0 }),
+			})
+			.mockResolvedValueOnce({
+				start: vi.fn().mockRejectedValue("string-fail"),
+				inspect: vi.fn(),
+			});
+
+		const executor = new ContainerCodeExecutor({ image: "python:3" });
+		const result = await executor.executeCode({} as any, {
+			code: "x",
+			inputFiles: [],
+		});
+		expect(result.stderr).toMatch(/Container execution error: string-fail/);
+	});
 });

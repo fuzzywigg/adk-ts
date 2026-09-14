@@ -509,4 +509,250 @@ describe("InMemorySessionService", () => {
 		expect(fetched?.state.version).toBe(2);
 		expect(fetched?.events).toEqual([]);
 	});
+
+	it("getSession returns undefined when map has key but undefined value", async () => {
+		const service = new InMemorySessionService();
+		await service.createSession("app", "user", {}, "ghost");
+		const sessions = (service as any).sessions as Map<
+			string,
+			Map<string, Map<string, unknown>>
+		>;
+		sessions.get("app")!.get("user")!.set("ghost", undefined);
+		expect(await service.getSession("app", "user", "ghost")).toBeUndefined();
+		expect(service.getSessionSync("app", "user", "ghost")).toBeUndefined();
+	});
+
+	it("getSession with empty config object applies no event filters", async () => {
+		const service = new InMemorySessionService();
+		const session = await service.createSession("app", "user", {}, "cfg-empty");
+		await service.appendEvent(session, {
+			author: "user",
+			timestamp: 10,
+			content: { parts: [{ text: "a" }] },
+		} as any);
+		await service.appendEvent(session, {
+			author: "agent",
+			timestamp: 20,
+			content: { parts: [{ text: "b" }] },
+		} as any);
+
+		const fetched = await service.getSession("app", "user", "cfg-empty", {});
+		expect(fetched?.events).toHaveLength(2);
+		expect(fetched?.events.map((e) => e.content?.parts?.[0]?.text)).toEqual([
+			"a",
+			"b",
+		]);
+	});
+
+	it("createSession treats null state as empty object", async () => {
+		const service = new InMemorySessionService();
+		const session = await service.createSession(
+			"app",
+			"user",
+			null as any,
+			"null-state",
+		);
+		expect(session.state).toEqual({});
+		const fetched = await service.getSession("app", "user", "null-state");
+		expect(fetched?.state).toEqual({});
+	});
+
+	it("returns early when app exists but user map is missing for getSession", async () => {
+		const service = new InMemorySessionService();
+		await service.createSession("app", "user-a", { a: 1 }, "s1");
+		const sessions = (service as any).sessions as Map<
+			string,
+			Map<string, Map<string, unknown>>
+		>;
+		expect(sessions.get("app")!.has("user-a")).toBe(true);
+		expect(await service.getSession("app", "user-b", "s1")).toBeUndefined();
+		expect(service.getSessionSync("app", "user-b", "s1")).toBeUndefined();
+	});
+
+	it("getSessionSync applies numRecentEvents and afterTimestamp", async () => {
+		const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+		const service = new InMemorySessionService();
+		const session = service.createSessionSync("app", "user", {}, "sync-cfg");
+		await service.appendEvent(session, {
+			author: "u",
+			timestamp: 100,
+			content: { parts: [{ text: "1" }] },
+		} as any);
+		await service.appendEvent(session, {
+			author: "u",
+			timestamp: 200,
+			content: { parts: [{ text: "2" }] },
+		} as any);
+		await service.appendEvent(session, {
+			author: "u",
+			timestamp: 300,
+			content: { parts: [{ text: "3" }] },
+		} as any);
+
+		const recent = service.getSessionSync("app", "user", "sync-cfg", {
+			numRecentEvents: 2,
+		});
+		expect(recent?.events.map((e) => e.content?.parts?.[0]?.text)).toEqual([
+			"2",
+			"3",
+		]);
+
+		const after = service.getSessionSync("app", "user", "sync-cfg", {
+			afterTimestamp: 150,
+		});
+		expect(after?.events.map((e) => e.content?.parts?.[0]?.text)).toEqual([
+			"2",
+			"3",
+		]);
+
+		const both = service.getSessionSync("app", "user", "sync-cfg", {
+			numRecentEvents: 3,
+			afterTimestamp: 250,
+		});
+		expect(both?.events.map((e) => e.content?.parts?.[0]?.text)).toEqual(["3"]);
+		warn.mockRestore();
+	});
+
+	it("listSessionsSync returns empty for unknown app and copies without events", async () => {
+		const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+		const service = new InMemorySessionService();
+		const session = service.createSessionSync("app", "user", { a: 1 }, "s1");
+		await service.appendEvent(session, {
+			author: "u",
+			timestamp: 1,
+			content: { parts: [{ text: "x" }] },
+		} as any);
+
+		expect(service.listSessionsSync("missing", "user").sessions).toEqual([]);
+		const listed = service.listSessionsSync("app", "user");
+		expect(listed.sessions).toHaveLength(1);
+		expect(listed.sessions[0].events).toEqual([]);
+		expect(listed.sessions[0].state).toEqual({});
+		warn.mockRestore();
+	});
+
+	it("appendEvent mutates caller session while getSession returns a clone", async () => {
+		const service = new InMemorySessionService();
+		const session = await service.createSession(
+			"app",
+			"user",
+			{ a: 1 },
+			"clone",
+		);
+		await service.appendEvent(session, {
+			author: "user",
+			timestamp: 1,
+			content: { parts: [{ text: "hi" }] },
+		} as any);
+
+		expect(session.events).toHaveLength(1);
+		const fetched = await service.getSession("app", "user", "clone");
+		expect(fetched?.events).toHaveLength(1);
+		fetched!.events[0].content = { parts: [{ text: "mutated" }] };
+		fetched!.state.a = 99;
+
+		expect(session.events[0].content?.parts?.[0]?.text).toBe("hi");
+		const again = await service.getSession("app", "user", "clone");
+		expect(again?.events[0].content?.parts?.[0]?.text).toBe("hi");
+		expect(again?.state.a).toBe(1);
+	});
+
+	it("bootstraps app-only then user-only deltas across sessions", async () => {
+		const service = new InMemorySessionService();
+		const first = await service.createSession("boot", "u1", {}, "s1");
+		await service.appendEvent(first, {
+			author: "agent",
+			timestamp: 1,
+			actions: {
+				stateDelta: { [`${State.APP_PREFIX}shared`]: "yes" },
+			},
+		} as any);
+
+		const second = await service.createSession("boot", "u2", {}, "s2");
+		expect(second.state[`${State.APP_PREFIX}shared`]).toBe("yes");
+
+		await service.appendEvent(second, {
+			author: "agent",
+			timestamp: 2,
+			actions: {
+				stateDelta: { [`${State.USER_PREFIX}only`]: "u2" },
+			},
+		} as any);
+
+		const third = await service.createSession("boot", "u2", {}, "s3");
+		expect(third.state[`${State.APP_PREFIX}shared`]).toBe("yes");
+		expect(third.state[`${State.USER_PREFIX}only`]).toBe("u2");
+
+		const otherUser = await service.createSession("boot", "u1", {}, "s4");
+		expect(otherUser.state[`${State.APP_PREFIX}shared`]).toBe("yes");
+		expect(otherUser.state[`${State.USER_PREFIX}only`]).toBeUndefined();
+	});
+
+	it("concurrent appendEvent keeps all events and advances lastUpdateTime", async () => {
+		const service = new InMemorySessionService();
+		const session = await service.createSession("app", "user", {}, "conc");
+		await Promise.all(
+			[1, 2, 3, 4, 5].map((n) =>
+				service.appendEvent(session, {
+					author: "agent",
+					timestamp: n,
+					content: { parts: [{ text: `e${n}` }] },
+				} as any),
+			),
+		);
+		const fetched = await service.getSession("app", "user", "conc");
+		expect(fetched?.events).toHaveLength(5);
+		expect(fetched?.lastUpdateTime).toBeGreaterThanOrEqual(1);
+		expect(
+			new Set(fetched?.events.map((e) => e.content?.parts?.[0]?.text)),
+		).toEqual(new Set(["e1", "e2", "e3", "e4", "e5"]));
+	});
+
+	it("deleteSession is a no-op for missing session and leaves siblings", async () => {
+		const service = new InMemorySessionService();
+		await service.createSession("app", "user", {}, "keep");
+		await service.deleteSession("app", "user", "missing");
+		expect(await service.getSession("app", "user", "keep")).toBeDefined();
+		await service.deleteSession("app", "other", "keep");
+		expect(await service.getSession("app", "user", "keep")).toBeDefined();
+	});
+
+	it("getSession afterTimestamp with no matching older event keeps all", async () => {
+		const service = new InMemorySessionService();
+		const session = await service.createSession("app", "user", {}, "after-all");
+		await service.appendEvent(session, {
+			author: "u",
+			timestamp: 10,
+			content: { parts: [{ text: "x" }] },
+		} as any);
+		const fetched = await service.getSession("app", "user", "after-all", {
+			afterTimestamp: 1,
+		});
+		expect(fetched?.events).toHaveLength(1);
+	});
+
+	it("merges initial createSession state with existing app/user maps", async () => {
+		const service = new InMemorySessionService();
+		const seed = await service.createSession("app", "user", {}, "seed");
+		await service.appendEvent(seed, {
+			author: "agent",
+			timestamp: 1,
+			actions: {
+				stateDelta: {
+					[`${State.APP_PREFIX}t`]: "dark",
+					[`${State.USER_PREFIX}l`]: "en",
+				},
+			},
+		} as any);
+
+		const created = await service.createSession(
+			"app",
+			"user",
+			{ local: 7, [`${State.APP_PREFIX}t`]: "override-ignored-on-merge?" },
+			"merged",
+		);
+		expect(created.state.local).toBe(7);
+		expect(created.state[`${State.APP_PREFIX}t`]).toBe("dark");
+		expect(created.state[`${State.USER_PREFIX}l`]).toBe("en");
+	});
 });

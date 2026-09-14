@@ -459,4 +459,128 @@ describe("InMemoryMemoryService", () => {
 			}),
 		).toEqual({ memories: [] });
 	});
+
+	it("search skips events missing content.parts after defensive mutation", async () => {
+		const service = new InMemoryMemoryService();
+		await service.addSessionToMemory(
+			makeSession({
+				events: [
+					{
+						author: "user",
+						timestamp: Date.parse("2024-01-01T00:00:00.000Z"),
+						content: { parts: [{ text: "Paris is lovely" }] },
+					} as any,
+				],
+			}),
+		);
+		const sessions = (service as any)._sessionEvents as Map<
+			string,
+			Map<string, any[]>
+		>;
+		const events = sessions.get("app/user")!.get("session-1")!;
+		events.push({
+			author: "broken",
+			timestamp: Date.now(),
+			content: { role: "model" },
+		});
+		events.push({
+			author: "missing",
+			timestamp: Date.now(),
+		});
+
+		const hits = await service.searchMemory({
+			appName: "app",
+			userId: "user",
+			query: "paris",
+		});
+		expect(hits.memories).toHaveLength(1);
+		expect(hits.memories[0].author).toBe("user");
+	});
+
+	it("query with only whitespace or empty tokens yields no matches", async () => {
+		const service = new InMemoryMemoryService();
+		await service.addSessionToMemory(makeSession());
+		expect(
+			await service.searchMemory({
+				appName: "app",
+				userId: "user",
+				query: "   ",
+			}),
+		).toEqual({ memories: [] });
+		expect(
+			await service.searchMemory({
+				appName: "app",
+				userId: "user",
+				query: "",
+			}),
+		).toEqual({ memories: [] });
+	});
+
+	it("indexes agent text and matches across multi-word queries with extra spaces", async () => {
+		const service = new InMemoryMemoryService();
+		await service.addSessionToMemory(
+			makeSession({
+				events: [
+					{
+						author: "agent",
+						timestamp: Date.parse("2024-03-01T00:00:00.000Z"),
+						content: {
+							parts: [{ text: "The capital of France is Paris" }],
+						},
+					} as any,
+				],
+			}),
+		);
+		const hits = await service.searchMemory({
+			appName: "app",
+			userId: "user",
+			query: "  paris   france  ",
+		});
+		expect(hits.memories).toHaveLength(1);
+		expect(hits.memories[0].author).toBe("agent");
+	});
+
+	it("addSessionToMemory overwrites prior events for the same session id", async () => {
+		const service = new InMemoryMemoryService();
+		await service.addSessionToMemory(
+			makeSession({
+				events: [
+					{
+						author: "user",
+						timestamp: 1,
+						content: { parts: [{ text: "old tokyo data" }] },
+					} as any,
+				],
+			}),
+		);
+		await service.addSessionToMemory(
+			makeSession({
+				events: [
+					{
+						author: "user",
+						timestamp: 2,
+						content: { parts: [{ text: "new berlin data" }] },
+					} as any,
+				],
+			}),
+		);
+		expect(
+			(
+				await service.searchMemory({
+					appName: "app",
+					userId: "user",
+					query: "tokyo",
+				})
+			).memories,
+		).toEqual([]);
+		expect(
+			(
+				await service.searchMemory({
+					appName: "app",
+					userId: "user",
+					query: "berlin",
+				})
+			).memories,
+		).toHaveLength(1);
+	});
 });

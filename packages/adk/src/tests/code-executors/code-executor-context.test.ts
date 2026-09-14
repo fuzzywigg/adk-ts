@@ -256,4 +256,72 @@ describe("CodeExecutorContext", () => {
 		context.setExecutionId("second");
 		expect(context.getExecutionId()).toBe("second");
 	});
+
+	it("getExecutionId returns null when session id key is explicitly null", () => {
+		const state = State.create({}, {});
+		state["_code_execution_context"] = { execution_session_id: null };
+		const context = new CodeExecutorContext(state);
+		expect(context.getExecutionId()).toBeNull();
+	});
+
+	it("getErrorCount treats undefined entry as 0 via nullish coalescing", () => {
+		const state = State.create({}, {});
+		state["_code_executor_error_counts"] = { inv: undefined };
+		const context = new CodeExecutorContext(state);
+		expect(context.getErrorCount("inv")).toBe(0);
+		context.incrementErrorCount("inv");
+		expect(context.getErrorCount("inv")).toBe(1);
+	});
+
+	it("updateCodeExecutionResult accepts empty stdout and stderr", () => {
+		vi.spyOn(Date, "now").mockReturnValue(5_000);
+		const state = State.create({}, {});
+		const context = new CodeExecutorContext(state);
+		context.updateCodeExecutionResult("inv-empty", "print()", "", "");
+		expect(state["_code_execution_results"]["inv-empty"]).toEqual([
+			{
+				code: "print()",
+				resultStdout: "",
+				resultStderr: "",
+				timestamp: 5,
+			},
+		]);
+		context.updateCodeExecutionResult("inv-empty", "print(2)", "2", "");
+		expect(state["_code_execution_results"]["inv-empty"]).toHaveLength(2);
+	});
+
+	it("clearInputFiles clears processed names even when input files key is absent", () => {
+		const state = State.create({}, {});
+		const context = new CodeExecutorContext(state);
+		context.addProcessedFileNames(["a.py", "b.py"]);
+		expect(context.getProcessedFileNames()).toEqual(["a.py", "b.py"]);
+		context.clearInputFiles();
+		expect(context.getProcessedFileNames()).toEqual([]);
+		expect(state["_code_executor_input_files"]).toBeUndefined();
+	});
+
+	it("clearInputFiles empties both input files and processed names", () => {
+		const state = State.create({}, {});
+		const context = new CodeExecutorContext(state);
+		context.addInputFiles([
+			{ name: "in.py", content: "YQ==", mimeType: "text/x-python" },
+		]);
+		context.addProcessedFileNames(["in.py"]);
+		context.clearInputFiles();
+		expect(context.getInputFiles()).toEqual([]);
+		expect(context.getProcessedFileNames()).toEqual([]);
+	});
+
+	it("resetErrorCount is a no-op when map or key is missing", () => {
+		const state = State.create({}, {});
+		const context = new CodeExecutorContext(state);
+		context.resetErrorCount("missing");
+		expect(state["_code_executor_error_counts"]).toBeUndefined();
+
+		state["_code_executor_error_counts"] = { other: 2 };
+		context.resetErrorCount("missing");
+		expect(state["_code_executor_error_counts"]).toEqual({ other: 2 });
+		context.resetErrorCount("other");
+		expect(state["_code_executor_error_counts"]).toEqual({});
+	});
 });

@@ -537,4 +537,256 @@ describe("InMemoryArtifactService", () => {
 			await service.listVersions({ ...base, filename: "dense.txt" }),
 		).toEqual([0, 1, 2]);
 	});
+
+	it("resolves artifact refs and returns null when target was deleted", async () => {
+		const service = new InMemoryArtifactService();
+		await service.saveArtifact({
+			...base,
+			filename: "target.txt",
+			artifact: { text: "payload" },
+		});
+		const uri = getArtifactUri({
+			...base,
+			filename: "target.txt",
+			version: 0,
+		});
+		await service.saveArtifact({
+			...base,
+			filename: "ref.txt",
+			artifact: {
+				fileData: { fileUri: uri, mimeType: "text/plain" },
+			},
+		});
+		expect(
+			await service.loadArtifact({ ...base, filename: "ref.txt" }),
+		).toEqual({ text: "payload" });
+
+		await service.deleteArtifact({ ...base, filename: "target.txt" });
+		expect(
+			await service.loadArtifact({ ...base, filename: "ref.txt" }),
+		).toBeNull();
+	});
+
+	it("loads explicit version 0 while later versions exist", async () => {
+		const service = new InMemoryArtifactService();
+		await service.saveArtifact({
+			...base,
+			filename: "multi.txt",
+			artifact: { text: "v0" },
+		});
+		await service.saveArtifact({
+			...base,
+			filename: "multi.txt",
+			artifact: { text: "v1" },
+		});
+		await service.saveArtifact({
+			...base,
+			filename: "multi.txt",
+			artifact: { text: "v2" },
+		});
+		expect(
+			await service.loadArtifact({
+				...base,
+				filename: "multi.txt",
+				version: 0,
+			}),
+		).toEqual({ text: "v0" });
+		expect(
+			await service.loadArtifact({ ...base, filename: "multi.txt" }),
+		).toEqual({ text: "v2" });
+	});
+
+	it("negative version indexing and out-of-range return null", async () => {
+		const service = new InMemoryArtifactService();
+		await service.saveArtifact({
+			...base,
+			filename: "neg.txt",
+			artifact: { text: "a" },
+		});
+		await service.saveArtifact({
+			...base,
+			filename: "neg.txt",
+			artifact: { text: "b" },
+		});
+		expect(
+			await service.loadArtifact({
+				...base,
+				filename: "neg.txt",
+				version: -1,
+			}),
+		).toEqual({ text: "b" });
+		expect(
+			await service.loadArtifact({
+				...base,
+				filename: "neg.txt",
+				version: -2,
+			}),
+		).toEqual({ text: "a" });
+		expect(
+			await service.loadArtifact({
+				...base,
+				filename: "neg.txt",
+				version: -3,
+			}),
+		).toBeNull();
+		expect(
+			await service.loadArtifact({
+				...base,
+				filename: "neg.txt",
+				version: 99,
+			}),
+		).toBeNull();
+	});
+
+	it("returns null when versions array exists but is empty", async () => {
+		const service = new InMemoryArtifactService();
+		const artifactsMap = (service as any).artifacts as Map<string, unknown[]>;
+		artifactsMap.set("app/user-1/session-1/empty.txt", []);
+		expect(
+			await service.loadArtifact({ ...base, filename: "empty.txt" }),
+		).toBeNull();
+	});
+
+	it("concurrent saves assign dense ascending versions", async () => {
+		const service = new InMemoryArtifactService();
+		const versions = await Promise.all(
+			[0, 1, 2, 3, 4].map((i) =>
+				service.saveArtifact({
+					...base,
+					filename: "race.txt",
+					artifact: { text: `v${i}` },
+				}),
+			),
+		);
+		expect(versions.sort((a, b) => a - b)).toEqual([0, 1, 2, 3, 4]);
+		expect(
+			await service.listVersions({ ...base, filename: "race.txt" }),
+		).toEqual([0, 1, 2, 3, 4]);
+	});
+
+	it("artifact ref falls back to caller sessionId when URI omits session", async () => {
+		const service = new InMemoryArtifactService();
+		await service.saveArtifact({
+			...base,
+			filename: "user:shared.json",
+			artifact: { text: '{"ok":true}' },
+		});
+		const uri = getArtifactUri({
+			appName: base.appName,
+			userId: base.userId,
+			sessionId: "",
+			filename: "user:shared.json",
+			version: 0,
+		});
+		await service.saveArtifact({
+			...base,
+			sessionId: "caller-session",
+			filename: "pointer.txt",
+			artifact: {
+				fileData: { fileUri: uri, mimeType: "application/json" },
+			},
+		});
+		const loaded = await service.loadArtifact({
+			...base,
+			sessionId: "caller-session",
+			filename: "pointer.txt",
+		});
+		expect(loaded).toEqual({ text: '{"ok":true}' });
+	});
+
+	it("keeps fileData non-artifact URIs as concrete parts", async () => {
+		const service = new InMemoryArtifactService();
+		await service.saveArtifact({
+			...base,
+			filename: "external.txt",
+			artifact: {
+				fileData: {
+					fileUri: "https://example.com/file.txt",
+					mimeType: "text/plain",
+				},
+			},
+		});
+		expect(
+			await service.loadArtifact({ ...base, filename: "external.txt" }),
+		).toEqual({
+			fileData: {
+				fileUri: "https://example.com/file.txt",
+				mimeType: "text/plain",
+			},
+		});
+	});
+
+	it("returns null for empty inlineData without text or usable fileData", async () => {
+		const service = new InMemoryArtifactService();
+		await service.saveArtifact({
+			...base,
+			filename: "empty-inline.txt",
+			artifact: {
+				inlineData: { data: "", mimeType: "text/plain" },
+			},
+		});
+		expect(
+			await service.loadArtifact({ ...base, filename: "empty-inline.txt" }),
+		).toBeNull();
+	});
+
+	it("listArtifactKeys sorts and includes user-namespace files for the user", async () => {
+		const service = new InMemoryArtifactService();
+		await service.saveArtifact({
+			...base,
+			filename: "z.txt",
+			artifact: { text: "z" },
+		});
+		await service.saveArtifact({
+			...base,
+			filename: "a.txt",
+			artifact: { text: "a" },
+		});
+		await service.saveArtifact({
+			...base,
+			filename: "user:prefs.json",
+			artifact: { text: "{}" },
+		});
+		expect(await service.listArtifactKeys(base)).toEqual([
+			"a.txt",
+			"user:prefs.json",
+			"z.txt",
+		]);
+	});
+
+	it("chained refs resolve through intermediate references", async () => {
+		const service = new InMemoryArtifactService();
+		await service.saveArtifact({
+			...base,
+			filename: "leaf.txt",
+			artifact: { text: "leaf" },
+		});
+		const leafUri = getArtifactUri({
+			...base,
+			filename: "leaf.txt",
+			version: 0,
+		});
+		await service.saveArtifact({
+			...base,
+			filename: "mid.txt",
+			artifact: {
+				fileData: { fileUri: leafUri, mimeType: "text/plain" },
+			},
+		});
+		const midUri = getArtifactUri({
+			...base,
+			filename: "mid.txt",
+			version: 0,
+		});
+		await service.saveArtifact({
+			...base,
+			filename: "top.txt",
+			artifact: {
+				fileData: { fileUri: midUri, mimeType: "text/plain" },
+			},
+		});
+		expect(
+			await service.loadArtifact({ ...base, filename: "top.txt" }),
+		).toEqual({ text: "leaf" });
+	});
 });

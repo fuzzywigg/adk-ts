@@ -923,4 +923,395 @@ describe("DatabaseSessionService (sqlite :memory:)", () => {
 			),
 		).rejects.toThrow();
 	});
+
+	it("eventToStorageEvent coerces empty and undefined author to empty string", () => {
+		const session = {
+			id: "s1",
+			appName: "app",
+			userId: "user",
+			state: {},
+			events: [],
+			lastUpdateTime: 0,
+		};
+
+		const emptyAuthor = (service as any).eventToStorageEvent(session, {
+			id: "e-empty-author",
+			invocationId: "inv",
+			author: "",
+			content: undefined,
+			actions: undefined,
+		});
+		expect(emptyAuthor.author).toBe("");
+		expect(emptyAuthor.content).toBeNull();
+		expect(emptyAuthor.actions).toBeNull();
+
+		const undefinedAuthor = (service as any).eventToStorageEvent(session, {
+			id: "e-undef-author",
+			invocationId: undefined,
+			author: undefined,
+			content: null,
+			actions: null,
+		});
+		expect(undefinedAuthor.author).toBe("");
+		expect(undefinedAuthor.invocation_id).toBe("");
+		expect(undefinedAuthor.content).toBeNull();
+		expect(undefinedAuthor.actions).toBeNull();
+	});
+
+	it("eventToStorageEvent distinguishes empty content object from missing content", () => {
+		const session = {
+			id: "s1",
+			appName: "app",
+			userId: "user",
+			state: {},
+			events: [],
+			lastUpdateTime: 0,
+		};
+		const withEmptyContent = (service as any).eventToStorageEvent(session, {
+			id: "e-empty-content",
+			author: "agent",
+			content: {},
+			actions: { stateDelta: {} },
+		});
+		expect(JSON.parse(withEmptyContent.content)).toEqual({});
+		expect(JSON.parse(withEmptyContent.actions)).toEqual({ stateDelta: {} });
+	});
+
+	it("storageEventToEvent returns [] when functionCalls/Responses keys are falsy", () => {
+		for (const falsy of [null, undefined, false, 0, ""]) {
+			const event = (service as any).storageEventToEvent({
+				id: `e-falsy-${String(falsy)}`,
+				app_name: "app",
+				user_id: "user",
+				session_id: "s1",
+				invocation_id: "inv",
+				author: "agent",
+				branch: null,
+				timestamp: new Date(),
+				content: null,
+				actions: JSON.stringify({
+					functionCalls: falsy,
+					functionResponses: falsy,
+					hasTrailingCodeExecutionResult: falsy,
+				}),
+				long_running_tool_ids_json: null,
+				grounding_metadata: null,
+				partial: null,
+				turn_complete: null,
+				error_code: null,
+				error_message: null,
+				interrupted: null,
+			});
+			expect(event.getFunctionCalls()).toEqual([]);
+			expect(event.getFunctionResponses()).toEqual([]);
+			expect(event.hasTrailingCodeExecutionResult()).toBe(false);
+		}
+	});
+
+	it("storageEventToEvent helpers tolerate non-object actions payloads", () => {
+		for (const payload of ["not-an-object", 42, true]) {
+			const event = (service as any).storageEventToEvent({
+				id: `e-nonobj-${typeof payload}`,
+				app_name: "app",
+				user_id: "user",
+				session_id: "s1",
+				invocation_id: "inv",
+				author: "agent",
+				branch: null,
+				timestamp: new Date(),
+				content: null,
+				actions: JSON.stringify(payload),
+				long_running_tool_ids_json: null,
+				grounding_metadata: null,
+				partial: null,
+				turn_complete: null,
+				error_code: null,
+				error_message: null,
+				interrupted: null,
+			});
+			expect(event.getFunctionCalls()).toEqual([]);
+			expect(event.getFunctionResponses()).toEqual([]);
+			expect(event.hasTrailingCodeExecutionResult()).toBe(false);
+			expect(event.isFinalResponse()).toBe(false);
+		}
+	});
+
+	it("storageEventToEvent treats missing hasTrailingCodeExecutionResult as false", () => {
+		const event = (service as any).storageEventToEvent({
+			id: "e-no-trailing",
+			app_name: "app",
+			user_id: "user",
+			session_id: "s1",
+			invocation_id: "inv",
+			author: "agent",
+			branch: null,
+			timestamp: new Date(),
+			content: null,
+			actions: JSON.stringify({
+				functionCalls: [{ name: "only-calls" }],
+			}),
+			long_running_tool_ids_json: null,
+			grounding_metadata: null,
+			partial: null,
+			turn_complete: null,
+			error_code: null,
+			error_message: null,
+			interrupted: null,
+		});
+		expect(event.getFunctionCalls()).toEqual([{ name: "only-calls" }]);
+		expect(event.getFunctionResponses()).toEqual([]);
+		expect(event.hasTrailingCodeExecutionResult()).toBe(false);
+	});
+
+	it("applies both numRecentEvents and afterTimestamp on getSession", async () => {
+		const session = await service.createSession("app", "user", {}, "both-cfg");
+		const texts = ["one", "two", "three", "four"];
+		for (const text of texts) {
+			await service.appendEvent(
+				session,
+				new Event({
+					author: "agent",
+					content: { parts: [{ text }] },
+				}),
+			);
+			await new Promise((r) => setTimeout(r, 5));
+		}
+
+		const all = await service.getSession("app", "user", "both-cfg");
+		expect(all?.events).toHaveLength(4);
+
+		const limited = await service.getSession("app", "user", "both-cfg", {
+			numRecentEvents: 2,
+		});
+		expect(limited?.events).toHaveLength(2);
+		const limitedTexts =
+			limited?.events.map((e) => e.content?.parts?.[0]?.text) ?? [];
+		expect(limitedTexts.every((t) => texts.includes(t as string))).toBe(true);
+	});
+
+	it("allows append when caller lastUpdateTime matches storage exactly", async () => {
+		const session = await service.createSession("app", "user", {}, "equal-ts");
+		const fetched = await service.getSession("app", "user", "equal-ts");
+		expect(fetched).toBeDefined();
+		session.lastUpdateTime = fetched!.lastUpdateTime;
+
+		const returned = await service.appendEvent(
+			session,
+			new Event({
+				author: "agent",
+				content: { parts: [{ text: "equal-ok" }] },
+			}),
+		);
+		expect(returned.content?.parts?.[0]?.text).toBe("equal-ok");
+		const again = await service.getSession("app", "user", "equal-ts");
+		expect(again?.events).toHaveLength(1);
+	});
+
+	it("loads sessions when stored state JSON is corrupt via parseJsonSafely", async () => {
+		const created = await service.createSession(
+			"app",
+			"user",
+			{ ok: true },
+			"corrupt-state",
+		);
+		expect(created.state.ok).toBe(true);
+
+		await (service as any).db
+			.updateTable("sessions")
+			.set({ state: "{not-json" })
+			.where("id", "=", "corrupt-state")
+			.execute();
+
+		const fetched = await service.getSession("app", "user", "corrupt-state");
+		expect(fetched?.state.ok).toBeUndefined();
+		expect(fetched?.id).toBe("corrupt-state");
+	});
+
+	it("loads when app_states.state JSON is corrupt and still merges user/session", async () => {
+		await service.createSession(
+			"app",
+			"user",
+			{
+				[`${State.APP_PREFIX}theme`]: "dark",
+				[`${State.USER_PREFIX}locale`]: "en",
+				local: 1,
+			},
+			"corrupt-app",
+		);
+
+		await (service as any).db
+			.updateTable("app_states")
+			.set({ state: "%%%" })
+			.where("app_name", "=", "app")
+			.execute();
+
+		const fetched = await service.getSession("app", "user", "corrupt-app");
+		expect(fetched?.state[`${State.APP_PREFIX}theme`]).toBeUndefined();
+		expect(fetched?.state[`${State.USER_PREFIX}locale`]).toBe("en");
+		expect(fetched?.state.local).toBe(1);
+	});
+
+	it("appendEvent with empty author persists empty author string", async () => {
+		const session = await service.createSession(
+			"app",
+			"user",
+			{},
+			"empty-auth",
+		);
+		await service.appendEvent(
+			session,
+			new Event({
+				author: "",
+				content: { parts: [{ text: "anon" }] },
+			}),
+		);
+		const fetched = await service.getSession("app", "user", "empty-auth");
+		expect(fetched?.events[0].author).toBe("");
+		expect(fetched?.events[0].content?.parts?.[0]?.text).toBe("anon");
+	});
+
+	it("round-trips actions bags with only functionResponses", async () => {
+		const session = await service.createSession("app", "user", {}, "fr-only");
+		const event = new Event({
+			author: "tool",
+			actions: new EventActions({}),
+		});
+		(event.actions as any).functionResponses = [
+			{ name: "lookup", response: { n: 1 } },
+		];
+		await service.appendEvent(session, event);
+
+		const fetched = await service.getSession("app", "user", "fr-only");
+		const helpers = (service as any).storageEventToEvent({
+			id: "x",
+			app_name: "app",
+			user_id: "user",
+			session_id: "fr-only",
+			invocation_id: "",
+			author: "tool",
+			branch: null,
+			timestamp: new Date(),
+			content: null,
+			actions: JSON.stringify({
+				functionResponses: [{ name: "lookup", response: { n: 1 } }],
+			}),
+			long_running_tool_ids_json: null,
+			grounding_metadata: null,
+			partial: null,
+			turn_complete: null,
+			error_code: null,
+			error_message: null,
+			interrupted: null,
+		});
+		expect(helpers.getFunctionResponses()).toEqual([
+			{ name: "lookup", response: { n: 1 } },
+		]);
+		expect(helpers.getFunctionCalls()).toEqual([]);
+		expect(fetched?.events).toHaveLength(1);
+	});
+
+	it("deleteSession fails with FK when events still reference the session", async () => {
+		const keep = await service.createSession("app", "user", {}, "keep-me");
+		const drop = await service.createSession("app", "user", {}, "drop-me");
+		await service.appendEvent(
+			keep,
+			new Event({ author: "a", content: { parts: [{ text: "k" }] } }),
+		);
+		await service.appendEvent(
+			drop,
+			new Event({ author: "a", content: { parts: [{ text: "d" }] } }),
+		);
+		await expect(
+			service.deleteSession("app", "user", "drop-me"),
+		).rejects.toThrow(/FOREIGN KEY/i);
+
+		const kept = await service.getSession("app", "user", "keep-me");
+		expect(kept?.events).toHaveLength(1);
+		expect(await service.getSession("app", "user", "drop-me")).toBeDefined();
+	});
+
+	it("deleteSession removes a session that has no events", async () => {
+		await service.createSession("app", "user", {}, "empty-drop");
+		await service.deleteSession("app", "user", "empty-drop");
+		expect(
+			await service.getSession("app", "user", "empty-drop"),
+		).toBeUndefined();
+	});
+
+	it("createSession seeds app/user state visible to a second session", async () => {
+		await service.createSession(
+			"shared-app",
+			"shared-user",
+			{
+				[`${State.APP_PREFIX}brand`]: "x",
+				[`${State.USER_PREFIX}role`]: "admin",
+			},
+			"seed-1",
+		);
+		const second = await service.createSession(
+			"shared-app",
+			"shared-user",
+			{ localOnly: true },
+			"seed-2",
+		);
+		expect(second.state[`${State.APP_PREFIX}brand`]).toBe("x");
+		expect(second.state[`${State.USER_PREFIX}role`]).toBe("admin");
+		expect(second.state.localOnly).toBe(true);
+	});
+
+	it("parseJsonSafely returns fallback for null/undefined/invalid", () => {
+		expect((service as any).parseJsonSafely(null, { a: 1 })).toEqual({ a: 1 });
+		expect((service as any).parseJsonSafely(undefined, [])).toEqual([]);
+		expect((service as any).parseJsonSafely("", { empty: true })).toEqual({
+			empty: true,
+		});
+		expect((service as any).parseJsonSafely("{bad", { fb: true })).toEqual({
+			fb: true,
+		});
+		expect((service as any).parseJsonSafely('{"ok":true}', {})).toEqual({
+			ok: true,
+		});
+	});
+
+	it("timestamp helpers convert Date, string, ms number, and seconds", () => {
+		const date = new Date("2024-06-01T12:00:00.000Z");
+		expect((service as any).timestampToUnixSeconds(date)).toBe(
+			date.getTime() / 1000,
+		);
+		expect(
+			(service as any).timestampToUnixSeconds("2024-06-01T12:00:00.000Z"),
+		).toBe(date.getTime() / 1000);
+		expect((service as any).timestampToUnixSeconds(date.getTime())).toBe(
+			date.getTime() / 1000,
+		);
+		expect((service as any).timestampToUnixSeconds(1_700_000_000)).toBe(
+			1_700_000_000,
+		);
+		const fallback = (service as any).timestampToUnixSeconds({
+			weird: true,
+		});
+		expect(fallback).toBeGreaterThan(1_700_000_000);
+	});
+
+	it("listSessions returns lastUpdateTime without events or state", async () => {
+		const session = await service.createSession(
+			"app",
+			"user",
+			{ secret: 1 },
+			"list-shape",
+		);
+		await service.appendEvent(
+			session,
+			new Event({
+				author: "agent",
+				content: { parts: [{ text: "hidden-from-list" }] },
+			}),
+		);
+		const listed = await service.listSessions("app", "user");
+		const entry = listed.sessions.find((s) => s.id === "list-shape");
+		expect(entry).toBeDefined();
+		expect(entry?.events).toEqual([]);
+		expect(entry?.state).toEqual({});
+		expect(entry?.lastUpdateTime).toBeGreaterThan(0);
+	});
 });

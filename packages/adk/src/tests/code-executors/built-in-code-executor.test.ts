@@ -146,4 +146,46 @@ describe("BuiltInCodeExecutor", () => {
 		expect(a.config?.tools).toHaveLength(1);
 		expect(b.config?.tools).toHaveLength(1);
 	});
+
+	it("rejects case-sensitive non-gemini-2 prefix", () => {
+		const executor = new BuiltInCodeExecutor();
+		expect(() =>
+			executor.processLlmRequest(new LlmRequest({ model: "Gemini-2.0-flash" })),
+		).toThrow(/not supported for model Gemini-2.0-flash/);
+	});
+
+	it("pushes onto an existing empty tools array", () => {
+		const executor = new BuiltInCodeExecutor();
+		const req = new LlmRequest({
+			model: "gemini-2.5-pro",
+			config: { tools: [] } as any,
+		});
+		executor.processLlmRequest(req);
+		expect(req.config?.tools).toEqual([{ codeExecution: {} }]);
+	});
+
+	it("executeCode rejects with exact message regardless of invocation context", async () => {
+		const executor = new BuiltInCodeExecutor();
+		await expect(
+			executor.executeCode({ agent: { name: "x" } } as any, {
+				code: "print(1)",
+				inputFiles: [],
+			}),
+		).rejects.toThrow(
+			"BuiltInCodeExecutor.executeCode should not be called directly",
+		);
+	});
+
+	it("accepts gemini-2 models including flash-lite variants", () => {
+		const executor = new BuiltInCodeExecutor();
+		for (const model of [
+			"gemini-2.0-flash-lite",
+			"gemini-2.5-flash",
+			"gemini-2",
+		]) {
+			const req = new LlmRequest({ model });
+			executor.processLlmRequest(req);
+			expect(req.config?.tools).toEqual([{ codeExecution: {} }]);
+		}
+	});
 });

@@ -396,4 +396,137 @@ describe("GcsArtifactService", () => {
 			},
 		});
 	});
+
+	it("loadArtifact returns null on 404 for an explicit version", async () => {
+		getMetadataMock.mockRejectedValue(
+			Object.assign(new Error("missing"), { code: 404 }),
+		);
+		const service = new GcsArtifactService("b");
+		await expect(
+			service.loadArtifact({
+				...base,
+				filename: "gone.txt",
+				version: 3,
+			}),
+		).resolves.toBeNull();
+	});
+
+	it("loadArtifact defaults mimeType when contentType is missing", async () => {
+		getMetadataMock.mockResolvedValue([{}]);
+		downloadMock.mockResolvedValue([Buffer.from("raw")]);
+		const service = new GcsArtifactService("b");
+		const part = await service.loadArtifact({
+			...base,
+			filename: "raw.bin",
+			version: 0,
+		});
+		expect(part).toEqual({
+			inlineData: {
+				data: "raw",
+				mimeType: "application/octet-stream",
+			},
+		});
+	});
+
+	it("loadArtifact returns null when download buffer is missing", async () => {
+		getMetadataMock.mockResolvedValue([{ contentType: "text/plain" }]);
+		downloadMock.mockResolvedValue([undefined]);
+		const service = new GcsArtifactService("b");
+		await expect(
+			service.loadArtifact({
+				...base,
+				filename: "empty.txt",
+				version: 0,
+			}),
+		).resolves.toBeNull();
+	});
+
+	it("listVersions skips blobs whose path does not have 5 segments", async () => {
+		getFilesMock.mockResolvedValue([
+			[
+				{ name: "app/user-1/sess-1/ok.txt/0" },
+				{ name: "app/user-1/sess-1/ok.txt/bad/extra" },
+				{ name: "too/short" },
+				{ name: "app/user-1/sess-1/ok.txt/2" },
+				{ name: "app/user-1/sess-1/ok.txt/NaN" },
+			],
+		]);
+		const service = new GcsArtifactService("b");
+		await expect(
+			service.listVersions({ ...base, filename: "ok.txt" }),
+		).resolves.toEqual([0, 2]);
+	});
+
+	it("saveArtifact forwards undefined data when inlineData lacks data", async () => {
+		getFilesMock.mockResolvedValue([[]]);
+		const service = new GcsArtifactService("b");
+		const version = await service.saveArtifact({
+			...base,
+			filename: "bad.txt",
+			artifact: {
+				inlineData: { mimeType: "text/plain" } as any,
+			},
+		});
+		expect(version).toBe(0);
+		expect(saveMock).toHaveBeenCalledWith(undefined, {
+			contentType: "text/plain",
+			preconditionOpts: { ifGenerationMatch: 0 },
+		});
+	});
+
+	it("deleteArtifact deletes every listed version", async () => {
+		getFilesMock.mockResolvedValue([
+			[
+				{ name: "app/user-1/sess-1/multi.txt/0" },
+				{ name: "app/user-1/sess-1/multi.txt/1" },
+				{ name: "app/user-1/sess-1/multi.txt/2" },
+			],
+		]);
+		const service = new GcsArtifactService("b");
+		await service.deleteArtifact({ ...base, filename: "multi.txt" });
+		expect(deleteMock).toHaveBeenCalledTimes(3);
+		expect(fileMock).toHaveBeenCalledWith("app/user-1/sess-1/multi.txt/0");
+		expect(fileMock).toHaveBeenCalledWith("app/user-1/sess-1/multi.txt/1");
+		expect(fileMock).toHaveBeenCalledWith("app/user-1/sess-1/multi.txt/2");
+	});
+
+	it("loadArtifact without version uses max listed version", async () => {
+		getFilesMock.mockResolvedValue([
+			[
+				{ name: "app/user-1/sess-1/latest.txt/0" },
+				{ name: "app/user-1/sess-1/latest.txt/4" },
+			],
+		]);
+		getMetadataMock.mockResolvedValue([{ contentType: "text/plain" }]);
+		downloadMock.mockResolvedValue([Buffer.from("latest")]);
+		const service = new GcsArtifactService("b");
+		const part = await service.loadArtifact({
+			...base,
+			filename: "latest.txt",
+		});
+		expect(fileMock).toHaveBeenCalledWith("app/user-1/sess-1/latest.txt/4");
+		expect(part?.inlineData?.data).toBe("latest");
+	});
+
+	it("loadArtifact without version returns null when no versions exist", async () => {
+		getFilesMock.mockResolvedValue([[]]);
+		const service = new GcsArtifactService("b");
+		await expect(
+			service.loadArtifact({ ...base, filename: "none.txt" }),
+		).resolves.toBeNull();
+	});
+
+	it("rethrows non-404 errors from loadArtifact", async () => {
+		getMetadataMock.mockRejectedValue(
+			Object.assign(new Error("boom"), { code: 500 }),
+		);
+		const service = new GcsArtifactService("b");
+		await expect(
+			service.loadArtifact({
+				...base,
+				filename: "err.txt",
+				version: 0,
+			}),
+		).rejects.toThrow(/boom/);
+	});
 });

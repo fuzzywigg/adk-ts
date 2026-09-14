@@ -868,4 +868,262 @@ describe("VertexAiSessionService", () => {
 		expect(event.errorCode).toBe("ERR");
 		expect(event.errorMessage).toBe("failed");
 	});
+
+	it("getSession defaults state to {} when sessionState is omitted or falsy", async () => {
+		for (const sessionState of [undefined, null, "", 0]) {
+			const { service, asyncRequest } = createService();
+			const response: Record<string, any> = {
+				name: "projects/p/locations/l/reasoningEngines/9/sessions/sess-state",
+				updateTime: "2024-01-01T00:00:00.000Z",
+			};
+			if (sessionState !== undefined) {
+				response.sessionState = sessionState;
+			}
+			asyncRequest
+				.mockResolvedValueOnce(response)
+				.mockResolvedValueOnce({ httpHeaders: {} });
+
+			const session = await service.getSession("app", "u", "sess-state");
+			expect(session?.state).toEqual({});
+		}
+	});
+
+	it("getSession with both numRecentEvents and afterTimestamp prefers numRecentEvents", async () => {
+		const { service, asyncRequest } = createService();
+		asyncRequest
+			.mockResolvedValueOnce({
+				name: "projects/p/locations/l/reasoningEngines/9/sessions/sess-both",
+				updateTime: "2024-01-01T00:00:30.000Z",
+				sessionState: { keep: true },
+			})
+			.mockResolvedValueOnce({
+				sessionEvents: [
+					{
+						name: ".../events/e1",
+						invocationId: "i1",
+						author: "user",
+						timestamp: "2024-01-01T00:00:10.000Z",
+						content: { parts: [{ text: "first" }] },
+					},
+					{
+						name: ".../events/e2",
+						invocationId: "i2",
+						author: "agent",
+						timestamp: "2024-01-01T00:00:20.000Z",
+						content: { parts: [{ text: "second" }] },
+					},
+					{
+						name: ".../events/e3",
+						invocationId: "i3",
+						author: "user",
+						timestamp: "2024-01-01T00:00:25.000Z",
+						content: { parts: [{ text: "third" }] },
+					},
+				],
+			});
+
+		const session = await service.getSession("app", "u", "sess-both", {
+			numRecentEvents: 1,
+			afterTimestamp: Date.parse("2024-01-01T00:00:05.000Z") / 1000,
+		});
+		expect(session?.events.map((e) => e.content?.parts?.[0]?.text)).toEqual([
+			"third",
+		]);
+		expect(session?.state).toEqual({ keep: true });
+	});
+
+	it("convertEventToJson encodes fractional timestamp nanos", () => {
+		const { service } = createService();
+		const half = (service as any).convertEventToJson(
+			new Event({
+				author: "agent",
+				timestamp: 10.5,
+				content: { parts: [{ text: "half" }] },
+			}),
+		);
+		expect(half.timestamp).toEqual({
+			seconds: 10,
+			nanos: 500_000_000,
+		});
+
+		const tiny = (service as any).convertEventToJson(
+			new Event({
+				author: "agent",
+				timestamp: 1.000000001,
+			}),
+		);
+		expect(tiny.timestamp.seconds).toBe(1);
+		expect(tiny.timestamp.nanos).toBe(1);
+	});
+
+	it("fromApiEvent sets error fields and empty longRunningToolIds metadata", () => {
+		const { service } = createService();
+		const event = (service as any).fromApiEvent({
+			name: ".../events/err",
+			invocationId: "inv",
+			author: "agent",
+			timestamp: "2024-01-01T00:00:00.000Z",
+			errorCode: "E1",
+			errorMessage: "boom",
+			eventMetadata: {
+				longRunningToolIds: [],
+				partial: false,
+				turnComplete: true,
+			},
+		});
+		expect(event.errorCode).toBe("E1");
+		expect(event.errorMessage).toBe("boom");
+		expect(event.turnComplete).toBe(true);
+		expect(event.partial).toBe(false);
+		expect(event.longRunningToolIds).toEqual(new Set());
+	});
+
+	it("getSession second page with nextPageToken but empty sessionEvents still continues", async () => {
+		const { service, asyncRequest } = createService();
+		asyncRequest
+			.mockResolvedValueOnce({
+				name: "projects/p/locations/l/reasoningEngines/9/sessions/sess-empty-page",
+				updateTime: "2024-01-01T00:00:30.000Z",
+				sessionState: {},
+			})
+			.mockResolvedValueOnce({
+				sessionEvents: [
+					{
+						name: ".../events/e1",
+						invocationId: "i1",
+						author: "user",
+						timestamp: "2024-01-01T00:00:10.000Z",
+						content: { parts: [{ text: "only" }] },
+					},
+				],
+				nextPageToken: "p2",
+			})
+			.mockResolvedValueOnce({
+				nextPageToken: undefined,
+			});
+
+		const session = await service.getSession("app", "u", "sess-empty-page");
+		expect(session?.events.map((e) => e.content?.parts?.[0]?.text)).toEqual([
+			"only",
+		]);
+		expect(asyncRequest).toHaveBeenCalledTimes(3);
+	});
+
+	it("appendEvent posts full convertEventToJson body with grounding and tool ids", async () => {
+		const { service, asyncRequest } = createService();
+		asyncRequest.mockResolvedValue({});
+		const event = new Event({
+			author: "agent",
+			invocationId: "inv-full",
+			branch: "root.child",
+			timestamp: 1_700_000_000.25,
+			content: { role: "model", parts: [{ text: "hi" }] },
+			actions: new EventActions({
+				stateDelta: { a: 1 },
+				skipSummarization: true,
+				transferToAgent: "other",
+				escalate: false,
+			}),
+			longRunningToolIds: new Set(["tool-a", "tool-b"]),
+		});
+		event.groundingMetadata = { webSearchQueries: ["q"] } as any;
+		event.turnComplete = true;
+		event.interrupted = false;
+		event.errorCode = "E";
+		event.errorMessage = "m";
+
+		const session = {
+			appName: "app",
+			userId: "u",
+			id: "sess-post",
+			state: {},
+			events: [] as any[],
+			lastUpdateTime: 0,
+		};
+		await service.appendEvent(session as any, event);
+
+		const body = asyncRequest.mock.calls[0][0].request_dict;
+		expect(body.author).toBe("agent");
+		expect(body.invocation_id).toBe("inv-full");
+		expect(body.content).toEqual({ role: "model", parts: [{ text: "hi" }] });
+		expect(body.timestamp.seconds).toBe(1_700_000_000);
+		expect(body.timestamp.nanos).toBe(250_000_000);
+		expect(body.event_metadata.branch).toBe("root.child");
+		expect(body.event_metadata.long_running_tool_ids).toEqual([
+			"tool-a",
+			"tool-b",
+		]);
+		expect(body.event_metadata.grounding_metadata).toEqual({
+			webSearchQueries: ["q"],
+		});
+		expect(body.actions.state_delta).toEqual({ a: 1 });
+		expect(body.actions.transfer_agent).toBe("other");
+		expect(body.error_code).toBe("E");
+		expect(session.events).toHaveLength(1);
+	});
+
+	it("listSessions returns empty when response has httpHeaders sentinel", async () => {
+		const { service, asyncRequest } = createService();
+		asyncRequest.mockResolvedValue({ httpHeaders: { x: "1" } });
+		expect(await service.listSessions("app", "u")).toEqual({ sessions: [] });
+	});
+
+	it("listSessions maps multiple sessions without state/events", async () => {
+		const { service, asyncRequest } = createService();
+		asyncRequest.mockResolvedValue({
+			sessions: [
+				{
+					name: "projects/p/locations/l/reasoningEngines/9/sessions/a",
+					updateTime: "2024-01-01T00:00:00.000Z",
+				},
+				{
+					name: "projects/p/locations/l/reasoningEngines/9/sessions/b",
+					updateTime: "2024-01-02T00:00:00.000Z",
+				},
+			],
+		});
+		const listed = await service.listSessions("app", "user-z");
+		expect(listed.sessions).toHaveLength(2);
+		expect(listed.sessions[0]).toMatchObject({
+			id: "a",
+			appName: "app",
+			userId: "user-z",
+			state: {},
+			events: [],
+		});
+		expect(listed.sessions[1].id).toBe("b");
+	});
+
+	it("getSession returns undefined and logs when API throws", async () => {
+		const { service, asyncRequest } = createService();
+		asyncRequest.mockRejectedValue(new Error("network"));
+		const errorSpy = vi.spyOn(console, "error");
+		expect(await service.getSession("app", "u", "x")).toBeUndefined();
+		expect(errorSpy).toHaveBeenCalled();
+	});
+
+	it("convertEventToJson omits content and grounding when absent", () => {
+		const { service } = createService();
+		const json = (service as any).convertEventToJson(
+			new Event({ author: "agent", timestamp: 5 }),
+		);
+		expect(json.content).toBeUndefined();
+		expect(json.event_metadata.grounding_metadata).toBeUndefined();
+		expect(json.event_metadata.long_running_tool_ids).toBeNull();
+		expect(json.timestamp).toEqual({ seconds: 5, nanos: 0 });
+	});
+
+	it("fromApiEvent without actions leaves default EventActions", () => {
+		const { service } = createService();
+		const event = (service as any).fromApiEvent({
+			name: ".../events/plain",
+			invocationId: "i",
+			author: "user",
+			timestamp: "2024-01-01T00:00:00.000Z",
+			content: { parts: [{ text: "hi" }] },
+		});
+		expect(event.actions).toBeInstanceOf(EventActions);
+		expect(event.actions.stateDelta).toEqual({});
+		expect(event.content).toEqual({ parts: [{ text: "hi" }] });
+	});
 });
