@@ -24,8 +24,9 @@ vi.mock("ai", () => ({
 
 /**
  * Nineteenth leftover (HEAVY tip-relaunch residual after tip 96457a9 / #248):
- * `parameters || {}` after sixteenth classic falsy. Residual true/`"true"`/`[]`/
- * `-0`/`NaN`/`±Infinity` — falsy near-miss coalesce; truthy near-miss keep.
+ * `parameters || {}` after sixteenth classic falsy. Residual true/`"true"`/`-0`/
+ * `NaN`/`±Infinity` keep-or-coalesce; empty `[]` bypasses `|| {}` but
+ * `transformSchema*.map` remaps to a new array.
  */
 describe("providers parameters true negzero nan posinf nineteenth leftover edges", () => {
 	let originalEnv: NodeJS.ProcessEnv;
@@ -75,10 +76,11 @@ describe("providers parameters true negzero nan posinf nineteenth leftover edges
 	it.each([
 		{ label: "boolean true", parameters: true as any },
 		{ label: "string true", parameters: "true" as any },
-		{ label: "empty array", parameters: [] as any },
 		{ label: "POSITIVE_INFINITY", parameters: Number.POSITIVE_INFINITY as any },
 		{ label: "NEGATIVE_INFINITY", parameters: Number.NEGATIVE_INFINITY as any },
-	])("truthy near-miss parameters kept ($label)", ({ parameters }) => {
+	])("truthy non-array near-miss parameters kept by identity ($label)", ({
+		parameters,
+	}) => {
 		expect(
 			(openai as any).functionDeclarationToOpenAiTool({
 				name: "t",
@@ -98,5 +100,29 @@ describe("providers parameters true negzero nan posinf nineteenth leftover edges
 			},
 		});
 		expect(tools.t.inputSchema).toEqual({ schema: parameters });
+	});
+
+	it("empty array parameters bypass || {} but transformSchema.map remaps", () => {
+		const parameters: any[] = [];
+		const openaiParams = (openai as any).functionDeclarationToOpenAiTool({
+			name: "t",
+			description: "d",
+			parameters,
+		}).function.parameters;
+		expect(openaiParams).toEqual([]);
+		expect(openaiParams).not.toBe(parameters);
+
+		const tools = (aiSdk as any).convertToAiSdkTools({
+			contents: [],
+			config: {
+				tools: [
+					{
+						functionDeclarations: [{ name: "t", description: "d", parameters }],
+					},
+				],
+			},
+		});
+		expect(tools.t.inputSchema).toEqual({ schema: [] });
+		expect(tools.t.inputSchema.schema).not.toBe(parameters);
 	});
 });

@@ -24,7 +24,8 @@ vi.mock("openai", () => ({
 /**
  * Nineteenth leftover (HEAVY tip-relaunch residual after tip 96457a9 / #248):
  * `toolCall.index || 0` after seventh classic falsy. `-0`/`NaN` merge into
- * slot 0; boolean `true` stays a distinct keyed slot (`"true"`).
+ * slot 0; boolean `true` is truthy so skips `|| 0`, but `arr[true]` is a
+ * non-index property — `for...of` / `.length` orphan it (not emitted).
  */
 describe("openai-llm toolCall.index negzero nan true nineteenth leftover edges", () => {
 	let llm: OpenAiLlm;
@@ -126,7 +127,7 @@ describe("openai-llm toolCall.index negzero nan true nineteenth leftover edges",
 		]);
 	});
 
-	it("boolean true index stays distinct from slot 0", async () => {
+	it("boolean true index is orphaned by array for-of (only slot 0 emits)", async () => {
 		mockCreate.mockResolvedValue(
 			(async function* () {
 				yield {
@@ -159,7 +160,11 @@ describe("openai-llm toolCall.index negzero nan true nineteenth leftover edges",
 		const final = responses.find((r) => r.finishReason === "STOP");
 		expect(final?.content?.parts).toEqual([
 			{ functionCall: { id: "call-a", name: "a", args: {} } },
-			{ functionCall: { id: "call-true", name: "t", args: {} } },
 		]);
+		expect(
+			final?.content?.parts?.some(
+				(p: any) => p.functionCall?.id === "call-true",
+			),
+		).toBe(false);
 	});
 });
