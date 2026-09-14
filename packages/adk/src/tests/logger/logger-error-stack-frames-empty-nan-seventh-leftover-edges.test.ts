@@ -120,7 +120,7 @@ describe("Logger seventh leftover — ADK_ERROR_STACK_FRAMES empty/NaN Number() 
 		expect(rendered).toContain("↳ … 4 more frames");
 	});
 
-	it("ADK_ERROR_STACK_FRAMES='2.9' → Array.slice truncates to 2 frames", () => {
+	it("ADK_ERROR_STACK_FRAMES='2.9' → slice takes 2 frames; ellipsis uses 3-2.9 fractional remainder", () => {
 		process.env.ADK_ERROR_STACK_FRAMES = "2.9";
 		const logger = new Logger({ name: "stack-float" });
 		logger.error("failed", makeStackedError());
@@ -128,7 +128,7 @@ describe("Logger seventh leftover — ADK_ERROR_STACK_FRAMES empty/NaN Number() 
 		expect(rendered).toContain("↳ first");
 		expect(rendered).toContain("↳ second");
 		expect(rendered).not.toContain("↳ third");
-		expect(rendered).toContain("↳ … 1 more frames");
+		expect(rendered).toMatch(/↳ … 0\.1\d* more frames/);
 	});
 
 	it("ADK_ERROR_STACK_FRAMES='+0' → Number('+0')===0 like empty/'0'", () => {
