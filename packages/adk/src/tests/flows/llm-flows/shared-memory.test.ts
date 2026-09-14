@@ -457,7 +457,7 @@ describe("sharedMemoryRequestProcessor", () => {
 
 		await drain(sharedMemoryRequestProcessor.runAsync(context, llmRequest));
 
-		expect(llmRequest.contents?.[0].parts?.[0].text).toBe("[past] said:  x");
+		expect(llmRequest.contents?.[0].parts?.[0].text).toBe("[past] said:   x");
 	});
 
 	it("renders missing memory author as undefined in the injected pin", async () => {

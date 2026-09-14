@@ -2457,3 +2457,130 @@ describe("requestProcessor and responseProcessor additional edges", () => {
 		expect(Object.keys(event.actions.stateDelta).length).toBeGreaterThan(0);
 	});
 });
+
+describe("code-execution leftover preprocess edges", () => {
+	it("increments error count on preprocess stderr then skips next request", async () => {
+		const executor = new StubExecutor({
+			optimizeDataFile: true,
+			errorRetryAttempts: 1,
+			codeBlockDelimiters: [["```python\n", "\n```"]],
+			executionResultDelimiters: ["```tool_outputs\n", "\n```"],
+		});
+		executor.executeCode = vi.fn(async () => ({
+			stdout: "",
+			stderr: "explode",
+			outputFiles: [],
+		}));
+		const agent = new LlmAgent({
+			name: "coder",
+			model: "gpt-4o",
+			codeExecutor: executor,
+		});
+		const state = State.create({}, {});
+		const llmRequest = new LlmRequest({
+			model: "gpt-4o",
+			contents: [
+				{
+					role: "user",
+					parts: [
+						{ text: "analyze" },
+						{ inlineData: { mimeType: "text/csv", data: "a,b\n1,2" } },
+					],
+				},
+			],
+		});
+
+		await collect(
+			requestProcessor.runAsync(
+				makeInvocation(agent, {
+					invocationId: "inv-stderr",
+					session: {
+						id: "sess-1",
+						appName: "app",
+						userId: "u",
+						state,
+						events: [],
+					},
+				}),
+				llmRequest,
+			),
+		);
+
+		expect(executor.executeCode).toHaveBeenCalledOnce();
+
+		executor.executeCode.mockClear();
+		const second = new LlmRequest({
+			model: "gpt-4o",
+			contents: [
+				{
+					role: "user",
+					parts: [
+						{ text: "again" },
+						{ inlineData: { mimeType: "text/csv", data: "c,d\n5,6" } },
+					],
+				},
+			],
+		});
+		const secondEvents = await collect(
+			requestProcessor.runAsync(
+				makeInvocation(agent, {
+					invocationId: "inv-stderr",
+					session: {
+						id: "sess-1",
+						appName: "app",
+						userId: "u",
+						state,
+						events: [],
+					},
+				}),
+				second,
+			),
+		);
+
+		expect(secondEvents).toEqual([]);
+		expect(executor.executeCode).not.toHaveBeenCalled();
+	});
+
+	it("skips preprocess code generation for unknown mime input files already in context", async () => {
+		const executor = new StubExecutor({
+			optimizeDataFile: true,
+			codeBlockDelimiters: [["```python\n", "\n```"]],
+			executionResultDelimiters: ["```tool_outputs\n", "\n```"],
+		});
+		const agent = new LlmAgent({
+			name: "coder",
+			model: "gpt-4o",
+			codeExecutor: executor,
+		});
+		const state = State.create({}, {});
+		const ctx = new CodeExecutorContext(state);
+		ctx.addInputFiles([
+			{
+				name: "notes.json",
+				content: btoa("{}"),
+				mimeType: "application/json",
+			},
+		]);
+
+		const events = await collect(
+			requestProcessor.runAsync(
+				makeInvocation(agent, {
+					session: {
+						id: "sess-1",
+						appName: "app",
+						userId: "u",
+						state,
+						events: [],
+					},
+				}),
+				new LlmRequest({
+					model: "gpt-4o",
+					contents: [{ role: "user", parts: [{ text: "hi" }] }],
+				}),
+			),
+		);
+
+		expect(events).toEqual([]);
+		expect(executor.executeCode).not.toHaveBeenCalled();
+	});
+});

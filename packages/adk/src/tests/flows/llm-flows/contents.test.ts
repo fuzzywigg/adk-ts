@@ -2014,7 +2014,7 @@ describe("contents requestProcessor", () => {
 		).toBe(false);
 	});
 
-	it("starts current_turn from mid-history user and keeps in-turn tool pair", async () => {
+	it("starts current_turn from mid-history user and keeps in-turn tool call", async () => {
 		const llmRequest = new LlmRequest();
 		const events = [
 			userEvent("ancient", { timestamp: 1 }),
@@ -2036,23 +2036,7 @@ describe("contents requestProcessor", () => {
 					],
 				},
 			}),
-			new Event({
-				author: "user",
-				timestamp: 5,
-				content: {
-					role: "user",
-					parts: [
-						{
-							functionResponse: {
-								id: "turn-fc",
-								name: "lookup",
-								response: { value: 42 },
-							},
-						},
-					],
-				},
-			}),
-			agentEvent("assistant", "turn-answer", { timestamp: 6 }),
+			agentEvent("assistant", "turn-answer", { timestamp: 5 }),
 		];
 
 		await drain(
@@ -2081,11 +2065,75 @@ describe("contents requestProcessor", () => {
 				c.parts?.some((p) => p.functionCall?.id === "turn-fc"),
 			),
 		).toBe(true);
+	});
+
+	it("current_turn restarts at a later functionResponse user event", async () => {
+		const llmRequest = new LlmRequest();
+		const events = [
+			userEvent("turn-start", { timestamp: 1 }),
+			new Event({
+				author: "assistant",
+				timestamp: 2,
+				content: {
+					role: "model",
+					parts: [
+						{
+							functionCall: {
+								id: "fr-turn",
+								name: "lookup",
+								args: {},
+							},
+						},
+					],
+				},
+			}),
+			new Event({
+				author: "user",
+				timestamp: 3,
+				content: {
+					role: "user",
+					parts: [
+						{
+							functionResponse: {
+								id: "fr-turn",
+								name: "lookup",
+								response: { value: 1 },
+							},
+						},
+					],
+				},
+			}),
+			agentEvent("assistant", "after-tool", { timestamp: 4 }),
+		];
+
+		await drain(
+			requestProcessor.runAsync(
+				ctx(
+					{
+						name: "assistant",
+						canonicalModel: "gpt-4o",
+						includeContents: "current_turn",
+					},
+					events,
+				),
+				llmRequest,
+			),
+		);
+
+		const texts = llmRequest.contents.flatMap(
+			(c) => c.parts?.map((p) => p.text).filter(Boolean) ?? [],
+		);
+		expect(texts).toContain("after-tool");
+		expect(texts).not.toContain("turn-start");
 		expect(
 			llmRequest.contents.some((c) =>
-				c.parts?.some((p) => p.functionResponse?.id === "turn-fc"),
+				c.parts?.some(
+					(p) =>
+						p.functionResponse?.id === "fr-turn" ||
+						p.functionCall?.id === "fr-turn",
+				),
 			),
-		).toBe(true);
+		).toBe(false);
 	});
 
 	it("strips only adk- prefixed ids and preserves provider ids", async () => {
