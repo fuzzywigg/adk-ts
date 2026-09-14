@@ -25,7 +25,7 @@ describe("mcp servers McpGeneric name true/negzero twentieth leftover", () => {
 		).toBe(value);
 	});
 
-	it("name SameValueZero -0 still falls back to `${package} Client`", () => {
+	it("name SameValueZero -0 still falls back to package Client", () => {
 		expect((McpGeneric("@example/pkg", {}, -0 as any) as any).config.name).toBe(
 			"@example/pkg Client",
 		);
