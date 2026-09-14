@@ -5,7 +5,8 @@ import { OAuth2Credential } from "../../auth/auth-credential";
  * Sixteenth leftover: `if (config.expiresIn)` / `if (result.expiresIn)` —
  * fifteenth pins string `"0"`/`"false"` enter; eleventh pins falsy skip.
  * Boolean `true` and `Infinity` are non-numeric truthy enterers:
- * `true * 1000` → 1000; `Infinity * 1000` → Infinity Date.
+ * `true * 1000` → 1000; `Infinity * 1000` → `new Date(Infinity)` Invalid Date
+ * (same isExpired-false outcome as fifteenth string `"false"`, different path).
  */
 describe("oauth2 expiresIn true/Infinity truthy sixteenth leftover", () => {
 	it("ctor expiresIn true → expiresAt = now + 1000ms", () => {
@@ -22,13 +23,13 @@ describe("oauth2 expiresIn true/Infinity truthy sixteenth leftover", () => {
 		vi.useRealTimers();
 	});
 
-	it("ctor expiresIn Infinity → Infinity Date → isExpired false", () => {
+	it("ctor expiresIn Infinity → Invalid Date → isExpired false", () => {
 		const credential = new OAuth2Credential({
 			accessToken: "a",
 			expiresIn: Number.POSITIVE_INFINITY as any,
 		});
 		expect(credential.expiresAt).toBeInstanceOf(Date);
-		expect(credential.expiresAt!.getTime()).toBe(Number.POSITIVE_INFINITY);
+		expect(Number.isNaN(credential.expiresAt!.getTime())).toBe(true);
 		expect(credential.isExpired()).toBe(false);
 	});
 
