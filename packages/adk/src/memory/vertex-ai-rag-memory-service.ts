@@ -53,7 +53,7 @@ interface VertexRag {
 
 // You'll need to import the actual Vertex AI RAG SDK
 // import { rag } from 'vertex-ai-sdk'; // Replace with actual import
-const rag: VertexRag = {
+export const rag: VertexRag = {
 	async upload_file(options) {
 		// Mock implementation - replace with actual SDK call
 		console.log("Mock upload_file:", options);
@@ -68,7 +68,7 @@ const rag: VertexRag = {
 /**
  * Merge event lists that have overlapping timestamps
  */
-function _mergeEventLists(eventLists: Event[][]): Event[][] {
+export function _mergeEventLists(eventLists: Event[][]): Event[][] {
 	const merged: Event[][] = [];
 
 	while (eventLists.length > 0) {
