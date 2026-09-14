@@ -16,8 +16,8 @@ import {
 	McpOdos,
 	McpPolymarket,
 	McpTelegram,
-	McpUpbit,
 	type McpToolset,
+	McpUpbit,
 } from "../../../tools/mcp";
 import type { McpConfig, SamplingHandler } from "../../../tools/mcp/types";
 
@@ -247,5 +247,140 @@ describe("McpGeneric", () => {
 		);
 		expect(config.name).toBe("Custom Client");
 		expect(config.debug).toBe(true);
+	});
+});
+
+describe("MCP server factory config matrices", () => {
+	const factories: Array<{
+		label: string;
+		create: (config?: Parameters<typeof McpAbi>[0]) => McpToolset;
+		pkgOrUrl: string;
+		isRemote?: boolean;
+	}> = [
+		{ label: "Abi", create: McpAbi, pkgOrUrl: "@iqai/mcp-abi" },
+		{ label: "Atp", create: McpAtp, pkgOrUrl: "@iqai/mcp-atp" },
+		{ label: "Bamm", create: McpBamm, pkgOrUrl: "@iqai/mcp-bamm" },
+		{ label: "Fraxlend", create: McpFraxlend, pkgOrUrl: "@iqai/mcp-fraxlend" },
+		{ label: "IqWiki", create: McpIqWiki, pkgOrUrl: "@iqai/mcp-iqwiki" },
+		{
+			label: "NearAgent",
+			create: McpNearAgent,
+			pkgOrUrl: "@iqai/mcp-near-agent",
+		},
+		{
+			label: "NearIntents",
+			create: McpNearIntents,
+			pkgOrUrl: "@iqai/mcp-near-intents",
+		},
+		{ label: "Odos", create: McpOdos, pkgOrUrl: "@iqai/mcp-odos" },
+		{ label: "Telegram", create: McpTelegram, pkgOrUrl: "@iqai/mcp-telegram" },
+		{ label: "Discord", create: McpDiscord, pkgOrUrl: "@iqai/mcp-discord" },
+		{ label: "Upbit", create: McpUpbit, pkgOrUrl: "@iqai/mcp-upbit" },
+		{
+			label: "Polymarket",
+			create: McpPolymarket,
+			pkgOrUrl: "@iqai/mcp-polymarket",
+		},
+		{
+			label: "Filesystem",
+			create: McpFilesystem,
+			pkgOrUrl: "@modelcontextprotocol/server-filesystem",
+		},
+		{
+			label: "Memory",
+			create: McpMemory,
+			pkgOrUrl: "@modelcontextprotocol/server-memory",
+		},
+		{
+			label: "CoinGecko",
+			create: McpCoinGecko,
+			pkgOrUrl: "https://mcp.api.coingecko.com/mcp",
+			isRemote: true,
+		},
+		{
+			label: "CoinGeckoPro",
+			create: McpCoinGeckoPro,
+			pkgOrUrl: "https://mcp.pro-api.coingecko.com/mcp",
+			isRemote: true,
+		},
+	];
+
+	it.each(
+		factories,
+	)("$label honors debug, description, retryOptions, samplingHandler, and env", ({
+		create,
+		pkgOrUrl,
+		isRemote,
+	}) => {
+		const samplingHandler: SamplingHandler = vi.fn();
+		const config = getConfig(
+			create({
+				debug: true,
+				description: "matrix-desc",
+				retryOptions: { maxRetries: 9, initialDelay: 11 },
+				samplingHandler,
+				env: {
+					TOKEN: 7,
+					FLAG: false,
+					PATH: "/matrix/bin",
+					SKIP: undefined,
+				},
+			}),
+		);
+
+		expect(config.debug).toBe(true);
+		expect(config.description).toBe("matrix-desc");
+		expect(config.retryOptions).toEqual({
+			maxRetries: 9,
+			initialDelay: 11,
+		});
+		expect(config.samplingHandler).toBe(samplingHandler);
+		if (config.transport.mode !== "stdio") {
+			throw new Error("expected stdio");
+		}
+		expect(config.transport.env).toEqual({
+			TOKEN: "7",
+			FLAG: "false",
+			PATH: "/matrix/bin",
+		});
+		if (isRemote) {
+			expect(config.transport.args).toEqual([
+				"-y",
+				"mcp-remote@latest",
+				pkgOrUrl,
+			]);
+		} else {
+			expectStdioPackage(config, pkgOrUrl);
+		}
+	});
+
+	it("McpGeneric propagates samplingHandler and retryOptions for remote URLs", () => {
+		const samplingHandler: SamplingHandler = vi.fn();
+		const config = getConfig(
+			McpGeneric(
+				"https://example.com/mcp",
+				{
+					debug: true,
+					description: "remote generic",
+					retryOptions: { maxRetries: 1, initialDelay: 5 },
+					samplingHandler,
+					env: { KEY: "v" },
+				},
+				"Remote Generic",
+			),
+		);
+
+		expect(config.name).toBe("Remote Generic");
+		expect(config.description).toBe("remote generic");
+		expect(config.samplingHandler).toBe(samplingHandler);
+		if (config.transport.mode !== "stdio") {
+			throw new Error("expected stdio");
+		}
+		expect(config.transport.args).toEqual([
+			"-y",
+			"mcp-remote@latest",
+			"https://example.com/mcp",
+		]);
+		expect(config.transport.env?.KEY).toBe("v");
 	});
 });

@@ -422,4 +422,118 @@ describe("McpToolset offline helpers", () => {
 			]),
 		);
 	});
+
+	it("wraps non-Error getTools failures via String(error)", async () => {
+		listTools.mockRejectedValue("list-string-boom");
+		const toolset = new McpToolset(baseConfig);
+		await expect(toolset.getTools()).rejects.toMatchObject({
+			type: McpErrorType.CONNECTION_ERROR,
+			message: expect.stringContaining("list-string-boom"),
+			originalError: undefined,
+		});
+	});
+
+	it("returns empty when tools field is a non-array value", async () => {
+		listTools.mockResolvedValue({ tools: { not: "array" } });
+		const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+		const toolset = new McpToolset(baseConfig);
+		await expect(toolset.getTools()).resolves.toEqual([]);
+		expect(warn).toHaveBeenCalled();
+		warn.mockRestore();
+	});
+
+	it("returns empty when toolsResponse.tools is undefined", async () => {
+		listTools.mockResolvedValue({});
+		const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+		const toolset = new McpToolset(baseConfig);
+		await expect(toolset.getTools()).resolves.toEqual([]);
+		warn.mockRestore();
+	});
+
+	it("caches tools when cacheConfig.enabled is explicitly true", async () => {
+		const toolset = new McpToolset(
+			{ ...baseConfig, cacheConfig: { enabled: true } },
+			["keep"],
+		);
+		const first = await toolset.getTools();
+		const second = await toolset.getTools();
+		expect(second).toBe(first);
+		expect(listTools).toHaveBeenCalledTimes(1);
+		expect((toolset as any).tools).toHaveLength(1);
+	});
+
+	it("stores tools when cacheConfig is omitted but does not early-return them", async () => {
+		const toolset = new McpToolset(baseConfig, ["keep"]);
+		await toolset.getTools();
+		expect((toolset as any).tools).toHaveLength(1);
+		await toolset.getTools();
+		expect(listTools).toHaveBeenCalledTimes(2);
+	});
+
+	it("convertADKToolsToMCP returns empty array for empty input", () => {
+		const toolset = new McpToolset(baseConfig);
+		expect(toolset.convertADKToolsToMCP([])).toEqual([]);
+	});
+
+	it("refreshTools forwards context to getTools", async () => {
+		const toolset = new McpToolset(baseConfig);
+		const context = { invocationId: "refresh-1" } as any;
+		const getTools = vi.spyOn(toolset, "getTools").mockResolvedValue([]);
+		await toolset.refreshTools(context);
+		expect(getTools).toHaveBeenCalledWith(context);
+	});
+
+	it("setSamplingHandler without debug does not log", () => {
+		const toolset = new McpToolset(baseConfig);
+		const log = vi.spyOn(console, "log").mockImplementation(() => {});
+		toolset.setSamplingHandler(vi.fn() as any);
+		expect(log).not.toHaveBeenCalled();
+		log.mockRestore();
+	});
+
+	it("removeSamplingHandler with debug logs removal", () => {
+		const toolset = new McpToolset({ ...baseConfig, debug: true });
+		const log = vi.spyOn(console, "log").mockImplementation(() => {});
+		toolset.setSamplingHandler(vi.fn() as any);
+		toolset.removeSamplingHandler();
+		expect(log).toHaveBeenCalledWith(
+			expect.stringContaining("Sampling handler removed"),
+		);
+		log.mockRestore();
+	});
+
+	it("getTools continues when conversion throws McpError", async () => {
+		listTools.mockResolvedValue({
+			tools: [
+				{
+					name: "bad",
+					description: "fails",
+					inputSchema: { type: "object", properties: {} },
+				},
+				{
+					name: "good",
+					description: "ok",
+					inputSchema: { type: "object", properties: {} },
+				},
+			],
+		});
+		convertMcpToolToBaseTool.mockImplementation(async ({ mcpTool }: any) => {
+			if (mcpTool.name === "bad") {
+				throw new McpError("bad schema", McpErrorType.INVALID_SCHEMA_ERROR);
+			}
+			return fakeBaseTool(mcpTool.name);
+		});
+		const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+		const toolset = new McpToolset(baseConfig);
+		const tools = await toolset.getTools();
+		expect(tools.map((t) => t.name)).toEqual(["good"]);
+		errorSpy.mockRestore();
+	});
+
+	it("dispose delegates to close", async () => {
+		const toolset = new McpToolset(baseConfig);
+		const closeSpy = vi.spyOn(toolset, "close").mockResolvedValue(undefined);
+		await toolset.dispose();
+		expect(closeSpy).toHaveBeenCalled();
+	});
 });

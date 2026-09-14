@@ -379,4 +379,230 @@ describe("McpSamplingHandler", () => {
 			message: expect.stringContaining("Invalid response generated"),
 		});
 	});
+
+	it("passes temperature through to the ADK request config", async () => {
+		const samplingHandler = vi.fn(async (request) => {
+			expect(request.config?.temperature).toBe(0.4);
+			expect(request.config?.maxOutputTokens).toBe(32);
+			return "temp-ok";
+		}) as SamplingHandler;
+
+		const handler = new McpSamplingHandler(samplingHandler);
+		await handler.handleSamplingRequest(
+			textRequest({ temperature: 0.4, maxTokens: 32 }),
+		);
+		expect(samplingHandler).toHaveBeenCalledOnce();
+	});
+
+	it("rejects negative maxTokens after schema validation bypass", async () => {
+		const handler = new McpSamplingHandler(async () => "ok");
+		const schema = await import("@modelcontextprotocol/sdk/types.js");
+		const spy = vi
+			.spyOn(schema.CreateMessageRequestSchema, "safeParse")
+			.mockReturnValue({
+				success: true,
+				data: textRequest({ maxTokens: -5 }),
+			} as any);
+
+		try {
+			await expect(
+				handler.handleSamplingRequest(textRequest({ maxTokens: -5 })),
+			).rejects.toMatchObject({
+				type: McpErrorType.INVALID_REQUEST_ERROR,
+				message: expect.stringContaining("maxTokens"),
+			});
+		} finally {
+			spy.mockRestore();
+		}
+	});
+
+	it("rejects missing messages array after schema validation bypass", async () => {
+		const handler = new McpSamplingHandler(async () => "ok");
+		const schema = await import("@modelcontextprotocol/sdk/types.js");
+		const badRequest = {
+			method: "sampling/createMessage",
+			params: { maxTokens: 8, messages: null },
+		};
+		const spy = vi
+			.spyOn(schema.CreateMessageRequestSchema, "safeParse")
+			.mockReturnValue({ success: true, data: badRequest } as any);
+
+		try {
+			await expect(
+				handler.handleSamplingRequest(badRequest as any),
+			).rejects.toMatchObject({
+				type: McpErrorType.INVALID_REQUEST_ERROR,
+				message: expect.stringContaining("messages array is required"),
+			});
+		} finally {
+			spy.mockRestore();
+		}
+	});
+
+	it("rejects non-array messages after schema validation bypass", async () => {
+		const handler = new McpSamplingHandler(async () => "ok");
+		const schema = await import("@modelcontextprotocol/sdk/types.js");
+		const badRequest = {
+			method: "sampling/createMessage",
+			params: { maxTokens: 8, messages: { not: "array" } },
+		};
+		const spy = vi
+			.spyOn(schema.CreateMessageRequestSchema, "safeParse")
+			.mockReturnValue({ success: true, data: badRequest } as any);
+
+		try {
+			await expect(
+				handler.handleSamplingRequest(badRequest as any),
+			).rejects.toMatchObject({
+				type: McpErrorType.INVALID_REQUEST_ERROR,
+				message: expect.stringContaining("messages array is required"),
+			});
+		} finally {
+			spy.mockRestore();
+		}
+	});
+
+	it("maps assistant role to model and coerces non-string text to empty", () => {
+		const handler = new McpSamplingHandler(async () => "ok");
+		expect(
+			(handler as any).convertSingleMcpMessageToADK({
+				role: "assistant",
+				content: { type: "text", text: 123 },
+			}),
+		).toEqual({
+			role: "model",
+			parts: [{ text: "" }],
+		});
+	});
+
+	it("includes image caption text alongside valid image data", async () => {
+		const imageData = Buffer.from("img").toString("base64");
+		const samplingHandler = vi.fn(async (request) => {
+			expect(request.contents[0].parts).toEqual([
+				{ text: "see this" },
+				{
+					inlineData: {
+						data: imageData,
+						mimeType: "image/png",
+					},
+				},
+			]);
+			return "ok";
+		}) as SamplingHandler;
+
+		const handler = new McpSamplingHandler(samplingHandler);
+		await handler.handleSamplingRequest({
+			method: "sampling/createMessage",
+			params: {
+				maxTokens: 8,
+				messages: [
+					{
+						role: "user",
+						content: {
+							type: "image",
+							text: "see this",
+							data: imageData,
+							mimeType: "image/png",
+						},
+					},
+				],
+			},
+		});
+	});
+
+	it("falls back to empty tool_use and tool_result labels when ids are missing", () => {
+		const handler = new McpSamplingHandler(async () => "ok");
+		expect(
+			(handler as any).convertMcpContentToADKParts({
+				type: "tool_use",
+				id: "x",
+				input: {},
+			}),
+		).toEqual([{ text: "[Tool Use: ]" }]);
+		expect(
+			(handler as any).convertMcpContentToADKParts({
+				type: "tool_result",
+				content: [],
+			}),
+		).toEqual([{ text: "[Tool Result: ]" }]);
+	});
+
+	it("defaults model when modelPreferences hints are empty", async () => {
+		const handler = new McpSamplingHandler(async () => "ok");
+		const response = await handler.handleSamplingRequest(
+			textRequest({
+				modelPreferences: { hints: [{}, { name: undefined }] },
+			}),
+		);
+		expect(response.model).toBe("gemini-2.0-flash");
+	});
+
+	it("skips empty image caption text when data is missing", async () => {
+		const samplingHandler = vi.fn(async (request) => {
+			expect(request.contents[0].parts).toEqual([
+				{ text: "[IMAGE CONTENT MISSING DATA]" },
+			]);
+			return "ok";
+		}) as SamplingHandler;
+
+		const handler = new McpSamplingHandler(samplingHandler);
+		await handler.handleSamplingRequest({
+			method: "sampling/createMessage",
+			params: {
+				maxTokens: 8,
+				messages: [
+					{
+						role: "user",
+						content: {
+							type: "image",
+							text: "",
+							data: "",
+							mimeType: "image/png",
+						},
+					},
+				],
+			},
+		});
+	});
+
+	it("flattens nested array content recursively via converter", () => {
+		const handler = new McpSamplingHandler(async () => "ok");
+		expect(
+			(handler as any).convertMcpContentToADKParts([
+				{ type: "text", text: "a" },
+				[
+					{ type: "text", text: "b" },
+					{ type: "text", text: "c" },
+				],
+			]),
+		).toEqual([{ text: "a" }, { text: "b" }, { text: "c" }]);
+	});
+
+	it("logs array and unknown content types when converting single messages", () => {
+		const handler = new McpSamplingHandler(async () => "ok");
+		const debugSpy = vi
+			.spyOn((handler as any).logger, "debug")
+			.mockImplementation(() => {});
+
+		(handler as any).convertSingleMcpMessageToADK({
+			role: "user",
+			content: [
+				{ type: "text", text: "a" },
+				{ type: "text", text: "b" },
+			],
+		});
+		expect(debugSpy).toHaveBeenCalledWith(
+			expect.stringContaining("content type: array"),
+		);
+
+		debugSpy.mockClear();
+		(handler as any).convertSingleMcpMessageToADK({
+			role: "user",
+			content: { text: "no-type" },
+		});
+		expect(debugSpy).toHaveBeenCalledWith(
+			expect.stringContaining("content type: unknown"),
+		);
+		debugSpy.mockRestore();
+	});
 });

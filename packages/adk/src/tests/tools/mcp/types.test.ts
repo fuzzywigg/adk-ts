@@ -36,4 +36,30 @@ describe("McpError", () => {
 		expect(error.originalError).toBeUndefined();
 		expect(error.type).toBe(McpErrorType.TIMEOUT_ERROR);
 	});
+
+	it("is distinguishable across all McpErrorType values", () => {
+		const cases = Object.values(McpErrorType).map((type) => {
+			const error = new McpError(`msg:${type}`, type);
+			return { type, error };
+		});
+
+		expect(cases).toHaveLength(7);
+		for (const { type, error } of cases) {
+			expect(error).toBeInstanceOf(McpError);
+			expect(error.type).toBe(type);
+			expect(error.message).toBe(`msg:${type}`);
+			expect(error.name).toBe("McpError");
+		}
+	});
+
+	it("preserves originalError reference identity", () => {
+		const original = new Error("root");
+		const wrapped = new McpError(
+			"wrapped",
+			McpErrorType.TOOL_EXECUTION_ERROR,
+			original,
+		);
+		expect(wrapped.originalError).toBe(original);
+		expect(wrapped.originalError?.message).toBe("root");
+	});
 });

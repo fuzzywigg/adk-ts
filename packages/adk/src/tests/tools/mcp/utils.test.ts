@@ -155,3 +155,101 @@ describe("retryOnClosedResource", () => {
 		expect(result).toBe(descriptor);
 	});
 });
+
+describe("withRetry additional edges", () => {
+	it("does not retry non-Error throws", async () => {
+		const instance = {};
+		const reinit = vi.fn(async () => undefined);
+		const fn = vi.fn(async () => {
+			throw "string-closed";
+		});
+
+		const wrapped = withRetry(fn, instance, reinit, 3);
+		await expect(wrapped()).rejects.toBe("string-closed");
+		expect(reinit).not.toHaveBeenCalled();
+		expect(fn).toHaveBeenCalledTimes(1);
+	});
+
+	it("with maxRetries 0 never reinitializes on closed errors", async () => {
+		const instance = {};
+		const reinit = vi.fn(async () => undefined);
+		const fn = vi.fn(async () => {
+			throw new Error("closed");
+		});
+
+		const wrapped = withRetry(fn, instance, reinit, 0);
+		await expect(wrapped()).rejects.toThrow("closed");
+		expect(reinit).not.toHaveBeenCalled();
+		expect(fn).toHaveBeenCalledTimes(1);
+	});
+
+	it("forwards arguments to the wrapped function", async () => {
+		const instance = { prefix: "pre" };
+		const fn = vi.fn(async function (
+			this: typeof instance,
+			a: number,
+			b: string,
+		) {
+			return `${this.prefix}:${a}:${b}`;
+		});
+		const wrapped = withRetry(fn, instance, async () => undefined, 0);
+		await expect(wrapped(7, "x")).resolves.toBe("pre:7:x");
+		expect(fn).toHaveBeenCalledWith(7, "x");
+	});
+});
+
+describe("retryOnClosedResource additional edges", () => {
+	it("exhausts decorator retries and rethrows the closed error", async () => {
+		const reinit = vi.fn(async () => undefined);
+
+		class Sample {
+			async work(): Promise<string> {
+				throw new Error("socket hang up");
+			}
+		}
+
+		const descriptor = Object.getOwnPropertyDescriptor(
+			Sample.prototype,
+			"work",
+		)!;
+		retryOnClosedResource(() => reinit(), 1)(
+			Sample.prototype,
+			"work",
+			descriptor,
+		);
+		Object.defineProperty(Sample.prototype, "work", descriptor);
+
+		const sample = new Sample();
+		await expect(sample.work()).rejects.toThrow("socket hang up");
+		expect(reinit).toHaveBeenCalledTimes(1);
+	});
+
+	it("retries ECONNRESET through the decorator", async () => {
+		const reinit = vi.fn(async () => undefined);
+		let attempts = 0;
+
+		class Sample {
+			async work(): Promise<string> {
+				attempts++;
+				if (attempts === 1) {
+					throw new Error("ECONNRESET");
+				}
+				return "recovered";
+			}
+		}
+
+		const descriptor = Object.getOwnPropertyDescriptor(
+			Sample.prototype,
+			"work",
+		)!;
+		retryOnClosedResource(() => reinit(), 1)(
+			Sample.prototype,
+			"work",
+			descriptor,
+		);
+		Object.defineProperty(Sample.prototype, "work", descriptor);
+
+		await expect(new Sample().work()).resolves.toBe("recovered");
+		expect(attempts).toBe(2);
+	});
+});

@@ -1,5 +1,6 @@
 import { Type } from "@google/genai";
 import { describe, expect, it } from "vitest";
+import type { BaseTool } from "../../../tools/base/base-tool";
 import {
 	adkToMcpToolType,
 	declarationToJsonSchema,
@@ -7,7 +8,6 @@ import {
 	mcpSchemaToParameters,
 	normalizeJsonSchema,
 } from "../../../tools/mcp/schema-conversion";
-import type { BaseTool } from "../../../tools/base/base-tool";
 
 describe("schema-conversion", () => {
 	it("returns empty object when declaration has no parameters", () => {
@@ -324,6 +324,157 @@ describe("schema-conversion", () => {
 		expect(normalizeJsonSchema({ type: "custom-type", title: "x" })).toEqual({
 			type: "custom-type",
 			title: "x",
+		});
+	});
+
+	it("defaults empty object schemas to Type.OBJECT via determineSchemaType", () => {
+		expect(normalizeJsonSchema({})).toEqual({
+			type: Type.OBJECT,
+		});
+	});
+
+	it("infers string from maxLength alone and number schema enums", () => {
+		expect(normalizeJsonSchema({ maxLength: 10 })).toEqual({
+			type: Type.STRING,
+			maxLength: 10,
+		});
+		expect(normalizeJsonSchema({ minLength: 2 })).toEqual({
+			type: Type.STRING,
+			minLength: 2,
+		});
+		expect(
+			normalizeJsonSchema({
+				type: "number",
+				minimum: 0,
+				maximum: 10,
+				enum: [1, 2],
+				title: "n",
+				description: "num",
+			}),
+		).toEqual({
+			type: "number",
+			minimum: 0,
+			maximum: 10,
+			enum: [1, 2],
+			title: "n",
+			description: "num",
+		});
+	});
+
+	it("infers integer when multipleOf is an integer", () => {
+		expect(
+			normalizeJsonSchema({
+				minimum: 0,
+				maximum: 10,
+				multipleOf: 2,
+			}),
+		).toEqual({
+			type: Type.INTEGER,
+			minimum: 0,
+			maximum: 10,
+			multipleOf: 2,
+		});
+	});
+
+	it("adkToMcpToolType defaults missing description to empty string", () => {
+		const tool = {
+			name: "no_desc",
+			description: undefined,
+			getDeclaration: () => ({
+				name: "no_desc",
+				description: "",
+			}),
+		} as BaseTool;
+
+		expect(adkToMcpToolType(tool)).toEqual({
+			name: "no_desc",
+			description: "",
+			inputSchema: {
+				type: "object",
+				properties: {},
+			},
+		});
+	});
+
+	it("normalizes array schemas without items metadata", () => {
+		expect(normalizeJsonSchema({ type: "array" })).toEqual({
+			type: Type.ARRAY,
+		});
+	});
+
+	it("normalizes object schemas without properties", () => {
+		expect(
+			normalizeJsonSchema({
+				type: "object",
+				required: ["id"],
+				title: "bare",
+			}),
+		).toEqual({
+			type: Type.OBJECT,
+			properties: {},
+			required: ["id"],
+			title: "bare",
+		});
+	});
+
+	it("jsonSchemaToDeclaration treats typed schemas with non-string type as property maps", () => {
+		const declaration = jsonSchemaToDeclaration("mapped", "d", {
+			type: 123 as any,
+			foo: { type: "string" },
+		} as any);
+		expect(declaration.parameters).toEqual({
+			type: Type.OBJECT,
+			properties: {
+				type: 123,
+				foo: { type: "string" },
+			},
+		});
+	});
+
+	it("mcpSchemaToParameters prefers inputSchema over parameters when both exist", () => {
+		expect(
+			mcpSchemaToParameters({
+				name: "both",
+				inputSchema: {
+					type: "object",
+					properties: { fromInput: { type: "string" } },
+				},
+				parameters: {
+					type: "object",
+					properties: { fromParams: { type: "number" } },
+				},
+			} as any),
+		).toEqual({
+			type: Type.OBJECT,
+			properties: {
+				fromInput: { type: Type.STRING },
+			},
+		});
+	});
+
+	it("preserves nested array-of-object schemas", () => {
+		expect(
+			normalizeJsonSchema({
+				type: "array",
+				items: {
+					type: "object",
+					properties: {
+						id: { type: "string" },
+						tags: { type: "array", items: { type: "string" } },
+					},
+					required: ["id"],
+				},
+			}),
+		).toEqual({
+			type: Type.ARRAY,
+			items: {
+				type: Type.OBJECT,
+				required: ["id"],
+				properties: {
+					id: { type: Type.STRING },
+					tags: { type: Type.ARRAY, items: { type: Type.STRING } },
+				},
+			},
 		});
 	});
 });
