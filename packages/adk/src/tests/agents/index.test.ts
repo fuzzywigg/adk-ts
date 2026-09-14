@@ -24,4 +24,11 @@ describe("agents barrel exports", () => {
 		expect(typeof agents.newInvocationContextId).toBe("function");
 		expect(agents.newInvocationContextId()).toMatch(/^e-/);
 	});
+
+	it("does not re-export live/streaming helpers (index surface pin)", () => {
+		expect(agents).not.toHaveProperty("ActiveStreamingTool");
+		expect(agents).not.toHaveProperty("LiveRequest");
+		expect(agents).not.toHaveProperty("LiveRequestQueue");
+		expect(agents).not.toHaveProperty("TranscriptionEntry");
+	});
 });
