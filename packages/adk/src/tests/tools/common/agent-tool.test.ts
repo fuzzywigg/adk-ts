@@ -582,4 +582,136 @@ describe("AgentTool", () => {
 			"chosen",
 		);
 	});
+
+	it("wraps appendEvent rejections in the outer catch", async () => {
+		const agent = makeStubAgent({
+			runAsync: async function* () {
+				yield new Event({
+					author: "stub_agent",
+					content: { role: "model", parts: [{ text: "ok" }] },
+				});
+			},
+		});
+		const tool = new AgentTool({ name: "append_fail", agent });
+		const { context, appendEvent } = makeToolContext(agent);
+		appendEvent.mockRejectedValueOnce(new Error("append blew up"));
+
+		await expect(tool.runAsync({ input: "x" }, context)).rejects.toThrow(
+			"Agent tool execution failed: append blew up",
+		);
+	});
+
+	it("returns custom functionDeclaration unchanged from getDeclaration", () => {
+		const agent = makeStubAgent();
+		const custom = {
+			name: "unchanged_schema",
+			description: "Leave me alone",
+			parameters: {
+				type: Type.OBJECT,
+				properties: {
+					q: { type: Type.STRING, description: "Query" },
+				},
+				required: ["q"],
+			},
+		};
+		const tool = new AgentTool({
+			name: "custom_decl",
+			agent,
+			functionDeclaration: custom,
+		});
+
+		expect(tool.getDeclaration()).toBe(custom);
+	});
+
+	it("parses JSON array, number, and boolean text results", async () => {
+		const cases: Array<{ text: string; expected: unknown; key: string }> = [
+			{ text: "[1,2,3]", expected: [1, 2, 3], key: "arr" },
+			{ text: "42", expected: 42, key: "num" },
+			{ text: "true", expected: true, key: "bool" },
+		];
+
+		for (const { text, expected, key } of cases) {
+			const agent = makeStubAgent({
+				runAsync: async function* () {
+					yield new Event({
+						author: "stub_agent",
+						content: { role: "model", parts: [{ text }] },
+					});
+				},
+			});
+			const tool = new AgentTool({
+				name: `json_${key}`,
+				agent,
+				outputKey: key,
+			});
+			const { context } = makeToolContext(agent);
+
+			const result = await tool.runAsync({ input: "go" }, context);
+			expect(result).toEqual(expected);
+			expect(context.state[key]).toEqual(expected);
+		}
+	});
+
+	it("returns empty string when last matching event has only non-text parts", async () => {
+		const agent = makeStubAgent({
+			runAsync: async function* () {
+				yield new Event({
+					author: "stub_agent",
+					content: {
+						role: "model",
+						parts: [
+							{ inlineData: { mimeType: "image/png", data: "xx" } } as any,
+							{ functionCall: { name: "f", args: {} } } as any,
+						],
+					},
+				});
+			},
+		});
+		const tool = new AgentTool({ name: "non_text", agent });
+		const { context } = makeToolContext(agent);
+
+		await expect(tool.runAsync({ input: "x" }, context)).resolves.toBe("");
+	});
+
+	it("uses config description over agent.description for tool metadata", () => {
+		const agent = makeStubAgent({
+			description: "Agent description should lose",
+		});
+		const tool = new AgentTool({
+			name: "desc_override",
+			description: "Config wins",
+			agent,
+		});
+
+		expect(tool.description).toBe("Config wins");
+	});
+
+	it("uses a partial author-matching event as lastEvent without appending it", async () => {
+		const agent = makeStubAgent({
+			name: "partial_last",
+			runAsync: async function* () {
+				yield new Event({
+					author: "partial_last",
+					partial: false,
+					content: { role: "model", parts: [{ text: "earlier" }] },
+				});
+				yield new Event({
+					author: "partial_last",
+					partial: true,
+					content: { role: "model", parts: [{ text: "from-partial" }] },
+				});
+			},
+		});
+		const tool = new AgentTool({ name: "partial_last_tool", agent });
+		const { context, appendEvent } = makeToolContext(agent);
+
+		await expect(tool.runAsync({ input: "x" }, context)).resolves.toBe(
+			"from-partial",
+		);
+		expect(appendEvent).toHaveBeenCalledTimes(1);
+		expect(appendEvent.mock.calls[0][1].partial).toBeFalsy();
+		expect(appendEvent.mock.calls[0][1].content?.parts?.[0]?.text).toBe(
+			"earlier",
+		);
+	});
 });

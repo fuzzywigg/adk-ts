@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { FileOperationsTool } from "../../../tools/common/file-operations-tool";
 import type { ToolContext } from "../../../tools/tool-context";
 
@@ -472,5 +472,183 @@ describe("FileOperationsTool", () => {
 			makeContext(),
 		);
 		expect(readResult.data).toBe("new");
+	});
+
+	it("appends empty string when content is omitted", async () => {
+		await tool.runAsync(
+			{ operation: "write", filepath: "append-omit.txt", content: "keep" },
+			makeContext(),
+		);
+
+		const appendResult = await tool.runAsync(
+			{ operation: "append", filepath: "append-omit.txt" },
+			makeContext(),
+		);
+		expect(appendResult.success).toBe(true);
+
+		const readResult = await tool.runAsync(
+			{ operation: "read", filepath: "append-omit.txt" },
+			makeContext(),
+		);
+		expect(readResult).toEqual({ success: true, data: "keep" });
+	});
+
+	it("creates a file with empty content when append omits content on a new path", async () => {
+		const appendResult = await tool.runAsync(
+			{ operation: "append", filepath: "new-append.txt" },
+			makeContext(),
+		);
+		expect(appendResult.success).toBe(true);
+
+		const readResult = await tool.runAsync(
+			{ operation: "read", filepath: "new-append.txt" },
+			makeContext(),
+		);
+		expect(readResult).toEqual({ success: true, data: "" });
+	});
+
+	it("lists an empty directory as an empty array", async () => {
+		await tool.runAsync(
+			{ operation: "mkdir", filepath: "empty-dir" },
+			makeContext(),
+		);
+
+		const listResult = await tool.runAsync(
+			{ operation: "list", filepath: "empty-dir" },
+			makeContext(),
+		);
+		expect(listResult).toEqual({ success: true, data: [] });
+	});
+
+	it("writes and reads with base64 and utf16le encodings", async () => {
+		const plain = "encode-me";
+		const base64Content = Buffer.from(plain, "utf8").toString("base64");
+
+		const base64Write = await tool.runAsync(
+			{
+				operation: "write",
+				filepath: "enc-b64.txt",
+				content: base64Content,
+				encoding: "base64",
+			},
+			makeContext(),
+		);
+		expect(base64Write.success).toBe(true);
+
+		const base64Read = await tool.runAsync(
+			{ operation: "read", filepath: "enc-b64.txt", encoding: "base64" },
+			makeContext(),
+		);
+		expect(base64Read.success).toBe(true);
+		expect(
+			Buffer.from(base64Read.data as string, "base64").toString("utf8"),
+		).toBe(plain);
+
+		const utf16Write = await tool.runAsync(
+			{
+				operation: "write",
+				filepath: "enc-utf16.txt",
+				content: plain,
+				encoding: "utf16le",
+			},
+			makeContext(),
+		);
+		expect(utf16Write.success).toBe(true);
+
+		const utf16Read = await tool.runAsync(
+			{ operation: "read", filepath: "enc-utf16.txt", encoding: "utf16le" },
+			makeContext(),
+		);
+		expect(utf16Read).toEqual({ success: true, data: plain });
+	});
+
+	it("stringifies non-Error rejections from fs operations", async () => {
+		await tool.runAsync(
+			{ operation: "write", filepath: "seed.txt", content: "seed" },
+			makeContext(),
+		);
+		await tool.runAsync(
+			{ operation: "mkdir", filepath: "seed-dir" },
+			makeContext(),
+		);
+
+		vi.spyOn(fs, "readFile").mockRejectedValueOnce("boom-string");
+		await expect(
+			tool.runAsync({ operation: "read", filepath: "seed.txt" }, makeContext()),
+		).resolves.toEqual({
+			success: false,
+			error: "Failed to read file: boom-string",
+		});
+
+		vi.spyOn(fs, "writeFile").mockRejectedValueOnce("boom-string");
+		await expect(
+			tool.runAsync(
+				{ operation: "write", filepath: "seed.txt", content: "x" },
+				makeContext(),
+			),
+		).resolves.toEqual({
+			success: false,
+			error: "Failed to write to file: boom-string",
+		});
+
+		vi.spyOn(fs, "appendFile").mockRejectedValueOnce("boom-string");
+		await expect(
+			tool.runAsync(
+				{ operation: "append", filepath: "seed.txt", content: "x" },
+				makeContext(),
+			),
+		).resolves.toEqual({
+			success: false,
+			error: "Failed to append to file: boom-string",
+		});
+
+		vi.spyOn(fs, "unlink").mockRejectedValueOnce("boom-string");
+		await expect(
+			tool.runAsync(
+				{ operation: "delete", filepath: "seed.txt" },
+				makeContext(),
+			),
+		).resolves.toEqual({
+			success: false,
+			error: "Failed to delete file: boom-string",
+		});
+
+		vi.spyOn(fs, "readdir").mockRejectedValueOnce("boom-string");
+		await expect(
+			tool.runAsync({ operation: "list", filepath: "seed-dir" }, makeContext()),
+		).resolves.toEqual({
+			success: false,
+			error: "Failed to list directory: boom-string",
+		});
+
+		vi.spyOn(fs, "mkdir").mockRejectedValueOnce("boom-string");
+		await expect(
+			tool.runAsync(
+				{ operation: "mkdir", filepath: "new-fail-dir" },
+				makeContext(),
+			),
+		).resolves.toEqual({
+			success: false,
+			error: "Failed to create directory: boom-string",
+		});
+	});
+
+	it("stringifies non-Error throws from the outer catch path", async () => {
+		const normalizeSpy = vi
+			.spyOn(path, "normalize")
+			.mockImplementationOnce(() => {
+				throw "normalize-fail";
+			});
+
+		const result = await tool.runAsync(
+			{ operation: "exists", filepath: "any.txt" },
+			makeContext(),
+		);
+
+		expect(result).toEqual({
+			success: false,
+			error: "normalize-fail",
+		});
+		normalizeSpy.mockRestore();
 	});
 });
