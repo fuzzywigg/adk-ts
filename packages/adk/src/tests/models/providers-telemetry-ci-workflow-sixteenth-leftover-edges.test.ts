@@ -4,8 +4,9 @@ import { describe, expect, it } from "vitest";
 
 /**
  * Sixteenth leftover: reversible workflow assertions for the providers /
- * telemetry Vitest slice. Pins the focused sixteenth leftover gate on push
- * checks plus existing ci.yml `pnpm test` / ADK coverage steps.
+ * telemetry Vitest slice. Softened after fifteenth tools/mcp gate retarget —
+ * pins ci.yml coverage + push.yml lint/build/test (gate string lives in the
+ * active fifteenth tools/mcp CI leftover).
  */
 describe("providers/telemetry ci workflow sixteenth leftover edges", () => {
 	const root = resolve(__dirname, "../../../../..");
@@ -19,7 +20,7 @@ describe("providers/telemetry ci workflow sixteenth leftover edges", () => {
 		expect(ci).toContain("continue-on-error: true");
 	});
 
-	it("push.yml runs focused sixteenth leftover slice then pnpm test", () => {
+	it("push.yml still runs Biome lint, ADK build, and pnpm test", () => {
 		const push = readFileSync(
 			resolve(root, ".github/workflows/push.yml"),
 			"utf8",
@@ -28,7 +29,6 @@ describe("providers/telemetry ci workflow sixteenth leftover edges", () => {
 		expect(push).toContain("- main");
 		expect(push).toMatch(/run:\s*pnpm lint\b/);
 		expect(push).toContain("pnpm --filter @iqai/adk build");
-		expect(push).toContain("sixteenth-leftover-edges");
 		expect(push).toMatch(/run:\s*pnpm test\b/);
 	});
 
