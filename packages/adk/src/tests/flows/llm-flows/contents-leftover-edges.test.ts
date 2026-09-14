@@ -244,8 +244,8 @@ describe("contents leftover edges via requestProcessor", () => {
 			if (expectedSnippet !== undefined) {
 				expect(toolText).toContain(expectedSnippet);
 			} else {
-				// JSON.stringify(undefined) yields undefined → concatenated as empty
-				expect(toolText).toMatch(/parameters:\s*$/);
+				// Template concat of JSON.stringify(undefined) becomes the literal "undefined"
+				expect(toolText).toContain("parameters: undefined");
 			}
 		});
 	}
@@ -326,17 +326,24 @@ describe("contents leftover edges via requestProcessor", () => {
 		const llmRequest = new LlmRequest();
 		await drain(
 			requestProcessor.runAsync(
-				ctx(duckAgent("assistant", "none"), [
-					agentEvent("assistant", "only-self"),
-					agentEvent("assistant", "still-self"),
-				]),
+				ctx(
+					{
+						name: "assistant",
+						canonicalModel: "gpt-4o",
+						includeContents: "current_turn",
+					},
+					[
+						agentEvent("assistant", "only-self"),
+						agentEvent("assistant", "still-self"),
+					],
+				),
 				llmRequest,
 			),
 		);
 		expect(llmRequest.contents).toEqual([]);
 	});
 
-	it("includeContents none with only same-agent history yields empty", async () => {
+	it("includeContents none leaves contents untouched (empty preset)", async () => {
 		const llmRequest = new LlmRequest();
 		await drain(
 			requestProcessor.runAsync(
@@ -414,15 +421,22 @@ describe("contents leftover edges via requestProcessor", () => {
 		});
 	}
 
-	it("includeContents none starts at latest user turn only", async () => {
+	it("current_turn includeContents starts at latest user turn only", async () => {
 		const llmRequest = new LlmRequest();
 		await drain(
 			requestProcessor.runAsync(
-				ctx(duckAgent("assistant", "none"), [
-					userEvent("old"),
-					agentEvent("assistant", "mid"),
-					userEvent("latest"),
-				]),
+				ctx(
+					{
+						name: "assistant",
+						canonicalModel: "gpt-4o",
+						includeContents: "current_turn",
+					},
+					[
+						userEvent("old"),
+						agentEvent("assistant", "mid"),
+						userEvent("latest"),
+					],
+				),
 				llmRequest,
 			),
 		);
