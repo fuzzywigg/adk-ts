@@ -5,8 +5,9 @@ import { describe, expect, it } from "vitest";
 /**
  * Twenty-first leftover: reversible workflow assertions for the agents
  * boolean-true / string-true / SameValueZero `-0` residual asymmetry Vitest
- * slice after tip #246. Pins the focused twenty-first leftover gate on push
- * checks plus existing ci.yml `pnpm test` / ADK coverage steps.
+ * slice after tip #246. Softened while runners/flows residual fifteenth owns
+ * the focused filter pin — pins lint/build/test only so agents twenty-first
+ * leftovers stay gated via full `pnpm test`.
  */
 describe("agents true-asymmetry ci workflow twenty-first leftover edges", () => {
 	const root = resolve(__dirname, "../../../../..");
@@ -20,7 +21,7 @@ describe("agents true-asymmetry ci workflow twenty-first leftover edges", () => 
 		expect(ci).toContain("continue-on-error: true");
 	});
 
-	it("push.yml runs focused twenty-first leftover slice then pnpm test", () => {
+	it("push.yml still runs Biome lint, ADK build, and pnpm test", () => {
 		const push = readFileSync(
 			resolve(root, ".github/workflows/push.yml"),
 			"utf8",
@@ -29,7 +30,6 @@ describe("agents true-asymmetry ci workflow twenty-first leftover edges", () => 
 		expect(push).toContain("- main");
 		expect(push).toMatch(/run:\s*pnpm lint\b/);
 		expect(push).toContain("pnpm --filter @iqai/adk build");
-		expect(push).toContain("twenty-first-leftover-edges");
 		expect(push).toMatch(/run:\s*pnpm test\b/);
 	});
 
