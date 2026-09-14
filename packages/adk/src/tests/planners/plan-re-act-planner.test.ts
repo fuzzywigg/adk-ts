@@ -246,4 +246,67 @@ describe("PlanReActPlanner", () => {
 			planner.processPlanningResponse({} as any, null as any),
 		).toBeUndefined();
 	});
+
+	it("does not mark REASONING/ACTION/REPLANNING tags when they are not at the start", () => {
+		const parts = planner.processPlanningResponse({} as any, [
+			{ text: "lead /*REASONING*/ mid" },
+			{ text: "lead /*ACTION*/ mid" },
+			{ text: "lead /*REPLANNING*/ mid" },
+			{ text: "lead /*PLANNING*/ mid" },
+		]);
+
+		expect(parts).toHaveLength(4);
+		for (const part of parts ?? []) {
+			expect(part.thought).toBeUndefined();
+		}
+		expect(parts?.map((p) => p.text)).toEqual([
+			"lead /*REASONING*/ mid",
+			"lead /*ACTION*/ mid",
+			"lead /*REPLANNING*/ mid",
+			"lead /*PLANNING*/ mid",
+		]);
+	});
+
+	it("preserves a lone empty text part without inventing thought", () => {
+		const parts = planner.processPlanningResponse({} as any, [{ text: "" }]);
+		expect(parts).toHaveLength(1);
+		expect(parts?.[0].text).toBe("");
+		expect(parts?.[0].thought).toBeUndefined();
+	});
+
+	it("handles empty text then FINAL_ANSWER split then function calls skipping empty names", () => {
+		const parts = planner.processPlanningResponse({} as any, [
+			{ text: "" },
+			{ text: "/*PLANNING*/ steps /*FINAL_ANSWER*/ result" },
+			{ functionCall: { name: "", args: {} } },
+			{ functionCall: { name: "search", args: { q: "x" } } },
+			{ functionCall: { name: "lookup", args: {} } },
+			{ text: "ignored after fc group" },
+			{ functionCall: { name: "late", args: {} } },
+		]);
+
+		expect(parts?.map((p) => p.functionCall?.name || p.text)).toEqual([
+			"",
+			"/*PLANNING*/ steps /*FINAL_ANSWER*/",
+			" result",
+			"search",
+			"lookup",
+		]);
+		expect(parts?.[0].thought).toBeUndefined();
+		expect(parts?.[1].thought).toBe(true);
+		expect(parts?.[2].thought).toBeUndefined();
+	});
+
+	it("omits trailing empty FINAL_ANSWER segment and still marks reasoning as thought", () => {
+		const parts = planner.processPlanningResponse({} as any, [
+			{ text: "/*REASONING*/ almost /*FINAL_ANSWER*/" },
+			{ functionCall: { name: "search", args: { q: "y" } } },
+		]);
+
+		expect(parts).toHaveLength(2);
+		expect(parts?.[0].text).toBe("/*REASONING*/ almost /*FINAL_ANSWER*/");
+		expect(parts?.[0].thought).toBe(true);
+		expect(parts?.[1].functionCall?.name).toBe("search");
+		expect(parts?.some((p) => p.text === "")).toBe(false);
+	});
 });

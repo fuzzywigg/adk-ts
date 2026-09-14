@@ -70,4 +70,29 @@ describe("BuiltInPlanner", () => {
 		expect(request.config).toEqual({ temperature: 0.1 });
 		expect((request.config as any).thinkingConfig).toBeUndefined();
 	});
+
+	it("no-ops when thinkingConfig is undefined and leaves llmRequest.config untouched", () => {
+		const planner = new BuiltInPlanner({
+			thinkingConfig: { includeThoughts: true },
+		});
+		planner.thinkingConfig = undefined as any;
+
+		const withConfig = new LlmRequest();
+		withConfig.config = { temperature: 0.5, topP: 0.8 } as any;
+		planner.applyThinkingConfig(withConfig);
+		expect(withConfig.config).toEqual({ temperature: 0.5, topP: 0.8 });
+		expect((withConfig.config as any).thinkingConfig).toBeUndefined();
+
+		const bare = new LlmRequest();
+		expect(bare.config).toBeUndefined();
+		planner.applyThinkingConfig(bare);
+		expect(bare.config).toBeUndefined();
+
+		planner.thinkingConfig = null as any;
+		const afterNull = new LlmRequest();
+		afterNull.config = { maxOutputTokens: 16 } as any;
+		planner.applyThinkingConfig(afterNull);
+		expect(afterNull.config).toEqual({ maxOutputTokens: 16 });
+		expect((afterNull.config as any).thinkingConfig).toBeUndefined();
+	});
 });

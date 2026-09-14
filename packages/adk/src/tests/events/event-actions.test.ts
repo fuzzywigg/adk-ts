@@ -73,4 +73,41 @@ describe("EventActions", () => {
 		expect(actions.escalate).toBe(false);
 		expect(actions.skipSummarization).toBe(false);
 	});
+
+	it("coalesces nullish deltas via || {} while preserving false escalate/skipSummarization", () => {
+		const withNull = new EventActions({
+			stateDelta: null as any,
+			artifactDelta: null as any,
+		});
+		expect(withNull.stateDelta).toEqual({});
+		expect(withNull.artifactDelta).toEqual({});
+		expect(withNull.escalate).toBeUndefined();
+		expect(withNull.skipSummarization).toBeUndefined();
+
+		const withFalse = new EventActions({
+			escalate: false,
+			skipSummarization: false,
+			stateDelta: {},
+			artifactDelta: {},
+		});
+		expect(withFalse.escalate).toBe(false);
+		expect(withFalse.skipSummarization).toBe(false);
+		expect(withFalse.escalate).not.toBeUndefined();
+		expect(withFalse.skipSummarization).not.toBeUndefined();
+		expect(withFalse.stateDelta).toEqual({});
+		expect(withFalse.artifactDelta).toEqual({});
+
+		const mixed = new EventActions({
+			stateDelta: undefined,
+			artifactDelta: { keep: 1 },
+			escalate: false,
+			skipSummarization: false,
+			transferToAgent: undefined,
+		});
+		expect(mixed.stateDelta).toEqual({});
+		expect(mixed.artifactDelta).toEqual({ keep: 1 });
+		expect(mixed.escalate).toBe(false);
+		expect(mixed.skipSummarization).toBe(false);
+		expect(mixed.transferToAgent).toBeUndefined();
+	});
 });
