@@ -310,3 +310,57 @@ describe("PlanReActPlanner", () => {
 		expect(parts?.some((p) => p.text === "")).toBe(false);
 	});
 });
+
+describe("PlanReActPlanner leftover edges", () => {
+	const planner = new PlanReActPlanner();
+
+	it("buildPlanningInstruction mentions tool usage and final answer requirements", () => {
+		const instruction = planner.buildPlanningInstruction({} as any, {} as any);
+		expect(instruction).toContain("Available Tools");
+		expect(instruction).toContain("FINAL_ANSWER");
+		expect(instruction).toContain("REPLANNING");
+	});
+
+	it("processPlanningResponse returns the first function-call group when no text precedes it", () => {
+		const parts = planner.processPlanningResponse({} as any, [
+			{ functionCall: { name: "search", args: { q: "x" } } },
+			{ functionCall: { name: "fetch", args: {} } },
+		]);
+		expect(parts?.map((p) => p.functionCall?.name)).toEqual(["search"]);
+	});
+
+	it("treats leading whitespace before PLANNING tag as non-thought", () => {
+		const parts = planner.processPlanningResponse({} as any, [
+			{ text: "   /*PLANNING*/ plan" },
+		]);
+		expect(parts).toHaveLength(1);
+		expect(parts?.[0].thought).toBeUndefined();
+	});
+
+	it("splits when FINAL_ANSWER is the first non-empty segment", () => {
+		const parts = planner.processPlanningResponse({} as any, [
+			{ text: "/*FINAL_ANSWER*/ only answer" },
+		]);
+		expect(parts).toHaveLength(2);
+		expect(parts?.[0].text).toBe("/*FINAL_ANSWER*/");
+		expect(parts?.[0].thought).toBe(true);
+		expect(parts?.[1].text).toBe(" only answer");
+	});
+
+	it("filters function calls whose names are nullish", () => {
+		const parts = planner.processPlanningResponse({} as any, [
+			{ functionCall: { name: null as any, args: {} } },
+			{ functionCall: { name: "valid", args: {} } },
+		]);
+		expect(parts?.map((p) => p.functionCall?.name)).toEqual(["valid"]);
+	});
+
+	it("preserves REASONING tag part when it is the only content", () => {
+		const parts = planner.processPlanningResponse({} as any, [
+			{ text: "/*REASONING*/ think deeply" },
+		]);
+		expect(parts).toHaveLength(1);
+		expect(parts?.[0].thought).toBe(true);
+		expect(parts?.[0].text).toContain("think deeply");
+	});
+});

@@ -1108,3 +1108,117 @@ describe("handleFunctionCallsAsync callback and filter edges", () => {
 		expect([...ids]).toEqual(["l1"]);
 	});
 });
+
+describe("function call helpers leftover edges", () => {
+	it("generateAuthEvent builds one function call per requested auth config", () => {
+		const responseEvent = new Event({
+			author: "agent",
+			content: { role: "user", parts: [] },
+			actions: new EventActions({
+				requestedAuthConfigs: {
+					"fc-a": { authScheme: { type: "oauth2" } } as any,
+					"fc-b": { authScheme: { type: "apiKey" } } as any,
+				},
+			}),
+		});
+		const authEvent = generateAuthEvent(
+			makeInvocationContext({ name: "auth-agent", canonicalModel: "gpt-4o" }),
+			responseEvent,
+		);
+		expect(authEvent?.getFunctionCalls()).toHaveLength(2);
+		expect(authEvent?.longRunningToolIds?.size).toBe(2);
+	});
+
+	it("generateAuthEvent returns event with empty parts for empty requestedAuthConfigs object", () => {
+		const responseEvent = new Event({
+			author: "agent",
+			content: { role: "model", parts: [] },
+			actions: new EventActions({ requestedAuthConfigs: {} }),
+		});
+		const authEvent = generateAuthEvent(
+			makeInvocationContext({ name: "auth-agent" }),
+			responseEvent,
+		);
+		expect(authEvent).not.toBeNull();
+		expect(authEvent?.content?.parts).toEqual([]);
+		expect(authEvent?.longRunningToolIds?.size).toBe(0);
+	});
+
+	it("removeClientFunctionCallId no-ops when content is undefined", () => {
+		expect(() =>
+			removeClientFunctionCallId(
+				undefined as unknown as {
+					role: "user";
+					parts: [];
+				},
+			),
+		).not.toThrow();
+	});
+
+	it("handleFunctionCallsAsync throws when tool name is missing from toolsDict", async () => {
+		await expect(
+			handleFunctionCallsAsync(
+				makeInvocationContext({
+					name: "llm-agent",
+					canonicalModel: "gpt-4o",
+					canonicalBeforeToolCallbacks: [],
+					canonicalAfterToolCallbacks: [],
+				}),
+				functionCallEvent([{ name: "missing_tool", id: "x" }]),
+				{},
+			),
+		).rejects.toThrow(/missing_tool is not found/);
+	});
+
+	it("mergeParallelFunctionResponseEvents returns the same event reference for a single input", () => {
+		const single = new Event({
+			author: "agent",
+			content: {
+				role: "user",
+				parts: [
+					{
+						functionResponse: {
+							name: "only",
+							id: "1",
+							response: { ok: true },
+						},
+					},
+				],
+			},
+		});
+		expect(mergeParallelFunctionResponseEvents([single])).toBe(single);
+	});
+
+	it("populateClientFunctionCallId assigns unique adk- ids to multiple calls", () => {
+		const event = functionCallEvent([
+			{ name: "a" },
+			{ name: "b" },
+			{ name: "c" },
+		]);
+		populateClientFunctionCallId(event);
+		const ids = event.getFunctionCalls().map((c) => c.id);
+		expect(ids.every((id) => id?.startsWith(AF_FUNCTION_CALL_ID_PREFIX))).toBe(
+			true,
+		);
+		expect(new Set(ids).size).toBe(3);
+	});
+
+	it("getLongRunningFunctionCalls ignores tools with isLongRunning false", () => {
+		const short = new FakeTool({
+			name: "short",
+			description: "not long",
+			isLongRunning: false,
+		});
+		const ids = getLongRunningFunctionCalls([{ name: "short", id: "s1" }], {
+			short,
+		});
+		expect([...ids]).toEqual([]);
+	});
+
+	it("generateClientFunctionCallId produces distinct values across calls", () => {
+		const ids = new Set(
+			Array.from({ length: 10 }, () => generateClientFunctionCallId()),
+		);
+		expect(ids.size).toBe(10);
+	});
+});

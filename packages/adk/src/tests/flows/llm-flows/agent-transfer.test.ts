@@ -214,3 +214,117 @@ describe("AgentTransferLlmRequestProcessor", () => {
 		expect(events).toEqual([]);
 	});
 });
+
+describe("AgentTransferLlmRequestProcessor leftover edges", () => {
+	it("lists sub-agents with empty descriptions", async () => {
+		const request = new LlmRequest();
+		const child = new StubAgent("worker", "");
+		const agent = new StubAgent("orchestrator", "Routes work");
+		agent.subAgents = [child];
+		child.parentAgent = agent;
+
+		for await (const _ of requestProcessor.runAsync(
+			makeContext(agent),
+			request,
+		)) {
+		}
+
+		expect(request.config?.systemInstruction).toContain("worker");
+		expect(request.config?.systemInstruction).toContain("Agent name: worker");
+	});
+
+	it("appends transfer instructions without replacing existing systemInstruction", async () => {
+		const request = new LlmRequest();
+		request.config = { systemInstruction: "Existing guidance." };
+		const child = new StubAgent("worker", "Does work");
+		const agent = new StubAgent("orchestrator", "Routes work");
+		agent.subAgents = [child];
+		child.parentAgent = agent;
+
+		for await (const _ of requestProcessor.runAsync(
+			makeContext(agent),
+			request,
+		)) {
+		}
+
+		const instruction = String(request.config?.systemInstruction ?? "");
+		expect(instruction).toContain("Existing guidance.");
+		expect(instruction).toContain("transfer_to_agent");
+	});
+
+	it("registers exactly one transfer_to_agent declaration", async () => {
+		const request = new LlmRequest();
+		const child = new StubAgent("worker", "Does work");
+		const agent = new StubAgent("orchestrator", "Routes work");
+		agent.subAgents = [child];
+		child.parentAgent = agent;
+
+		for await (const _ of requestProcessor.runAsync(
+			makeContext(agent),
+			request,
+		)) {
+		}
+
+		const declarations =
+			request.config?.tools?.flatMap((t) => t.functionDeclarations ?? []) ?? [];
+		const transferDecls = declarations.filter(
+			(d) => d.name === "transfer_to_agent",
+		);
+		expect(transferDecls).toHaveLength(1);
+	});
+
+	it("includes parent agent name even when parent description is empty", async () => {
+		const request = new LlmRequest();
+		const parent = new StubAgent("parent", "");
+		const agent = new StubAgent("child", "Child agent");
+		parent.subAgents = [agent];
+		agent.parentAgent = parent;
+
+		for await (const _ of requestProcessor.runAsync(
+			makeContext(agent),
+			request,
+		)) {
+		}
+
+		expect(request.config?.systemInstruction).toContain(
+			"Your parent agent is parent",
+		);
+	});
+
+	it("omits peer agents when disallowTransferToPeers is true", async () => {
+		const request = new LlmRequest();
+		const parent = new StubAgent("parent", "Parent");
+		const peer = new StubAgent("peer", "Peer helper");
+		const agent = new StubAgent("child", "Child");
+		(agent as any).disallowTransferToPeers = true;
+		parent.subAgents = [agent, peer];
+		agent.parentAgent = parent;
+		peer.parentAgent = parent;
+
+		for await (const _ of requestProcessor.runAsync(
+			makeContext(agent),
+			request,
+		)) {
+		}
+
+		const instruction = String(request.config?.systemInstruction ?? "");
+		expect(instruction).toContain("parent");
+		expect(instruction).not.toContain("Peer helper");
+		expect(instruction).not.toContain("Agent name: peer");
+	});
+
+	it("does not register transfer tool when subAgents array is empty", async () => {
+		const request = new LlmRequest();
+		const agent = new StubAgent("solo", "Alone");
+		agent.subAgents = [];
+
+		for await (const _ of requestProcessor.runAsync(
+			makeContext(agent),
+			request,
+		)) {
+		}
+
+		expect(request.toolsDict.transfer_to_agent).toBeUndefined();
+		expect(request.config?.systemInstruction).toBeUndefined();
+	});
+});

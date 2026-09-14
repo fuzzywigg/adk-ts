@@ -111,3 +111,38 @@ describe("EventActions", () => {
 		expect(mixed.transferToAgent).toBeUndefined();
 	});
 });
+
+describe("EventActions leftover edges", () => {
+	it("stores compaction-only options without other action fields", () => {
+		const actions = new EventActions({
+			compaction: {
+				startTimestamp: 10,
+				endTimestamp: 20,
+				compactedContent: { role: "model", parts: [{ text: "summary" }] },
+			},
+		});
+		expect(actions.compaction?.startTimestamp).toBe(10);
+		expect(actions.skipSummarization).toBeUndefined();
+		expect(actions.stateDelta).toEqual({});
+	});
+
+	it("preserves empty requestedAuthConfigs object", () => {
+		const actions = new EventActions({ requestedAuthConfigs: {} });
+		expect(actions.requestedAuthConfigs).toEqual({});
+	});
+
+	it("preserves empty-string transferToAgent", () => {
+		const actions = new EventActions({ transferToAgent: "" });
+		expect(actions.transferToAgent).toBe("");
+	});
+
+	it("preserves empty-string rewindBeforeInvocationId", () => {
+		const actions = new EventActions({ rewindBeforeInvocationId: "" });
+		expect(actions.rewindBeforeInvocationId).toBe("");
+	});
+
+	it("stores zero-valued artifact versions in artifactDelta", () => {
+		const actions = new EventActions({ artifactDelta: { "out.txt": 0 } });
+		expect(actions.artifactDelta).toEqual({ "out.txt": 0 });
+	});
+});

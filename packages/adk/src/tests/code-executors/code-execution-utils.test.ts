@@ -418,3 +418,53 @@ describe("CodeExecutionUtils", () => {
 		expect(part.executableCode?.code).toBe("");
 	});
 });
+
+describe("CodeExecutionUtils leftover edges", () => {
+	it("extractCodeAndTruncateContent returns null when no delimiter matches", () => {
+		const content: Content = {
+			parts: [{ text: "plain prose without fences" }],
+		};
+		expect(
+			CodeExecutionUtils.extractCodeAndTruncateContent(content, [
+				["<<<", ">>>"],
+			]),
+		).toBeNull();
+	});
+
+	it("buildCodeExecutionResultPart prefers stderr when stdout is empty", () => {
+		const part = CodeExecutionUtils.buildCodeExecutionResultPart({
+			stdout: "",
+			stderr: "traceback",
+			outputFiles: [],
+		});
+		expect(part.codeExecutionResult?.outcome).toBe(Outcome.OUTCOME_FAILED);
+		expect(part.codeExecutionResult?.output).toBe("traceback");
+	});
+
+	it("convertCodeExecutionParts no-ops when parts is an empty array", () => {
+		const content: Content = { role: "model", parts: [] };
+		CodeExecutionUtils.convertCodeExecutionParts(
+			content,
+			["```", "```"],
+			["<", ">"],
+		);
+		expect(content.parts).toEqual([]);
+	});
+
+	it("getEncodedFileContent encodes Uint8Array bytes", () => {
+		const bytes = new TextEncoder().encode("bytes");
+		expect(CodeExecutionUtils.getEncodedFileContent(bytes.buffer)).toBe(
+			btoa("bytes"),
+		);
+	});
+
+	it("buildCodeExecutionResultPart includes stdout when stderr is also present", () => {
+		const part = CodeExecutionUtils.buildCodeExecutionResultPart({
+			stdout: "printed",
+			stderr: "warn",
+			outputFiles: [],
+		});
+		expect(part.codeExecutionResult?.outcome).toBe(Outcome.OUTCOME_FAILED);
+		expect(part.codeExecutionResult?.output).toContain("warn");
+	});
+});

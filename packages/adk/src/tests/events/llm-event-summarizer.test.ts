@@ -709,4 +709,135 @@ describe("LlmEventSummarizer", () => {
 			expect(promptText).toContain("Called tool 'empty_args' with args {}");
 		});
 	});
+
+	describe("leftover edges", () => {
+		it("returns undefined when model output is whitespace only", async () => {
+			const events = [
+				new Event({
+					invocationId: "inv-1",
+					author: "user",
+					content: { parts: [{ text: "Hello" }] },
+					timestamp: 1000,
+				}),
+			];
+			async function* mockGenerator() {
+				yield { content: { parts: [{ text: "   \n\t  " }] } };
+			}
+			(mockLlm.generateContentAsync as any).mockReturnValue(mockGenerator());
+			expect(await summarizer.maybeSummarizeEvents(events)).toBeUndefined();
+		});
+
+		it("compaction events use author user and unique invocationId", async () => {
+			const events = [
+				new Event({
+					invocationId: "inv-1",
+					author: "user",
+					content: { parts: [{ text: "Hi" }] },
+					timestamp: 1000,
+				}),
+			];
+			async function* mockGenerator() {
+				yield { content: { parts: [{ text: "Summary text" }] } };
+			}
+			(mockLlm.generateContentAsync as any).mockReturnValue(mockGenerator());
+			const result = await summarizer.maybeSummarizeEvents(events);
+			expect(result?.author).toBe("user");
+			expect(result?.invocationId).toMatch(/^[a-f0-9]{8}$/);
+			expect(result?.invocationId).not.toBe("inv-1");
+		});
+
+		it("uses identical start and end timestamps for single-event compaction", async () => {
+			const events = [
+				new Event({
+					invocationId: "inv-1",
+					author: "user",
+					content: { parts: [{ text: "solo" }] },
+					timestamp: 4242,
+				}),
+			];
+			async function* mockGenerator() {
+				yield { content: { parts: [{ text: "done" }] } };
+			}
+			(mockLlm.generateContentAsync as any).mockReturnValue(mockGenerator());
+			const result = await summarizer.maybeSummarizeEvents(events);
+			expect(result?.actions?.compaction?.startTimestamp).toBe(4242);
+			expect(result?.actions?.compaction?.endTimestamp).toBe(4242);
+		});
+
+		it("formats functionResponse payloads with JSON.stringify", async () => {
+			const events = [
+				new Event({
+					invocationId: "inv-1",
+					author: "tool",
+					content: {
+						parts: [
+							{
+								functionResponse: {
+									name: "calc",
+									response: { sum: 3, nested: { ok: true } },
+								},
+							},
+						],
+					},
+					timestamp: 1000,
+				}),
+			];
+			async function* mockGenerator() {
+				yield { content: { parts: [{ text: "ok" }] } };
+			}
+			(mockLlm.generateContentAsync as any).mockReturnValue(mockGenerator());
+			await summarizer.maybeSummarizeEvents(events);
+			const promptText = (mockLlm.generateContentAsync as any).mock.calls[0][0]
+				.contents[0].parts[0].text as string;
+			expect(promptText).toContain('"sum":3');
+			expect(promptText).toContain("Tool 'calc' returned:");
+		});
+
+		it("includes multiple authors in formatted event text", async () => {
+			const events = [
+				new Event({
+					invocationId: "inv-1",
+					author: "user",
+					content: { parts: [{ text: "question" }] },
+					timestamp: 1000,
+				}),
+				new Event({
+					invocationId: "inv-2",
+					author: "agent",
+					content: { parts: [{ text: "answer" }] },
+					timestamp: 1100,
+				}),
+			];
+			async function* mockGenerator() {
+				yield { content: { parts: [{ text: "summary" }] } };
+			}
+			(mockLlm.generateContentAsync as any).mockReturnValue(mockGenerator());
+			await summarizer.maybeSummarizeEvents(events);
+			const promptText = (mockLlm.generateContentAsync as any).mock.calls[0][0]
+				.contents[0].parts[0].text as string;
+			expect(promptText).toContain("user: question");
+			expect(promptText).toContain("agent: answer");
+		});
+
+		it("uses the default summarization prompt when none is provided", async () => {
+			const defaultSummarizer = new LlmEventSummarizer(mockLlm);
+			const events = [
+				new Event({
+					invocationId: "inv-1",
+					author: "user",
+					content: { parts: [{ text: "ping" }] },
+					timestamp: 1000,
+				}),
+			];
+			async function* mockGenerator() {
+				yield { content: { parts: [{ text: "pong" }] } };
+			}
+			(mockLlm.generateContentAsync as any).mockReturnValue(mockGenerator());
+			await defaultSummarizer.maybeSummarizeEvents(events);
+			const promptText = (mockLlm.generateContentAsync as any).mock.calls[0][0]
+				.contents[0].parts[0].text as string;
+			expect(promptText).toContain("helpful assistant tasked with summarizing");
+			expect(promptText).toContain("user: ping");
+		});
+	});
 });

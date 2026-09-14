@@ -292,3 +292,43 @@ describe("auth credentials", () => {
 		});
 	});
 });
+
+describe("auth credentials leftover edges", () => {
+	it("OAuth2Credential.canRefresh is false without refreshToken", () => {
+		const credential = new OAuth2Credential({
+			accessToken: "access",
+			refreshFunction: async () => ({ accessToken: "next" }),
+		});
+		expect(credential.canRefresh()).toBe(false);
+	});
+
+	it("OAuth2Credential refresh keeps refreshToken when refresh result omits it", async () => {
+		const credential = new OAuth2Credential({
+			accessToken: "old",
+			refreshToken: "keep-me",
+			refreshFunction: async () => ({ accessToken: "new" }),
+		});
+		await credential.refresh();
+		expect(credential.getToken()).toBe("new");
+		expect(credential.refreshToken).toBe("keep-me");
+	});
+
+	it("BasicAuthCredential getHeaders ignores authConfig argument shape", () => {
+		const credential = new BasicAuthCredential("u", "p");
+		const config = new AuthConfig({
+			authScheme: new ApiKeyScheme({ in: "header", name: "ignored" }),
+		});
+		expect(credential.getHeaders(config)).toEqual({
+			Authorization: `Basic ${credential.getToken()}`,
+		});
+	});
+
+	it("BearerTokenCredential canRefresh is always false", () => {
+		expect(new BearerTokenCredential("t").canRefresh()).toBe(false);
+	});
+
+	it("ApiKeyCredential refresh rejects with not supported message", async () => {
+		const credential = new ApiKeyCredential("k");
+		await expect(credential.refresh()).rejects.toThrow(/not supported/i);
+	});
+});

@@ -307,3 +307,71 @@ describe("Event", () => {
 		]);
 	});
 });
+
+describe("Event leftover edges", () => {
+	it("isFinalResponse is true for events with empty content", () => {
+		expect(new Event({ author: "agent", content: {} }).isFinalResponse()).toBe(
+			true,
+		);
+	});
+
+	it("hasTrailingCodeExecutionResult is false when content.parts is undefined", () => {
+		expect(
+			new Event({
+				author: "agent",
+				content: { role: "model" },
+			}).hasTrailingCodeExecutionResult(),
+		).toBe(false);
+	});
+
+	it("Event.newId uses only lowercase hex characters", () => {
+		const id = Event.newId();
+		expect(id).toMatch(/^[a-f0-9]{8}$/);
+	});
+
+	it("preserves explicit partial false in constructor", () => {
+		const event = new Event({
+			author: "agent",
+			partial: false,
+			content: { parts: [{ text: "done" }] },
+		});
+		expect(event.partial).toBe(false);
+		expect(event.isFinalResponse()).toBe(true);
+	});
+
+	it("getFunctionCalls includes calls with undefined args", () => {
+		const event = new Event({
+			author: "agent",
+			content: {
+				parts: [{ functionCall: { name: "tool" } }],
+			},
+		});
+		expect(event.getFunctionCalls()).toEqual([{ name: "tool" }]);
+	});
+
+	it("is not final when content has only empty parts array and partial is true", () => {
+		expect(
+			new Event({
+				author: "agent",
+				partial: true,
+				content: { parts: [] },
+			}).isFinalResponse(),
+		).toBe(false);
+	});
+
+	it("preserves empty-string branch when provided", () => {
+		const event = new Event({ author: "agent", branch: "" });
+		expect(event.branch).toBe("");
+	});
+
+	it("longRunningToolIds with entries makes function-call events final", () => {
+		const event = new Event({
+			author: "agent",
+			longRunningToolIds: new Set(["lr-1"]),
+			content: {
+				parts: [{ functionCall: { name: "slow", args: {}, id: "lr-1" } }],
+			},
+		});
+		expect(event.isFinalResponse()).toBe(true);
+	});
+});

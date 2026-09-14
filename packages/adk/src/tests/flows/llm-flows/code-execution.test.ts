@@ -2457,3 +2457,103 @@ describe("requestProcessor and responseProcessor additional edges", () => {
 		expect(Object.keys(event.actions.stateDelta).length).toBeGreaterThan(0);
 	});
 });
+
+describe("code-execution processors leftover edges", () => {
+	it("responseProcessor skips when response has no extractable code", async () => {
+		const executor = new StubExecutor();
+		const agent = new LlmAgent({
+			name: "coder",
+			model: "gpt-4o",
+			codeExecutor: executor,
+		});
+		const events = await collect(
+			responseProcessor.runAsync(makeInvocation(agent), {
+				content: { role: "model", parts: [{ text: "no code here" }] },
+			} as LlmResponse),
+		);
+		expect(events).toEqual([]);
+		expect(executor.executeCode).not.toHaveBeenCalled();
+	});
+
+	it("requestProcessor is a no-op for agents with codeExecutor undefined property", async () => {
+		const llmRequest = new LlmRequest({ model: "gpt-4o" });
+		const events = await collect(
+			requestProcessor.runAsync(
+				{
+					agent: { name: "duck", codeExecutor: undefined },
+					session: { state: {}, events: [] },
+				} as unknown as InvocationContext,
+				llmRequest,
+			),
+		);
+		expect(events).toEqual([]);
+		expect(llmRequest.config?.tools).toBeUndefined();
+	});
+
+	it("getDataFilePreprocessingCode returns undefined for unsupported mime types", () => {
+		expect(
+			getDataFilePreprocessingCode({
+				name: "data.bin",
+				mimeType: "application/octet-stream",
+				content: "abc",
+			}),
+		).toBeUndefined();
+	});
+
+	it("getOrSetExecutionId generates stable ids for stateful executors", () => {
+		const state = State.create({}, {});
+		const ctx = new CodeExecutorContext(state);
+		const invocation = makeInvocation(
+			new LlmAgent({
+				name: "coder",
+				model: "gpt-4o",
+				codeExecutor: new StubExecutor(),
+			}),
+		);
+		(invocation.agent as LlmAgent).codeExecutor = {
+			stateful: true,
+		} as any;
+		const first = getOrSetExecutionId(invocation, ctx);
+		const second = getOrSetExecutionId(invocation, ctx);
+		expect(first).toBe("sess-1");
+		expect(second).toBe("sess-1");
+	});
+
+	it("hasCodeExecutor returns false for primitives", () => {
+		expect(hasCodeExecutor(false as any)).toBeFalsy();
+		expect(hasCodeExecutor(0 as any)).toBeFalsy();
+	});
+
+	it("postProcessCodeExecutionResult sets author from invocation agent name", async () => {
+		const state = State.create({}, {});
+		const ctx = new CodeExecutorContext(state);
+		const event = await postProcessCodeExecutionResult(
+			makeInvocation(
+				new LlmAgent({
+					name: "named_coder",
+					model: "gpt-4o",
+					codeExecutor: new StubExecutor(),
+				}),
+			),
+			ctx,
+			{ stdout: "1", stderr: "", outputFiles: [] },
+		);
+		expect(event.author).toBe("named_coder");
+	});
+
+	it("extractAndReplaceInlineFiles leaves non-csv inline data untouched", () => {
+		const state = State.create({}, {});
+		const ctx = new CodeExecutorContext(state);
+		const llmRequest = new LlmRequest({
+			contents: [
+				{
+					role: "user",
+					parts: [{ inlineData: { mimeType: "text/plain", data: "hello" } }],
+				},
+			],
+		});
+		const files = extractAndReplaceInlineFiles(ctx, llmRequest);
+		expect(files).toHaveLength(0);
+		expect(llmRequest.contents?.[0].parts?.[0]?.inlineData?.data).toBe("hello");
+	});
+});

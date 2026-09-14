@@ -459,3 +459,111 @@ describe("nl-planning responseProcessor more edges", () => {
 		expect(llmRequest.config?.systemInstruction).toBeTruthy();
 	});
 });
+
+describe("nl-planning leftover edges", () => {
+	it("responseProcessor returns early when llmResponse is null", async () => {
+		const events = await drain(
+			responseProcessor.runAsync(
+				makeContext({
+					agent: { name: "planner-agent", planner: new PlanReActPlanner() },
+				}),
+				null as any,
+			),
+		);
+		expect(events).toEqual([]);
+	});
+
+	it("responseProcessor returns early when content is undefined", async () => {
+		const events = await drain(
+			responseProcessor.runAsync(
+				makeContext({
+					agent: { name: "planner-agent", planner: new PlanReActPlanner() },
+				}),
+				{} as LlmResponse,
+			),
+		);
+		expect(events).toEqual([]);
+	});
+
+	it("BuiltInPlanner request path does not append PlanReAct planning tags", async () => {
+		const llmRequest = new LlmRequest();
+		await drain(
+			requestProcessor.runAsync(
+				makeContext({
+					agent: {
+						name: "builtin-planner",
+						planner: new BuiltInPlanner({
+							thinkingConfig: { includeThoughts: true },
+						}),
+					},
+				}),
+				llmRequest,
+			),
+		);
+		expect(String(llmRequest.config?.systemInstruction ?? "")).not.toContain(
+			"/*PLANNING*/",
+		);
+	});
+
+	it("state-delta events carry branch and invocationId from context", async () => {
+		const planner = {
+			buildPlanningInstruction: vi.fn(),
+			processPlanningResponse: (
+				callbackContext: { state: Record<string, unknown> },
+				parts: unknown[],
+			) => {
+				callbackContext.state.flag = 1;
+				return parts;
+			},
+		};
+		const events = await drain(
+			responseProcessor.runAsync(
+				makeContext({
+					invocationId: "inv-plan",
+					branch: "plan-branch",
+					agent: { name: "state-planner", planner },
+				}),
+				{
+					content: { role: "model", parts: [{ text: "/*PLANNING*/ x" }] },
+				} as LlmResponse,
+			),
+		);
+		const event = events[0] as {
+			invocationId: string;
+			branch?: string;
+			author: string;
+		};
+		expect(event.invocationId).toBe("inv-plan");
+		expect(event.branch).toBe("plan-branch");
+		expect(event.author).toBe("state-planner");
+	});
+
+	it("BuiltInPlanner request path still clears thought flags from contents", async () => {
+		const llmRequest = new LlmRequest({
+			contents: [
+				{
+					role: "user",
+					parts: [{ text: "q", thought: true } as any],
+				},
+			],
+		});
+		await drain(
+			requestProcessor.runAsync(
+				makeContext({
+					agent: {
+						name: "builtin",
+						planner: new BuiltInPlanner({
+							thinkingConfig: { includeThoughts: false },
+						}),
+					},
+				}),
+				llmRequest,
+			),
+		);
+		expect(
+			llmRequest.contents
+				?.flatMap((c) => c.parts ?? [])
+				.every((p) => !p.thought),
+		).toBe(true);
+	});
+});

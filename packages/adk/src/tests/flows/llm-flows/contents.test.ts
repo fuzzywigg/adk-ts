@@ -1534,3 +1534,235 @@ describe("contents requestProcessor", () => {
 		);
 	});
 });
+
+describe("contents requestProcessor leftover edges", () => {
+	it("skips events that only carry state deltas without content", async () => {
+		const llmRequest = new LlmRequest();
+		const stateOnly = new Event({
+			author: "user",
+			actions: new EventActions({ stateDelta: { counter: 1 } }),
+		});
+
+		await drain(
+			requestProcessor.runAsync(
+				ctx(duckAgent("assistant", "default"), [
+					stateOnly,
+					userEvent("visible"),
+				]),
+				llmRequest,
+			),
+		);
+
+		expect(llmRequest.contents).toHaveLength(1);
+		expect(llmRequest.contents[0].parts?.[0]).toEqual({ text: "visible" });
+	});
+
+	it('includeContents "none" preserves an empty preset contents array', async () => {
+		const llmRequest = new LlmRequest({ contents: [] });
+		await drain(
+			requestProcessor.runAsync(
+				ctx(duckAgent("assistant", "none"), [userEvent("ignored")]),
+				llmRequest,
+			),
+		);
+		expect(llmRequest.contents).toEqual([]);
+	});
+
+	it("uses compaction.compactedContent instead of raw compaction marker text", async () => {
+		const llmRequest = new LlmRequest();
+		const compacted = new Event({
+			author: "assistant",
+			timestamp: 3,
+			content: { role: "model", parts: [{ text: "raw-should-drop" }] },
+			actions: new EventActions({
+				compaction: {
+					startTimestamp: 1,
+					endTimestamp: 2,
+					compactedContent: {
+						role: "model",
+						parts: [{ text: "compacted-summary" }],
+					},
+				},
+			}),
+		});
+
+		await drain(
+			requestProcessor.runAsync(
+				ctx(duckAgent("assistant", "default"), [
+					userEvent("before", { timestamp: 1 }),
+					compacted,
+					userEvent("after", { timestamp: 4 }),
+				]),
+				llmRequest,
+			),
+		);
+
+		const texts = llmRequest.contents.map((c) => c.parts?.[0]?.text);
+		expect(texts).toContain("compacted-summary");
+		expect(texts).not.toContain("raw-should-drop");
+	});
+
+	it("filters branch siblings while keeping ancestor and active-branch events", async () => {
+		const llmRequest = new LlmRequest();
+		const events = [
+			userEvent("root-shared", { branch: "root" }),
+			userEvent("sibling-only", { branch: "root.sibling" }),
+			userEvent("leaf-msg", { branch: "root.leaf" }),
+			agentEvent("assistant", "leaf-reply", { branch: "root.leaf" }),
+		];
+
+		await drain(
+			requestProcessor.runAsync(
+				ctx(duckAgent("assistant", "default"), events, "root.leaf"),
+				llmRequest,
+			),
+		);
+
+		const texts = llmRequest.contents.map((c) => c.parts?.[0]?.text);
+		expect(texts).toContain("root-shared");
+		expect(texts).toContain("leaf-msg");
+		expect(texts).toContain("leaf-reply");
+		expect(texts).not.toContain("sibling-only");
+	});
+
+	it("preserves the current agent model turns without For context rewriting", async () => {
+		const llmRequest = new LlmRequest();
+		await drain(
+			requestProcessor.runAsync(
+				ctx(duckAgent("assistant", "default"), [
+					userEvent("question"),
+					agentEvent("assistant", "my answer"),
+					userEvent("follow-up"),
+				]),
+				llmRequest,
+			),
+		);
+
+		const texts = llmRequest.contents.flatMap(
+			(c) => c.parts?.map((p) => p.text).filter(Boolean) ?? [],
+		);
+		expect(texts).toContain("my answer");
+		expect(texts).not.toContain("For context:");
+	});
+
+	it("strips adk-prefixed function call ids from historical contents", async () => {
+		const llmRequest = new LlmRequest();
+		const callEvent = new Event({
+			author: "assistant",
+			content: {
+				role: "model",
+				parts: [
+					{
+						functionCall: {
+							id: "adk-hist-call",
+							name: "lookup",
+							args: { q: 1 },
+						},
+					},
+				],
+			},
+		});
+		const responseEvent = new Event({
+			author: "user",
+			content: {
+				role: "user",
+				parts: [
+					{
+						functionResponse: {
+							id: "adk-hist-call",
+							name: "lookup",
+							response: { ok: true },
+						},
+					},
+				],
+			},
+		});
+
+		await drain(
+			requestProcessor.runAsync(
+				ctx(duckAgent("assistant", "default"), [
+					userEvent("start"),
+					callEvent,
+					responseEvent,
+					userEvent("end"),
+				]),
+				llmRequest,
+			),
+		);
+
+		const fnParts = llmRequest.contents.flatMap((c) => c.parts ?? []);
+		expect(fnParts.some((p) => p.functionCall?.id === "adk-hist-call")).toBe(
+			false,
+		);
+		expect(
+			fnParts.some((p) => p.functionResponse?.id === "adk-hist-call"),
+		).toBe(false);
+		expect(fnParts.some((p) => p.functionCall?.name === "lookup")).toBe(true);
+	});
+
+	it("does not pair function calls missing ids with later responses", async () => {
+		const llmRequest = new LlmRequest();
+		const events = [
+			new Event({
+				author: "assistant",
+				content: {
+					role: "model",
+					parts: [{ functionCall: { name: "tool_a", args: {} } }],
+				},
+			}),
+			new Event({
+				author: "user",
+				content: {
+					role: "user",
+					parts: [
+						{
+							functionResponse: {
+								id: "orphan",
+								name: "tool_a",
+								response: { ok: 1 },
+							},
+						},
+					],
+				},
+			}),
+			userEvent("after"),
+		];
+
+		await drain(
+			requestProcessor.runAsync(
+				ctx(duckAgent("assistant", "default"), events),
+				llmRequest,
+			),
+		);
+
+		expect(
+			llmRequest.contents.some((c) =>
+				c.parts?.some((p) => p.functionResponse?.id === "orphan"),
+			),
+		).toBe(false);
+		expect(llmRequest.contents.map((c) => c.parts?.[0]?.text)).toContain(
+			"after",
+		);
+	});
+
+	it("rewrites foreign-agent content on the same branch", async () => {
+		const llmRequest = new LlmRequest();
+		const foreign = agentEvent("peer-agent", "peer says hi", {
+			branch: "root.leaf",
+		});
+
+		await drain(
+			requestProcessor.runAsync(
+				ctx(
+					duckAgent("assistant", "default"),
+					[foreign, userEvent("continue", { branch: "root.leaf" })],
+					"root.leaf",
+				),
+				llmRequest,
+			),
+		);
+
+		expect(llmRequest.contents[0].role).toBe("user");
+		expect(llmRequest.contents[0].parts?.[1]?.text).toContain("peer-agent");
+	});
+});
