@@ -179,4 +179,99 @@ describe("InvocationContext", () => {
 			context.incrementLlmCallCount();
 		}).not.toThrow();
 	});
+
+	it("allows exactly maxLlmCalls increments and throws on the next", () => {
+		const context = makeContext(new RunConfig({ maxLlmCalls: 2 }));
+		expect(() => context.incrementLlmCallCount()).not.toThrow();
+		expect(() => context.incrementLlmCallCount()).not.toThrow();
+		expect(() => context.incrementLlmCallCount()).toThrow(
+			/Max number of llm calls limit of `2` exceeded/,
+		);
+	});
+
+	it("does not throw when incrementing without a runConfig", () => {
+		const context = makeContext();
+		expect(context.runConfig).toBeUndefined();
+		expect(() => {
+			context.incrementLlmCallCount();
+			context.incrementLlmCallCount();
+			context.incrementLlmCallCount();
+		}).not.toThrow();
+	});
+
+	it("gives children an independent InvocationCostManager", () => {
+		const parent = makeContext(new RunConfig({ maxLlmCalls: 1 }));
+		parent.incrementLlmCallCount();
+		expect(() => parent.incrementLlmCallCount()).toThrow(
+			LlmCallsLimitExceededError,
+		);
+
+		const child = parent.createChildContext(makeAgent("child"));
+		expect(() => child.incrementLlmCallCount()).not.toThrow();
+		expect(() => child.incrementLlmCallCount()).toThrow(
+			LlmCallsLimitExceededError,
+		);
+	});
+
+	it("shares mutable streaming and transcription refs with children", () => {
+		const activeStreamingTools = {
+			stream_a: { name: "stream_a" },
+		} as any;
+		const transcriptionCache = [{ role: "user", data: "hi" }] as any;
+		const parent = new InvocationContext({
+			sessionService: {} as BaseSessionService,
+			pluginManager: new PluginManager(),
+			agent: makeAgent("root"),
+			session: makeSession(),
+			activeStreamingTools,
+			transcriptionCache,
+		});
+		const child = parent.createChildContext(makeAgent("child"));
+
+		expect(child.activeStreamingTools).toBe(parent.activeStreamingTools);
+		expect(child.transcriptionCache).toBe(parent.transcriptionCache);
+
+		parent.activeStreamingTools!.stream_b = { name: "stream_b" } as any;
+		parent.transcriptionCache!.push({ role: "model", data: "yo" } as any);
+
+		expect(child.activeStreamingTools).toHaveProperty("stream_b");
+		expect(child.transcriptionCache).toHaveLength(2);
+	});
+
+	it("copies endInvocation by value at createChildContext time", () => {
+		const parent = makeContext();
+		expect(parent.endInvocation).toBe(false);
+		const child = parent.createChildContext(makeAgent("child"));
+
+		parent.endInvocation = true;
+		expect(child.endInvocation).toBe(false);
+
+		child.endInvocation = true;
+		expect(parent.endInvocation).toBe(true);
+		expect(child.endInvocation).toBe(true);
+	});
+
+	it("shares pluginManager and runConfig object identity with children", () => {
+		const pluginManager = new PluginManager();
+		const runConfig = new RunConfig({ maxLlmCalls: 9 });
+		const parent = new InvocationContext({
+			sessionService: {} as BaseSessionService,
+			pluginManager,
+			agent: makeAgent("root"),
+			session: makeSession(),
+			runConfig,
+		});
+		const child = parent.createChildContext(makeAgent("child"));
+
+		expect(child.pluginManager).toBe(pluginManager);
+		expect(child.runConfig).toBe(runConfig);
+	});
+
+	it("generates distinct invocation ids when omitted", () => {
+		const a = makeContext();
+		const b = makeContext();
+		expect(a.invocationId).toMatch(/^e-/);
+		expect(b.invocationId).toMatch(/^e-/);
+		expect(a.invocationId).not.toBe(b.invocationId);
+	});
 });

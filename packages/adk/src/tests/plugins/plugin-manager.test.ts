@@ -285,4 +285,120 @@ describe("PluginManager", () => {
 			false,
 		);
 	});
+
+	it("constructs with defaults and resolves missing plugins as undefined", () => {
+		const empty = new PluginManager();
+		expect(empty.getPlugins()).toEqual([]);
+		expect(empty.getPlugin("missing")).toBeUndefined();
+
+		const withPlugins = new PluginManager({
+			plugins: [new TestPlugin("named")],
+		});
+		expect(withPlugins.getPlugin("named")?.name).toBe("named");
+		expect(withPlugins.getPlugin("other")).toBeUndefined();
+	});
+
+	it("skips plugins that omit a given callback without throwing", async () => {
+		const manager = new PluginManager({
+			plugins: [new TestPlugin("before-only")],
+		});
+
+		await expect(
+			manager.runAfterModelCallback({
+				callbackContext: {} as any,
+				llmResponse: {} as any,
+			}),
+		).resolves.toBeUndefined();
+	});
+
+	it("returns undefined when every plugin callback yields undefined", async () => {
+		const first = new TestPlugin("a");
+		const second = new TestPlugin("b");
+		const manager = new PluginManager({ plugins: [first, second] });
+
+		await expect(
+			manager.runBeforeRunCallback({ invocationContext: {} as any }),
+		).resolves.toBeUndefined();
+		expect(first.beforeRunCalls).toBe(1);
+		expect(second.beforeRunCalls).toBe(1);
+	});
+
+	it("short-circuits in registration order when the first plugin returns", async () => {
+		const first = new TestPlugin("first", { winner: "first" });
+		const second = new TestPlugin("second", { winner: "second" });
+		const manager = new PluginManager({ plugins: [first, second] });
+
+		await expect(
+			manager.runBeforeRunCallback({ invocationContext: {} as any }),
+		).resolves.toEqual({ winner: "first" });
+		expect(first.beforeRunCalls).toBe(1);
+		expect(second.beforeRunCalls).toBe(0);
+	});
+
+	it("aggregates multiple close failures including non-Error rejects", async () => {
+		class RejectPlugin extends BasePlugin {
+			constructor(
+				name: string,
+				private readonly reason: unknown,
+			) {
+				super(name);
+			}
+			async close(): Promise<void> {
+				throw this.reason;
+			}
+		}
+
+		const manager = new PluginManager({
+			plugins: [
+				new RejectPlugin("alpha", new Error("boom-a")),
+				new RejectPlugin("beta", "boom-b"),
+			],
+			closeTimeout: 1000,
+		});
+
+		await expect(manager.close()).rejects.toThrow(
+			/Failed to close plugins: 'alpha': boom-a, 'beta': boom-b/,
+		);
+	});
+
+	it("uses the default closeTimeout of 5000 when omitted", async () => {
+		vi.useFakeTimers();
+		try {
+			const manager = new PluginManager({
+				plugins: [
+					new ClosePlugin(
+						"slow-default",
+						() => new Promise((resolve) => setTimeout(resolve, 10_000)),
+					),
+				],
+			});
+
+			const closePromise = manager.close();
+			const expectation = expect(closePromise).rejects.toThrow(
+				/Failed to close plugins: 'slow-default': close\(\) timeout/,
+			);
+			await vi.advanceTimersByTimeAsync(5000);
+			await expectation;
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("continues closing remaining plugins after an earlier failure", async () => {
+		const laterClose = vi.fn(async () => undefined);
+		const manager = new PluginManager({
+			plugins: [
+				new ClosePlugin("fail-first", async () => {
+					throw new Error("first-fail");
+				}),
+				new ClosePlugin("ok-later", laterClose),
+			],
+			closeTimeout: 1000,
+		});
+
+		await expect(manager.close()).rejects.toThrow(
+			/Failed to close plugins: 'fail-first': first-fail/,
+		);
+		expect(laterClose).toHaveBeenCalledOnce();
+	});
 });
