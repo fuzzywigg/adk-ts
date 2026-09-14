@@ -291,7 +291,9 @@ describe("BaseAgent leftover edges", () => {
 			expect(cb2).toHaveBeenCalledOnce();
 			expect(cb3).not.toHaveBeenCalled();
 			expect(events[0].content).toEqual({ parts: [{ text: "promise-hit" }] });
-			expect(mockContext.endInvocation).toBe(true);
+			const childCtx = (mockContext.createChildContext as any).mock.results[0]
+				.value as InvocationContext;
+			expect(childCtx.endInvocation).toBe(true);
 		});
 
 		it("uses plugin before content and still sets endInvocation", async () => {
@@ -311,8 +313,10 @@ describe("BaseAgent leftover edges", () => {
 			expect(agentCb).not.toHaveBeenCalled();
 			expect(events).toHaveLength(1);
 			expect(events[0].author).toBe("edge_agent");
-			expect(events[0].branch).toBe("root");
-			expect(mockContext.endInvocation).toBe(true);
+			expect(events[0].branch).toBe("root.edge_agent");
+			const childCtx = (mockContext.createChildContext as any).mock.results[0]
+				.value as InvocationContext;
+			expect(childCtx.endInvocation).toBe(true);
 		});
 
 		it("canonicalAfterAgentCallbacks stops at first content in after list", async () => {
