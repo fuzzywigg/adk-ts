@@ -44,8 +44,8 @@ function mockProcessOn() {
 describe("serve/web/run command leftover edges (TOKENMAXX adk-cli)", () => {
 	const originalVerbose = process.env.ADK_VERBOSE;
 	const originalNodeEnv = process.env.NODE_ENV;
-	let logSpy: ReturnType<typeof vi.spyOn>;
-	let exitSpy: ReturnType<typeof vi.spyOn>;
+	let logSpy: any;
+	let exitSpy: any;
 
 	beforeEach(() => {
 		vi.clearAllMocks();
@@ -99,7 +99,9 @@ describe("serve/web/run command leftover edges (TOKENMAXX adk-cli)", () => {
 		expect(onSpy).toHaveBeenCalledWith("SIGINT", expect.any(Function));
 		expect(onSpy).toHaveBeenCalledWith("SIGTERM", expect.any(Function));
 		expect(
-			logSpy.mock.calls.some((c) => String(c[0]).includes("starting")),
+			logSpy.mock.calls.some((c: unknown[]) =>
+				String(c[0]).includes("starting"),
+			),
 		).toBe(true);
 	});
 
@@ -147,7 +149,7 @@ describe("serve/web/run command leftover edges (TOKENMAXX adk-cli)", () => {
 			quiet: true,
 		});
 		expect(
-			logSpy.mock.calls.some((c) =>
+			logSpy.mock.calls.some((c: unknown[]) =>
 				String(c[0]).includes("https://adk-web.example.test/?port=9002"),
 			),
 		).toBe(true);
@@ -172,13 +174,13 @@ describe("serve/web/run command leftover edges (TOKENMAXX adk-cli)", () => {
 			quiet: true,
 		});
 		expect(
-			logSpy.mock.calls.some((c) =>
+			logSpy.mock.calls.some((c: unknown[]) =>
 				String(c[0]).includes("https://adk-web.iqai.com/"),
 			),
 		).toBe(true);
-		expect(logSpy.mock.calls.some((c) => String(c[0]).includes("?port="))).toBe(
-			false,
-		);
+		expect(
+			logSpy.mock.calls.some((c: unknown[]) => String(c[0]).includes("?port=")),
+		).toBe(false);
 	});
 
 	it("RunCommand --server starts HTTP only and registers SIGINT stop", async () => {
@@ -225,7 +227,9 @@ describe("serve/web/run command leftover edges (TOKENMAXX adk-cli)", () => {
 			}),
 		);
 		expect(
-			logSpy.mock.calls.some((c) => String(c[0]).includes("Starting")),
+			logSpy.mock.calls.some((c: unknown[]) =>
+				String(c[0]).includes("Starting"),
+			),
 		).toBe(true);
 	});
 

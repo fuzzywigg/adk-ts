@@ -73,9 +73,9 @@ function makeSpawnChild(options: {
 }
 
 describe("NewCommand leftover edges (TOKENMAXX adk-cli)", () => {
-	let exitSpy: ReturnType<typeof vi.spyOn>;
-	let clearSpy: ReturnType<typeof vi.spyOn>;
-	let logSpy: ReturnType<typeof vi.spyOn>;
+	let exitSpy: any;
+	let clearSpy: any;
+	let logSpy: any;
 
 	beforeEach(() => {
 		vi.clearAllMocks();
