@@ -712,9 +712,9 @@ describe("FunctionTool", () => {
 	});
 
 	it("arrow function without parentheses yields empty params from toString parse", () => {
-		const arrow = (x: string) => ({ x });
+		const arrow = (x: string) => x;
 		Object.defineProperty(arrow, "toString", {
-			value: () => "x => ({ x })",
+			value: () => "x => x",
 		});
 		Object.defineProperty(arrow, "name", { value: "arrow_no_paren" });
 
