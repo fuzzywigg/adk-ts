@@ -1,11 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { runCompactionForSlidingWindow } from "../../../events/compaction.js";
-import type { EventsCompactionConfig } from "../../../events/compaction-config.js";
-import { Event } from "../../../events/event.js";
-import { EventActions } from "../../../events/event-actions.js";
-import type { EventsSummarizer } from "../../../events/events-summarizer.js";
-import { InMemorySessionService } from "../../../sessions/in-memory-session-service.js";
-import type { Session } from "../../../sessions/session.js";
+import { runCompactionForSlidingWindow } from "../../events/compaction.js";
+import type { EventsCompactionConfig } from "../../events/compaction-config.js";
+import { Event } from "../../events/event.js";
+import { EventActions } from "../../events/event-actions.js";
+import type { EventsSummarizer } from "../../events/events-summarizer.js";
+import { InMemorySessionService } from "../../sessions/in-memory-session-service.js";
+import type { Session } from "../../sessions/session.js";
 
 describe("compaction invocationId === case + timestamp 0 twelfth leftover", () => {
 	let sessionService: InMemorySessionService;
