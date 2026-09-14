@@ -57,7 +57,7 @@ describe("Session checkpoint corrupt + partial resume edges", () => {
 		});
 
 		it("appendEvent recovers corrupt session/app/user JSON then merges new deltas", async () => {
-			const session = await service.createSession(
+			await service.createSession(
 				"app",
 				"user",
 				{ seed: true },
