@@ -1513,4 +1513,59 @@ describe("BaseLlmFlow leftover toolsDict/parts/callback edges", () => {
 		);
 		expect(result?.content?.parts?.[0]).toEqual({ text: "from-third" });
 	});
+
+	it("_handleBeforeModelCallback falls through when the callback list is empty", async () => {
+		const flow = new InspectableFlow();
+		const result = await flow._handleBeforeModelCallback(
+			makeCtx({
+				agent: {
+					name: "empty-before",
+					canonicalBeforeModelCallbacks: [],
+				},
+			}),
+			new LlmRequest(),
+			new Event({ id: "me", author: "agent" }),
+		);
+		expect(result).toBeUndefined();
+	});
+
+	it("_handleBeforeModelCallback falls through when every callback returns falsy", async () => {
+		const flow = new InspectableFlow();
+		const result = await flow._handleBeforeModelCallback(
+			makeCtx({
+				agent: {
+					name: "all-falsy-before",
+					canonicalBeforeModelCallbacks: [
+						() => undefined,
+						async () => null,
+						() => false,
+						async () => 0,
+						() => "",
+					],
+				},
+			}),
+			new LlmRequest(),
+			new Event({ id: "me", author: "agent" }),
+		);
+		expect(result).toBeUndefined();
+	});
+
+	it("_handleAfterModelCallback falls through when every callback returns falsy", async () => {
+		const flow = new InspectableFlow();
+		const result = await flow._handleAfterModelCallback(
+			makeCtx({
+				agent: {
+					name: "all-falsy-after",
+					canonicalAfterModelCallbacks: [
+						() => undefined,
+						async () => null,
+						() => false,
+					],
+				},
+			}),
+			{ content: { role: "model", parts: [{ text: "orig" }] } } as LlmResponse,
+			new Event({ id: "me", author: "agent" }),
+		);
+		expect(result).toBeUndefined();
+	});
 });

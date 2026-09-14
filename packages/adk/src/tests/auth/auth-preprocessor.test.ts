@@ -1783,7 +1783,9 @@ describe("auth requestProcessor null-author leftover", () => {
 						name: "auth-agent",
 						canonicalTools: async () => [tool],
 					},
-					events: [originalCall, eucCall, nullAuthor, eucResponse],
+					// Trailing null-author must be scanned first so `continue` runs
+					// before the real user EUC response is selected.
+					events: [originalCall, eucCall, eucResponse, nullAuthor],
 				}),
 				new LlmRequest(),
 			),
@@ -1795,6 +1797,198 @@ describe("auth requestProcessor null-author leftover", () => {
 			originalCall,
 			{ secure_api: tool },
 			new Set(["tool-null-author"]),
+		);
+		warn.mockRestore();
+	});
+});
+
+describe("auth requestProcessor author-continue leftover edges", () => {
+	function eucFixture(suffix: string) {
+		const originalCall = new Event({
+			author: "auth-agent",
+			content: {
+				role: "model",
+				parts: [
+					{
+						functionCall: {
+							id: `tool-${suffix}`,
+							name: "secure_api",
+							args: {},
+						},
+					},
+				],
+			},
+		});
+		const eucCall = new Event({
+			author: "auth-agent",
+			content: {
+				role: "model",
+				parts: [
+					{
+						functionCall: {
+							id: `euc-${suffix}`,
+							name: REQUEST_EUC_FUNCTION_CALL_NAME,
+							args: JSON.stringify({
+								function_call_id: `tool-${suffix}`,
+							}) as any,
+						},
+					},
+				],
+			},
+		});
+		const eucResponse = new Event({
+			author: "user",
+			content: {
+				role: "user",
+				parts: [
+					{
+						functionResponse: {
+							id: `euc-${suffix}`,
+							name: REQUEST_EUC_FUNCTION_CALL_NAME,
+							response: JSON.stringify({
+								authScheme: { type: "apiKey" },
+								rawAuthCredential: { apiKey: "k" },
+							}),
+						},
+					},
+				],
+			},
+		});
+		return { originalCall, eucCall, eucResponse };
+	}
+
+	it("continues past empty-string author before selecting the user EUC response", async () => {
+		const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+		handleFunctionCallsAsyncMock.mockResolvedValue(null);
+		const { originalCall, eucCall, eucResponse } = eucFixture("empty-author");
+		const emptyAuthor = new Event({
+			author: "user",
+			content: {
+				role: "user",
+				parts: [
+					{
+						functionResponse: {
+							id: "ignored-empty",
+							name: REQUEST_EUC_FUNCTION_CALL_NAME,
+							response: "{}",
+						},
+					},
+				],
+			},
+		});
+		(emptyAuthor as { author: string }).author = "";
+
+		const tool = { name: "secure_api" };
+		await collect(
+			requestProcessor.runAsync(
+				baseCtx({
+					agent: {
+						name: "auth-agent",
+						canonicalTools: async () => [tool],
+					},
+					events: [originalCall, eucCall, eucResponse, emptyAuthor],
+				}),
+				new LlmRequest(),
+			),
+		);
+
+		expect(handleFunctionCallsAsyncMock).toHaveBeenCalledWith(
+			expect.anything(),
+			originalCall,
+			{ secure_api: tool },
+			new Set(["tool-empty-author"]),
+		);
+		warn.mockRestore();
+	});
+
+	it("continues past non-user author before selecting the user EUC response", async () => {
+		const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+		handleFunctionCallsAsyncMock.mockResolvedValue(null);
+		const { originalCall, eucCall, eucResponse } = eucFixture("non-user");
+		const agentTail = new Event({
+			author: "assistant",
+			content: {
+				role: "model",
+				parts: [
+					{
+						functionResponse: {
+							id: "ignored-agent",
+							name: REQUEST_EUC_FUNCTION_CALL_NAME,
+							response: "{}",
+						},
+					},
+				],
+			},
+		});
+
+		const tool = { name: "secure_api" };
+		await collect(
+			requestProcessor.runAsync(
+				baseCtx({
+					agent: {
+						name: "auth-agent",
+						canonicalTools: async () => [tool],
+					},
+					events: [originalCall, eucCall, eucResponse, agentTail],
+				}),
+				new LlmRequest(),
+			),
+		);
+
+		expect(handleFunctionCallsAsyncMock).toHaveBeenCalledWith(
+			expect.anything(),
+			originalCall,
+			{ secure_api: tool },
+			new Set(["tool-non-user"]),
+		);
+		warn.mockRestore();
+	});
+
+	it("continues past multiple falsy/non-user authors before the EUC response", async () => {
+		const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+		handleFunctionCallsAsyncMock.mockResolvedValue(null);
+		const { originalCall, eucCall, eucResponse } = eucFixture("multi-skip");
+		const nullAuthor = new Event({
+			author: "user",
+			content: { role: "user", parts: [{ text: "skip-null" }] },
+		});
+		(nullAuthor as { author: string | null }).author = null;
+		const emptyAuthor = new Event({
+			author: "user",
+			content: { role: "user", parts: [{ text: "skip-empty" }] },
+		});
+		(emptyAuthor as { author: string }).author = "";
+		const agentTail = new Event({
+			author: "other-agent",
+			content: { role: "model", parts: [{ text: "skip-agent" }] },
+		});
+
+		const tool = { name: "secure_api" };
+		await collect(
+			requestProcessor.runAsync(
+				baseCtx({
+					agent: {
+						name: "auth-agent",
+						canonicalTools: async () => [tool],
+					},
+					events: [
+						originalCall,
+						eucCall,
+						eucResponse,
+						nullAuthor,
+						emptyAuthor,
+						agentTail,
+					],
+				}),
+				new LlmRequest(),
+			),
+		);
+
+		expect(handleFunctionCallsAsyncMock).toHaveBeenCalledWith(
+			expect.anything(),
+			originalCall,
+			{ secure_api: tool },
+			new Set(["tool-multi-skip"]),
 		);
 		warn.mockRestore();
 	});

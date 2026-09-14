@@ -2,6 +2,7 @@ import Module from "node:module";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
 	createDatabaseSessionService,
+	createMysqlSessionService,
 	createPostgresSessionService,
 	createSqliteSessionService,
 } from "../../sessions/database-factories";
@@ -187,5 +188,50 @@ describe("database-factories leftover edges", () => {
 
 		createSqliteSessionService("plain.db");
 		expect(Database).toHaveBeenCalledWith("plain.db", undefined);
+	});
+
+	it("createMysqlSessionService without options omits the second ctor arg", () => {
+		const createPool = vi.fn(() => ({
+			end: vi.fn(),
+			execute: vi.fn(),
+		}));
+		Module.prototype.require = function (
+			this: NodeModule,
+			id: string,
+			...rest: unknown[]
+		) {
+			if (id === "mysql2") {
+				return { createPool };
+			}
+			return originalRequire.apply(this, [id, ...rest] as [string]);
+		} as typeof Module.prototype.require;
+
+		createMysqlSessionService("mysql://localhost/db");
+		expect(createPool).toHaveBeenCalledWith({
+			uri: "mysql://localhost/db",
+		});
+	});
+
+	it("createPostgresSessionService spreads empty options object without extra keys", () => {
+		const Pool = vi.fn().mockImplementation(() => ({
+			end: vi.fn(),
+			query: vi.fn(),
+			connect: vi.fn(),
+		}));
+		Module.prototype.require = function (
+			this: NodeModule,
+			id: string,
+			...rest: unknown[]
+		) {
+			if (id === "pg") {
+				return { Pool };
+			}
+			return originalRequire.apply(this, [id, ...rest] as [string]);
+		} as typeof Module.prototype.require;
+
+		createPostgresSessionService("postgresql://localhost/empty-opts", {});
+		expect(Pool).toHaveBeenCalledWith({
+			connectionString: "postgresql://localhost/empty-opts",
+		});
 	});
 });

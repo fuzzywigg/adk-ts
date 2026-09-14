@@ -584,4 +584,19 @@ describe("InMemorySessionService", () => {
 		).resolves.toBeUndefined();
 		expect((await service.getSession("app", "user", "s1"))?.id).toBe("s1");
 	});
+
+	it("appendEvent updates lastUpdateTime and preserves prior events", async () => {
+		const service = new InMemorySessionService();
+		const session = await service.createSession("app", "user", {}, "s-append");
+		const before = session.lastUpdateTime;
+		await service.appendEvent(session, {
+			author: "user",
+			timestamp: Date.now() / 1000,
+			content: { role: "user", parts: [{ text: "ping" }] },
+		} as any);
+		const fetched = await service.getSession("app", "user", "s-append");
+		expect(fetched?.events).toHaveLength(1);
+		expect(fetched?.events[0].content?.parts?.[0]?.text).toBe("ping");
+		expect(fetched?.lastUpdateTime).toBeGreaterThanOrEqual(before);
+	});
 });

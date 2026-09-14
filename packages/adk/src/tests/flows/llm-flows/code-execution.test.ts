@@ -2607,4 +2607,33 @@ describe("code-execution processors leftover edges", () => {
 			"Processing input file",
 		);
 	});
+
+	it("runPreProcessor early-returns when hasCodeExecutor flips false mid-call", async () => {
+		let codeExecutorChecks = 0;
+		const realAgent = new LlmAgent({
+			name: "flip_agent",
+			model: "gpt-4o",
+			codeExecutor: new StubExecutor(),
+		});
+		const agent = new Proxy(realAgent, {
+			has(target, prop) {
+				if (prop === "codeExecutor") {
+					codeExecutorChecks++;
+					// First check (requestProcessor) passes; second (runPreProcessor) fails.
+					return codeExecutorChecks === 1;
+				}
+				return Reflect.has(target, prop);
+			},
+		});
+
+		const events = await collect(
+			requestProcessor.runAsync(
+				makeInvocation(agent as LlmAgent),
+				new LlmRequest({ model: "gpt-4o" }),
+			),
+		);
+
+		expect(events).toEqual([]);
+		expect(codeExecutorChecks).toBeGreaterThanOrEqual(2);
+	});
 });
