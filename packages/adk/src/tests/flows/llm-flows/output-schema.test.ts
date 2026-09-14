@@ -355,4 +355,63 @@ describe("output-schema responseProcessor", () => {
 		expect(response.errorMessage).toContain("plain failure");
 		expect(response.errorCode).toBe("OUTPUT_SCHEMA_VALIDATION_FAILED");
 	});
+
+	it("returns early for nullish llmResponse", async () => {
+		const events = await collect(
+			responseProcessor.runAsync(
+				makeContext({
+					name: "schema-agent",
+					outputSchema: z.object({ answer: z.string() }),
+				}),
+				null as any,
+			),
+		);
+		expect(events).toEqual([]);
+	});
+
+	it("skips when only non-text parts are present", async () => {
+		const response = new LlmResponse({
+			content: {
+				role: "model",
+				parts: [{ inlineData: { mimeType: "image/png", data: "x" } }],
+			},
+		});
+		const events = await collect(
+			responseProcessor.runAsync(
+				makeContext({
+					name: "schema-agent",
+					outputSchema: z.object({ answer: z.string() }),
+				}),
+				response,
+			),
+		);
+		expect(events).toEqual([]);
+		expect(response.errorCode).toBeUndefined();
+		expect(response.content?.parts?.[0]?.inlineData?.mimeType).toBe(
+			"image/png",
+		);
+	});
+
+	it("falls through empty fences and strips unknown keys on success", async () => {
+		const schema = z.object({ answer: z.string() });
+		const response = new LlmResponse({
+			content: {
+				role: "model",
+				parts: [{ text: '```json\n\n```\n{"answer":"ok","extra":1}' }],
+			},
+		});
+
+		const events = await collect(
+			responseProcessor.runAsync(
+				makeContext({ name: "schema-agent", outputSchema: schema }),
+				response,
+			),
+		);
+
+		expect(events).toEqual([]);
+		expect(response.errorCode).toBeUndefined();
+		const rewritten = response.content?.parts?.[0]?.text ?? "";
+		expect(JSON.parse(rewritten)).toEqual({ answer: "ok" });
+		expect(rewritten).toContain("\n");
+	});
 });

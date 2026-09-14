@@ -249,4 +249,83 @@ describe("basic requestProcessor", () => {
 		).resolves.toBeUndefined();
 		expect(llmRequest.config?.responseSchema).toBeUndefined();
 	});
+
+	it("creates empty config when generateContentConfig is absent", async () => {
+		const llmRequest = new LlmRequest();
+		await drain(
+			requestProcessor.runAsync(
+				{
+					agent: {
+						name: "plain",
+						canonicalModel: "gpt-4o",
+					},
+					runConfig: {},
+				} as unknown as InvocationContext,
+				llmRequest,
+			),
+		);
+
+		expect(llmRequest.model).toBe("gpt-4o");
+		expect(llmRequest.config).toEqual({});
+		expect(llmRequest.liveConnectConfig).toBeDefined();
+	});
+
+	it("sets output schema when subAgents is empty even if property exists", async () => {
+		const schema = { type: "object", properties: { a: { type: "string" } } };
+		const llmRequest = new LlmRequest();
+		await drain(
+			requestProcessor.runAsync(
+				{
+					agent: {
+						name: "solo",
+						canonicalModel: "gpt-4o",
+						outputSchema: schema,
+						canonicalTools: async () => [],
+						subAgents: [],
+					},
+					runConfig: {},
+				} as unknown as InvocationContext,
+				llmRequest,
+			),
+		);
+
+		expect(llmRequest.config?.responseSchema).toBeDefined();
+	});
+
+	it("copies remaining live connect fields from runConfig", async () => {
+		const llmRequest = new LlmRequest();
+		const realtimeInputConfig = { activityHandling: "START_OF_ACTIVITY" };
+		const proactivity = { proactiveAudio: true };
+		await drain(
+			requestProcessor.runAsync(
+				{
+					agent: {
+						name: "live",
+						canonicalModel: { model: "gemini-live" },
+					},
+					runConfig: {
+						outputAudioTranscription: { languageCode: "en-US" },
+						inputAudioTranscription: { languageCode: "en-GB" },
+						realtimeInputConfig,
+						enableAffectiveDialog: true,
+						proactivity,
+					},
+				} as unknown as InvocationContext,
+				llmRequest,
+			),
+		);
+
+		expect(llmRequest.model).toBe("gemini-live");
+		expect(llmRequest.liveConnectConfig.outputAudioTranscription).toEqual({
+			languageCode: "en-US",
+		});
+		expect(llmRequest.liveConnectConfig.inputAudioTranscription).toEqual({
+			languageCode: "en-GB",
+		});
+		expect(llmRequest.liveConnectConfig.realtimeInputConfig).toBe(
+			realtimeInputConfig,
+		);
+		expect(llmRequest.liveConnectConfig.enableAffectiveDialog).toBe(true);
+		expect(llmRequest.liveConnectConfig.proactivity).toBe(proactivity);
+	});
 });

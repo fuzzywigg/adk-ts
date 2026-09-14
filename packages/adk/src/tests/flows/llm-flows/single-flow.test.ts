@@ -33,4 +33,30 @@ describe("SingleFlow", () => {
 		expect(flow.responseProcessors[1]).toBe(outputSchemaResponseProcessor);
 		expect(flow.responseProcessors[2]).toBe(codeExecutionResponseProcessor);
 	});
+
+	it("creates independent processor arrays per instance", () => {
+		const a = new SingleFlow();
+		const b = new SingleFlow();
+
+		expect(a.requestProcessors).not.toBe(b.requestProcessors);
+		expect(a.responseProcessors).not.toBe(b.responseProcessors);
+		expect(a.requestProcessors).toEqual(b.requestProcessors);
+		expect(a.responseProcessors).toEqual(b.responseProcessors);
+	});
+
+	it("keeps request processors ahead of code execution and planning last among shared ones", () => {
+		const flow = new SingleFlow();
+		const requestNames = flow.requestProcessors.map((p) => p.constructor.name);
+		expect(requestNames.indexOf(basicRequestProcessor.constructor.name)).toBe(
+			0,
+		);
+		expect(
+			requestNames.indexOf(codeExecutionRequestProcessor.constructor.name),
+		).toBe(requestNames.length - 1);
+		expect(
+			requestNames.indexOf(nlPlanningRequestProcessor.constructor.name),
+		).toBeLessThan(
+			requestNames.indexOf(codeExecutionRequestProcessor.constructor.name),
+		);
+	});
 });

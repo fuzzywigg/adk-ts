@@ -44,6 +44,26 @@ class OneEventResponseProcessor extends BaseLlmResponseProcessor {
 	}
 }
 
+class MultiEventRequestProcessor extends BaseLlmRequestProcessor {
+	async *runAsync(
+		_invocationContext: InvocationContext,
+		_llmRequest: LlmRequest,
+	): AsyncGenerator<Event, void, unknown> {
+		yield new Event({ author: "a" });
+		yield new Event({ author: "b" });
+	}
+}
+
+class MultiEventResponseProcessor extends BaseLlmResponseProcessor {
+	async *runAsync(
+		_invocationContext: InvocationContext,
+		_llmResponse: LlmResponse,
+	): AsyncGenerator<Event, void, unknown> {
+		yield new Event({ author: "x" });
+		yield new Event({ author: "y" });
+	}
+}
+
 async function collect(
 	gen: AsyncGenerator<Event, void, unknown>,
 ): Promise<Event[]> {
@@ -71,6 +91,14 @@ describe("BaseLlmRequestProcessor", () => {
 		expect(events).toHaveLength(1);
 		expect(events[0].author).toBe("request-processor");
 	});
+
+	it("stub can yield multiple events in order", async () => {
+		const processor = new MultiEventRequestProcessor();
+		const events = await collect(
+			processor.runAsync({} as InvocationContext, {} as LlmRequest),
+		);
+		expect(events.map((e) => e.author)).toEqual(["a", "b"]);
+	});
 });
 
 describe("BaseLlmResponseProcessor", () => {
@@ -89,5 +117,13 @@ describe("BaseLlmResponseProcessor", () => {
 		);
 		expect(events).toHaveLength(1);
 		expect(events[0].author).toBe("response-processor");
+	});
+
+	it("stub can yield multiple events in order", async () => {
+		const processor = new MultiEventResponseProcessor();
+		const events = await collect(
+			processor.runAsync({} as InvocationContext, {} as LlmResponse),
+		);
+		expect(events.map((e) => e.author)).toEqual(["x", "y"]);
 	});
 });

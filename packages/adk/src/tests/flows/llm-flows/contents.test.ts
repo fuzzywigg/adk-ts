@@ -1262,4 +1262,97 @@ describe("contents requestProcessor", () => {
 				.sort(),
 		).toEqual(["c1", "c2"]);
 	});
+
+	it("skips events with missing content while keeping later user text", async () => {
+		const llmRequest = new LlmRequest();
+		await drain(
+			requestProcessor.runAsync(
+				ctx(duckAgent("assistant", "default"), [
+					new Event({ author: "user" }),
+					userEvent("kept"),
+				]),
+				llmRequest,
+			),
+		);
+
+		expect(llmRequest.contents).toHaveLength(1);
+		expect(llmRequest.contents[0].parts?.[0]).toEqual({ text: "kept" });
+	});
+
+	it("does not rewrite foreign replies when current agent name is empty", async () => {
+		const llmRequest = new LlmRequest();
+		await drain(
+			requestProcessor.runAsync(
+				ctx(duckAgent("", "default"), [
+					agentEvent("other-agent", "foreign"),
+					userEvent("go"),
+				]),
+				llmRequest,
+			),
+		);
+
+		expect(llmRequest.contents[0].role).toBe("model");
+		expect(llmRequest.contents[0].parts?.[0]).toEqual({ text: "foreign" });
+		expect(
+			llmRequest.contents.some((c) =>
+				c.parts?.some((p) => p.text === "For context:"),
+			),
+		).toBe(false);
+	});
+
+	it("drops only the rewind marker when rewind targets its own invocationId", async () => {
+		const llmRequest = new LlmRequest();
+		await drain(
+			requestProcessor.runAsync(
+				ctx(duckAgent("assistant", "default"), [
+					userEvent("keep", { invocationId: "inv-a" }),
+					new Event({
+						author: "user",
+						invocationId: "inv-a",
+						content: { role: "user", parts: [{ text: "rewind-marker" }] },
+						actions: new EventActions({
+							rewindBeforeInvocationId: "inv-a",
+						}),
+					}),
+					userEvent("after", { invocationId: "inv-b" }),
+				]),
+				llmRequest,
+			),
+		);
+
+		expect(llmRequest.contents.map((c) => c.parts?.[0]?.text)).toEqual([
+			"keep",
+			"after",
+		]);
+	});
+
+	it("strips adk- client ids on a deep copy without mutating session events", async () => {
+		const original = new Event({
+			author: "assistant",
+			content: {
+				role: "model",
+				parts: [
+					{
+						functionCall: {
+							id: "adk-client-preserve",
+							name: "lookup",
+							args: {},
+						},
+					},
+				],
+			},
+		});
+		const llmRequest = new LlmRequest();
+		await drain(
+			requestProcessor.runAsync(
+				ctx(duckAgent("assistant", "default"), [original, userEvent("next")]),
+				llmRequest,
+			),
+		);
+
+		expect(llmRequest.contents[0].parts?.[0]?.functionCall?.id).toBeUndefined();
+		expect(original.content?.parts?.[0]?.functionCall?.id).toBe(
+			"adk-client-preserve",
+		);
+	});
 });

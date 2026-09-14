@@ -366,4 +366,54 @@ describe("nl-planning responseProcessor more edges", () => {
 		expect(event.branch).toBe("feature");
 		expect(event.invocationId).toBe("inv-99");
 	});
+
+	it("does not append instructions for BuiltInPlanner", async () => {
+		const thinkingConfig = { includeThoughts: true, thinkingBudget: 32 };
+		const llmRequest = new LlmRequest();
+		await drain(
+			requestProcessor.runAsync(
+				makeContext({
+					agent: {
+						name: "planner-agent",
+						planner: new BuiltInPlanner({ thinkingConfig }),
+					},
+				}),
+				llmRequest,
+			),
+		);
+
+		expect((llmRequest.config as any).thinkingConfig).toEqual(thinkingConfig);
+		expect(llmRequest.config?.systemInstruction).toBeUndefined();
+	});
+
+	it("returns early when response content is absent entirely", async () => {
+		const planner = {
+			buildPlanningInstruction: vi.fn(),
+			processPlanningResponse: vi.fn(),
+		};
+		const events = await drain(
+			responseProcessor.runAsync(
+				makeContext({ agent: { name: "planner-agent", planner } }),
+				{ partial: false } as LlmResponse,
+			),
+		);
+		expect(events).toEqual([]);
+		expect(planner.processPlanningResponse).not.toHaveBeenCalled();
+	});
+
+	it("falls back to PlanReActPlanner for string planner values", async () => {
+		const llmRequest = new LlmRequest();
+		await drain(
+			requestProcessor.runAsync(
+				makeContext({
+					agent: { name: "planner-agent", planner: "not-an-object" },
+				}),
+				llmRequest,
+			),
+		);
+
+		expect(String(llmRequest.config?.systemInstruction || "")).toMatch(
+			/PLANNING|plan/i,
+		);
+	});
 });

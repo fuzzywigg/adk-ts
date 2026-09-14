@@ -1,5 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
+import { LlmAgent } from "../../../agents/llm-agent";
 import type { InvocationContext } from "../../../agents/invocation-context";
+import { BaseCodeExecutor } from "../../../code-executors/base-code-executor";
 import {
 	requestProcessor,
 	responseProcessor,
@@ -68,5 +70,117 @@ describe("code-execution processors", () => {
 
 		expect(events).toEqual([]);
 		expect(response.content?.parts?.[0].text).toContain("print(1)");
+	});
+
+	it("requestProcessor no-ops for LlmAgent with unset codeExecutor", async () => {
+		const agent = new LlmAgent({ name: "coder", model: "gpt-4o" });
+		const llmRequest = new LlmRequest({
+			model: "gpt-4o",
+			contents: [{ role: "user", parts: [{ text: "hi" }] }],
+		});
+
+		const events = await collect(
+			requestProcessor.runAsync(
+				{
+					agent,
+					session: { id: "s1", state: {}, events: [] },
+					invocationId: "inv-unset",
+				} as unknown as InvocationContext,
+				llmRequest,
+			),
+		);
+
+		expect(events).toEqual([]);
+		expect(llmRequest.contents).toEqual([
+			{ role: "user", parts: [{ text: "hi" }] },
+		]);
+		expect(llmRequest.config?.tools).toBeUndefined();
+	});
+
+	it("responseProcessor rejects when artifactService is missing after code extract", async () => {
+		class StubExecutor extends BaseCodeExecutor {
+			executeCode = vi.fn(async () => ({
+				stdout: "1\n",
+				stderr: "",
+				outputFiles: [],
+			}));
+		}
+		const executor = new StubExecutor({
+			codeBlockDelimiters: [["```python\n", "\n```"]],
+		});
+		const agent = new LlmAgent({
+			name: "coder",
+			model: "gpt-4o",
+			codeExecutor: executor,
+		});
+
+		await expect(
+			collect(
+				responseProcessor.runAsync(
+					{
+						agent,
+						invocationId: "inv-art",
+						session: { id: "s1", state: {}, events: [] },
+					} as unknown as InvocationContext,
+					{
+						partial: false,
+						content: {
+							role: "model",
+							parts: [{ text: "```python\nprint(1)\n```" }],
+						},
+					} as any,
+				),
+			),
+		).rejects.toThrow(/Artifact service is not initialized/);
+	});
+
+	it("responseProcessor passes undefined executionId for non-stateful executors", async () => {
+		class StubExecutor extends BaseCodeExecutor {
+			executeCode = vi.fn(async () => ({
+				stdout: "ok",
+				stderr: "",
+				outputFiles: [],
+			}));
+		}
+		const executor = new StubExecutor({
+			stateful: false,
+			codeBlockDelimiters: [["```python\n", "\n```"]],
+		});
+		const agent = new LlmAgent({
+			name: "coder",
+			model: "gpt-4o",
+			codeExecutor: executor,
+		});
+
+		await collect(
+			responseProcessor.runAsync(
+				{
+					agent,
+					invocationId: "inv-ns",
+					appName: "app",
+					userId: "u",
+					session: {
+						id: "sess-1",
+						appName: "app",
+						userId: "u",
+						state: {},
+						events: [],
+					},
+					artifactService: { saveArtifact: vi.fn(async () => 1) },
+				} as unknown as InvocationContext,
+				{
+					partial: false,
+					content: {
+						role: "model",
+						parts: [{ text: "```python\nprint(1)\n```" }],
+					},
+				} as any,
+			),
+		);
+
+		expect(executor.executeCode).toHaveBeenCalledWith(
+			expect.anything(),
+			expect.objectContaining({ executionId: undefined }),
+		);
 	});
 });

@@ -178,4 +178,112 @@ describe("instructions requestProcessor", () => {
 
 		expect(llmRequest.getSystemInstructionText()).toBeUndefined();
 	});
+
+	it("combines agent instruction with outputSchema guidance", async () => {
+		const schema = z.object({ answer: z.string() });
+		const agent = {
+			name: "combo",
+			canonicalModel: "gpt-4o",
+			instruction: "Stay concise",
+			rootAgent: { name: "root" },
+			outputSchema: schema,
+			canonicalInstruction: async () =>
+				["Stay concise", false] as [string, boolean],
+		};
+
+		const llmRequest = new LlmRequest();
+		await drain(
+			requestProcessor.runAsync(
+				{ agent } as unknown as InvocationContext,
+				llmRequest,
+			),
+		);
+
+		const text = llmRequest.getSystemInstructionText() ?? "";
+		expect(injectSessionState).toHaveBeenCalledOnce();
+		expect(text).toContain("injected:Stay concise");
+		expect(text).toContain("application/json");
+		expect(text).toContain("IMPORTANT: After any tool calls");
+		expect(text).toContain("answer");
+	});
+
+	it("skips global instruction when root lacks globalInstruction", async () => {
+		const rootAgent = {
+			canonicalModel: "gpt-4o",
+			canonicalGlobalInstruction: vi.fn(async () => ["should not run", false]),
+		};
+		const agent = {
+			name: "child",
+			canonicalModel: "gpt-4o",
+			instruction: "only child",
+			rootAgent,
+			canonicalInstruction: async () =>
+				["only child", false] as [string, boolean],
+		};
+
+		const llmRequest = new LlmRequest();
+		await drain(
+			requestProcessor.runAsync(
+				{ agent } as unknown as InvocationContext,
+				llmRequest,
+			),
+		);
+
+		expect(rootAgent.canonicalGlobalInstruction).not.toHaveBeenCalled();
+		expect(llmRequest.getSystemInstructionText()).toContain(
+			"injected:only child",
+		);
+		expect(llmRequest.getSystemInstructionText()).not.toContain(
+			"should not run",
+		);
+	});
+
+	it("skips global path when root is not LlmAgent-shaped", async () => {
+		const agent = {
+			name: "child",
+			canonicalModel: "gpt-4o",
+			instruction: "agent only",
+			rootAgent: { name: "plain-root", globalInstruction: "ignored global" },
+			canonicalInstruction: async () =>
+				["agent only", false] as [string, boolean],
+		};
+
+		const llmRequest = new LlmRequest();
+		await drain(
+			requestProcessor.runAsync(
+				{ agent } as unknown as InvocationContext,
+				llmRequest,
+			),
+		);
+
+		const text = llmRequest.getSystemInstructionText() ?? "";
+		expect(text).toContain("injected:agent only");
+		expect(text).not.toContain("ignored global");
+	});
+
+	it("applies schema-only guidance when instruction is falsy", async () => {
+		const schema = z.object({ value: z.number() });
+		const agent = {
+			name: "schema-only",
+			canonicalModel: "gpt-4o",
+			instruction: "",
+			rootAgent: { name: "root" },
+			outputSchema: schema,
+			canonicalInstruction: vi.fn(async () => ["", false]),
+		};
+
+		const llmRequest = new LlmRequest();
+		await drain(
+			requestProcessor.runAsync(
+				{ agent } as unknown as InvocationContext,
+				llmRequest,
+			),
+		);
+
+		expect(agent.canonicalInstruction).not.toHaveBeenCalled();
+		const text = llmRequest.getSystemInstructionText() ?? "";
+		expect(text).toContain("application/json");
+		expect(text).toContain("value");
+		expect(text).not.toContain("injected:");
+	});
 });

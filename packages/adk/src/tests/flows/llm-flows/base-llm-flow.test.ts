@@ -1088,3 +1088,212 @@ describe("BaseLlmFlow._postprocessAsync function-call path", () => {
 		expect(events[2]).toBe(functionResponse);
 	});
 });
+
+describe("BaseLlmFlow leftover residual edges", () => {
+	it("runAsync uses only the last event of a multi-event step to decide looping", async () => {
+		const flow = new TestLlmFlow();
+		const first = new Event({ author: "agent", id: "first" });
+		vi.spyOn(first, "isFinalResponse").mockReturnValue(true);
+		const last = new Event({ author: "agent", id: "last" });
+		vi.spyOn(last, "isFinalResponse").mockReturnValue(false);
+		const final = new Event({ author: "agent", id: "final" });
+		vi.spyOn(final, "isFinalResponse").mockReturnValue(true);
+
+		flow._runOneStepAsync
+			.mockImplementationOnce(async function* () {
+				yield first;
+				yield last;
+			})
+			.mockImplementationOnce(async function* () {
+				yield final;
+			});
+
+		const events = await collect(flow.runAsync(mockContext));
+		expect(flow._runOneStepAsync).toHaveBeenCalledTimes(2);
+		expect(events.map((e) => e.id)).toEqual(["first", "last", "final"]);
+	});
+
+	it("_preprocessAsync still processLlmRequests a single named tool", async () => {
+		const flow = new InspectableFlow();
+		flow.requestProcessors = [];
+		const process = vi.fn(async () => undefined);
+		const agent = {
+			name: "one-tool",
+			canonicalTools: async () => [
+				{
+					name: "only",
+					description: "solo",
+					isLongRunning: false,
+					processLlmRequest: process,
+				},
+			],
+		};
+
+		await collect(flow._preprocessAsync(makeCtx({ agent }), new LlmRequest()));
+		expect(process).toHaveBeenCalledTimes(1);
+	});
+
+	it("_callLlmAsync drops tools whose functionDeclarations are all duplicates", async () => {
+		const flow = new InspectableFlow();
+		const llmResponse = { content: { parts: [{ text: "ok" }] } };
+		const agent = {
+			name: "dedup-agent",
+			canonicalModel: {
+				model: "fake-model",
+				generateContentAsync: vi.fn(async function* () {
+					yield llmResponse;
+				}),
+			},
+		};
+		const llmRequest = new LlmRequest();
+		llmRequest.config = {
+			tools: [
+				{
+					functionDeclarations: [{ name: "dup" }, { name: "dup" }],
+				},
+				{
+					functionDeclarations: [{ name: "dup" }],
+				},
+				{
+					functionDeclarations: [{ name: undefined }, { name: "kept" }],
+				},
+			],
+		} as any;
+
+		await collect(
+			flow._callLlmAsync(
+				makeCtx({ agent }),
+				llmRequest,
+				new Event({ author: "dedup-agent" }),
+			),
+		);
+
+		expect(llmRequest.config?.labels?.adk_agent_name).toBe("dedup-agent");
+		const tools = llmRequest.config?.tools as any[];
+		expect(tools).toHaveLength(2);
+		expect(tools[0].functionDeclarations).toEqual([{ name: "dup" }]);
+		expect(tools[1].functionDeclarations.map((fd: any) => fd.name)).toEqual([
+			undefined,
+			"kept",
+		]);
+	});
+
+	it("_callLlmAsync initializes undefined config before labeling", async () => {
+		const flow = new InspectableFlow();
+		const agent = {
+			name: "label-agent",
+			canonicalModel: {
+				model: "fake-model",
+				generateContentAsync: vi.fn(async function* () {
+					yield { content: { parts: [{ text: "x" }] } };
+				}),
+			},
+		};
+		const llmRequest = new LlmRequest();
+		llmRequest.config = undefined as any;
+
+		await collect(
+			flow._callLlmAsync(
+				makeCtx({ agent }),
+				llmRequest,
+				new Event({ author: "label-agent" }),
+			),
+		);
+
+		expect(llmRequest.config).toBeDefined();
+		expect(llmRequest.config?.labels?.adk_agent_name).toBe("label-agent");
+	});
+
+	it("_postprocessLive finalizes on errorCode-only and interrupted-only", async () => {
+		const flow = new InspectableFlow();
+		flow.responseProcessors = [];
+		handleFunctionCallsAsyncMock.mockResolvedValue(null);
+
+		const errored = await collect(
+			flow._postprocessLive(
+				mockContext,
+				new LlmRequest(),
+				{ errorCode: "RESOURCE_EXHAUSTED" } as any,
+				new Event({ id: "err", author: "agent", invocationId: "inv" }),
+			),
+		);
+		expect(errored).toHaveLength(1);
+		expect(errored[0].author).toBe("agent");
+		expect(errored[0].content).toBeUndefined();
+
+		const interrupted = await collect(
+			flow._postprocessLive(
+				mockContext,
+				new LlmRequest(),
+				{ interrupted: true } as any,
+				new Event({ id: "int", author: "agent", invocationId: "inv" }),
+			),
+		);
+		expect(interrupted).toHaveLength(1);
+		expect(interrupted[0].author).toBe("agent");
+		expect(interrupted[0].content).toBeUndefined();
+	});
+
+	it("_postprocessLive yields response-processor events before finalize", async () => {
+		const flow = new InspectableFlow();
+		const processorEvent = new Event({ author: "live-rp", id: "rp" });
+		flow.responseProcessors = [
+			{
+				runAsync: async function* () {
+					yield processorEvent;
+				},
+			},
+		];
+
+		const events = await collect(
+			flow._postprocessLive(
+				mockContext,
+				new LlmRequest(),
+				{
+					turnComplete: true,
+					content: { role: "model", parts: [{ text: "done" }] },
+				} as any,
+				new Event({ id: "live", author: "agent", invocationId: "inv" }),
+			),
+		);
+
+		expect(events[0]).toBe(processorEvent);
+		expect(events[1].id).toBe("live");
+		expect(events[1].content?.parts?.[0]).toEqual({ text: "done" });
+	});
+
+	it("_finalizeModelResponseEvent skips populate when content is absent", () => {
+		const flow = new InspectableFlow();
+		const finalized = flow._finalizeModelResponseEvent(
+			new LlmRequest(),
+			{ finishReason: "STOP" } as LlmResponse,
+			new Event({ id: "bare", author: "agent" }),
+		);
+
+		expect(populateClientFunctionCallIdMock).not.toHaveBeenCalled();
+		expect(getLongRunningFunctionCallsMock).not.toHaveBeenCalled();
+		expect(finalized.content).toBeUndefined();
+		expect(finalized.author).toBe("agent");
+		expect(finalized.id).toBe("bare");
+	});
+
+	it("_postprocessAsync finalizes on errorCode without content", async () => {
+		const flow = new InspectableFlow();
+		flow.responseProcessors = [];
+
+		const events = await collect(
+			flow._postprocessAsync(
+				mockContext,
+				new LlmRequest(),
+				{ errorCode: "TIMEOUT" } as LlmResponse,
+				new Event({ id: "async-err", author: "agent" }),
+			),
+		);
+
+		expect(events).toHaveLength(1);
+		expect(events[0].author).toBe("agent");
+		expect(events[0].content).toBeUndefined();
+		// Async path requires functionCalls.length > 0 before invoking the handler.
+		expect(handleFunctionCallsAsyncMock).not.toHaveBeenCalled();
+	});
+});

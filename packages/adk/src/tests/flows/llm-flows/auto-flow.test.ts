@@ -35,4 +35,20 @@ describe("AutoFlow", () => {
 			agentTransferRequestProcessor,
 		);
 	});
+
+	it("preserves SingleFlow request processor prefix order", () => {
+		const single = new SingleFlow();
+		const auto = new AutoFlow();
+
+		expect(
+			auto.requestProcessors.slice(0, single.requestProcessors.length),
+		).toEqual(single.requestProcessors);
+	});
+
+	it("shares the same response processor list shape as SingleFlow", () => {
+		const single = new SingleFlow();
+		const auto = new AutoFlow();
+
+		expect(auto.responseProcessors).toEqual(single.responseProcessors);
+	});
 });
