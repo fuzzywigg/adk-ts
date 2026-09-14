@@ -90,4 +90,65 @@ describe("UserInteractionTool", () => {
 			error: "dialog cancelled",
 		});
 	});
+
+	it("stringifies non-Error throws from promptUser", async () => {
+		const tool = new UserInteractionTool();
+		const context = {
+			actions: {
+				promptUser: vi.fn().mockRejectedValue("cancelled-string"),
+			},
+		} as unknown as ToolContext;
+
+		await expect(tool.runAsync({ prompt: "Name?" }, context)).resolves.toEqual({
+			success: false,
+			error: "cancelled-string",
+		});
+	});
+
+	it("returns unsupported when actions is missing entirely", async () => {
+		const tool = new UserInteractionTool();
+		const context = {} as ToolContext;
+
+		await expect(tool.runAsync({ prompt: "Hello?" }, context)).resolves.toEqual(
+			{
+				success: false,
+				error: "User interaction is not supported in the current environment",
+			},
+		);
+	});
+
+	it("forwards defaultValue without options when options is omitted", async () => {
+		const tool = new UserInteractionTool();
+		const promptUser = vi.fn().mockResolvedValue("Guest");
+		const context = {
+			actions: { promptUser, skipSummarization: vi.fn() },
+		} as unknown as ToolContext;
+
+		const result = await tool.runAsync(
+			{ prompt: "Name?", defaultValue: "Guest" },
+			context,
+		);
+
+		expect(promptUser).toHaveBeenCalledWith({
+			prompt: "Name?",
+			defaultValue: "Guest",
+			options: undefined,
+		});
+		expect(result).toEqual({ success: true, userInput: "Guest" });
+	});
+
+	it("declares options as array of strings and defaultValue as optional", () => {
+		const tool = new UserInteractionTool();
+		const declaration = tool.getDeclaration();
+		expect(declaration.parameters?.properties?.options).toEqual(
+			expect.objectContaining({
+				type: expect.anything(),
+				items: expect.objectContaining({ type: expect.anything() }),
+			}),
+		);
+		expect(declaration.parameters?.properties?.defaultValue).toBeTruthy();
+		expect(declaration.parameters?.properties?.prompt?.description).toMatch(
+			/prompt message/i,
+		);
+	});
 });

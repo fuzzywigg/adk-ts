@@ -40,4 +40,42 @@ describe("GetUserChoiceTool", () => {
 		expect(result).toBeNull();
 		expect(context.actions.skipSummarization).toBe(true);
 	});
+
+	it("overwrites a prior skipSummarization false value", async () => {
+		const tool = new GetUserChoiceTool();
+		const context = makeContext();
+		context.actions.skipSummarization = false;
+
+		await tool.runAsync({ options: ["a", "b"] }, context);
+
+		expect(context.actions.skipSummarization).toBe(true);
+	});
+
+	it("accepts empty options arrays and still returns null", async () => {
+		const tool = new GetUserChoiceTool();
+		const context = makeContext();
+		await expect(tool.runAsync({ options: [] }, context)).resolves.toBeNull();
+		expect(context.actions.skipSummarization).toBe(true);
+	});
+
+	it("declares question as optional string and options items as strings", () => {
+		const tool = new GetUserChoiceTool();
+		const declaration = tool.getDeclaration();
+		expect(declaration.parameters?.properties?.question?.type).toBe(
+			Type.STRING,
+		);
+		expect(declaration.parameters?.properties?.options?.items).toEqual({
+			type: Type.STRING,
+		});
+		expect(tool.name).toBe("get_user_choice");
+		expect(tool.description).toMatch(/options/i);
+	});
+
+	it("does not set transferToAgent or escalate as side effects", async () => {
+		const tool = new GetUserChoiceTool();
+		const context = makeContext();
+		await tool.runAsync({ options: ["x"], question: "Q?" }, context);
+		expect(context.actions.transferToAgent).toBeUndefined();
+		expect(context.actions.escalate).toBeUndefined();
+	});
 });

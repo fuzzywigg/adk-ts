@@ -47,4 +47,22 @@ describe("GoogleSearch", () => {
 		expect(result.results[1].snippet).toContain("adk typescript");
 		expect(result.results[0].link).toMatch(/^https:\/\//);
 	});
+
+	it("keeps fixed mock links regardless of query content", async () => {
+		const tool = new GoogleSearch();
+		const result = await tool.runAsync(
+			{ query: "special & chars?", num_results: 1 },
+			makeContext(),
+		);
+		expect(result.results.map((r: { link: string }) => r.link)).toEqual([
+			"https://example.com/1",
+			"https://example.com/2",
+		]);
+		expect(result.results[0].title).toContain("special & chars?");
+	});
+
+	it("exposes description matching declaration description", () => {
+		const tool = new GoogleSearch();
+		expect(tool.description).toBe(tool.getDeclaration().description);
+	});
 });

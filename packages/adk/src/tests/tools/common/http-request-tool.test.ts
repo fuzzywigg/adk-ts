@@ -244,4 +244,180 @@ describe("HttpRequestTool", () => {
 		expect(fetchMock.mock.calls[0][1].signal).toBeDefined();
 		timeoutSpy.mockRestore();
 	});
+
+	it("defaults timeout to 10000 when omitted", async () => {
+		const tool = new HttpRequestTool();
+		const timeoutSpy = vi
+			.spyOn(AbortSignal, "timeout")
+			.mockReturnValue(AbortSignal.abort() as AbortSignal);
+		globalThis.fetch = vi.fn().mockResolvedValue({
+			status: 200,
+			headers: new Headers(),
+			text: async () => "",
+		}) as typeof fetch;
+
+		await tool.runAsync({ url: "https://example.com/" }, makeContext());
+
+		expect(timeoutSpy).toHaveBeenCalledWith(10000);
+		timeoutSpy.mockRestore();
+	});
+
+	it("appends params onto a URL that already has a query string", async () => {
+		const tool = new HttpRequestTool();
+		const fetchMock = vi.fn().mockResolvedValue({
+			status: 200,
+			headers: new Headers(),
+			text: async () => "",
+		});
+		globalThis.fetch = fetchMock as typeof fetch;
+
+		await tool.runAsync(
+			{
+				url: "https://example.com/search?existing=1",
+				params: { q: "adk", page: "2" },
+			},
+			makeContext(),
+		);
+
+		expect(fetchMock).toHaveBeenCalledWith(
+			"https://example.com/search?existing=1&q=adk&page=2",
+			expect.any(Object),
+		);
+	});
+
+	it.each([
+		["DELETE"],
+		["PATCH"],
+		["HEAD"],
+		["OPTIONS"],
+	] as const)("executes live %s requests", async (method) => {
+		const tool = new HttpRequestTool();
+		const fetchMock = vi.fn().mockResolvedValue({
+			status: method === "HEAD" ? 204 : 200,
+			headers: new Headers({ "x-method": method }),
+			text: async () => (method === "HEAD" ? "" : `${method}-body`),
+		});
+		globalThis.fetch = fetchMock as typeof fetch;
+
+		const result = await tool.runAsync(
+			{ url: "https://example.com/resource", method },
+			makeContext(),
+		);
+
+		expect(fetchMock).toHaveBeenCalledWith(
+			"https://example.com/resource",
+			expect.objectContaining({ method }),
+		);
+		expect(result.statusCode).toBe(method === "HEAD" ? 204 : 200);
+		expect(result.headers["x-method"]).toBe(method);
+	});
+
+	it("surfaces abort/timeout failures as statusCode 0 with error message", async () => {
+		const tool = new HttpRequestTool();
+		globalThis.fetch = vi
+			.fn()
+			.mockRejectedValue(
+				new DOMException("The operation was aborted.", "AbortError"),
+			) as typeof fetch;
+
+		const result = await tool.runAsync(
+			{ url: "https://example.com/timeout", timeout: 1 },
+			makeContext(),
+		);
+
+		expect(result.statusCode).toBe(0);
+		expect(result.body).toBe("");
+		expect(result.headers).toEqual({});
+		expect(result.error).toMatch(/abort/i);
+	});
+
+	it("does not set Content-Type when body is omitted", async () => {
+		const tool = new HttpRequestTool();
+		const fetchMock = vi.fn().mockResolvedValue({
+			status: 200,
+			headers: new Headers(),
+			text: async () => "",
+		});
+		globalThis.fetch = fetchMock as typeof fetch;
+
+		await tool.runAsync(
+			{ url: "https://example.com/getish", method: "POST" },
+			makeContext(),
+		);
+
+		expect(fetchMock).toHaveBeenCalledWith(
+			"https://example.com/getish",
+			expect.objectContaining({
+				method: "POST",
+				headers: {},
+				body: undefined,
+			}),
+		);
+	});
+
+	it("declares timeout default and required url on the schema", () => {
+		const tool = new HttpRequestTool();
+		const declaration = tool.getDeclaration();
+		expect(declaration.description).toContain("HTTP requests");
+		expect(declaration.parameters?.properties?.timeout).toEqual(
+			expect.objectContaining({
+				default: 10000,
+			}),
+		);
+		expect(declaration.parameters?.properties?.params?.type).toBeTruthy();
+		expect(declaration.parameters?.properties?.headers?.type).toBeTruthy();
+	});
+
+	it("collects multiple response headers into a plain object", async () => {
+		const tool = new HttpRequestTool();
+		globalThis.fetch = vi.fn().mockResolvedValue({
+			status: 201,
+			headers: new Headers({
+				"content-type": "application/json",
+				"x-request-id": "abc",
+				"cache-control": "no-store",
+			}),
+			text: async () => '{"ok":true}',
+		}) as typeof fetch;
+
+		const result = await tool.runAsync(
+			{ url: "https://example.com/create", method: "POST", body: "{}" },
+			makeContext(),
+		);
+
+		expect(result.statusCode).toBe(201);
+		expect(result.body).toBe('{"ok":true}');
+		expect(result.headers).toMatchObject({
+			"content-type": "application/json",
+			"x-request-id": "abc",
+			"cache-control": "no-store",
+		});
+	});
+
+	it("treats JSON array bodies as valid JSON for Content-Type", async () => {
+		const tool = new HttpRequestTool();
+		const fetchMock = vi.fn().mockResolvedValue({
+			status: 200,
+			headers: new Headers(),
+			text: async () => "[]",
+		});
+		globalThis.fetch = fetchMock as typeof fetch;
+
+		await tool.runAsync(
+			{
+				url: "https://example.com/arr",
+				method: "POST",
+				body: "[1,2,3]",
+			},
+			makeContext(),
+		);
+
+		expect(fetchMock).toHaveBeenCalledWith(
+			"https://example.com/arr",
+			expect.objectContaining({
+				headers: { "Content-Type": "application/json" },
+				body: "[1,2,3]",
+			}),
+		);
+	});
 });

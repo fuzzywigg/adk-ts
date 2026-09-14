@@ -343,4 +343,394 @@ describe("AgentTool", () => {
 			"Agent tool execution failed: boom",
 		);
 	});
+
+	it("uses explicit description over agent.description", () => {
+		const agent = makeStubAgent({ description: "Agent description" });
+		const tool = new AgentTool({
+			name: "override_tool",
+			description: "Explicit tool description",
+			agent,
+		});
+
+		expect(tool.description).toBe("Explicit tool description");
+	});
+
+	it("wires shouldRetryOnFailure and maxRetryAttempts from config", () => {
+		const agent = makeStubAgent();
+		const tool = new AgentTool({
+			name: "retry_tool",
+			agent,
+			shouldRetryOnFailure: true,
+			maxRetryAttempts: 7,
+		});
+
+		expect(tool.shouldRetryOnFailure).toBe(true);
+		expect(tool.maxRetryAttempts).toBe(7);
+	});
+
+	it("defaults shouldRetryOnFailure to false and maxRetryAttempts to 3", () => {
+		const agent = makeStubAgent();
+		const tool = new AgentTool({ name: "defaults", agent });
+
+		expect(tool.shouldRetryOnFailure).toBe(false);
+		expect(tool.maxRetryAttempts).toBe(3);
+		expect((tool as any).skipSummarization).toBe(false);
+	});
+
+	it("stringifies undefined custom-schema input when params are empty", async () => {
+		const runAsync = vi.fn(async function* () {
+			yield new Event({
+				author: "stub_agent",
+				content: { role: "model", parts: [{ text: "ok" }] },
+			});
+		});
+		const agent = makeStubAgent({ runAsync });
+		const tool = new AgentTool({ name: "empty_params", agent });
+		const { context } = makeToolContext(agent);
+
+		await tool.runAsync({}, context);
+
+		const childCtx = runAsync.mock.calls[0][0] as {
+			userContent?: { parts?: Array<{ text?: string }> };
+		};
+		expect(childCtx.userContent?.parts?.[0]?.text).toBe("undefined");
+	});
+
+	it("prefers params.input over other custom schema values", async () => {
+		const runAsync = vi.fn(async function* () {
+			yield new Event({
+				author: "stub_agent",
+				content: { role: "model", parts: [{ text: "ok" }] },
+			});
+		});
+		const agent = makeStubAgent({ runAsync });
+		const tool = new AgentTool({ name: "prefer_input", agent });
+		const { context } = makeToolContext(agent);
+
+		await tool.runAsync({ topic: "ignored", input: "chosen" }, context);
+
+		const childCtx = runAsync.mock.calls[0][0] as {
+			userContent?: { parts?: Array<{ text?: string }> };
+		};
+		expect(childCtx.userContent?.parts?.[0]?.text).toBe("chosen");
+	});
+
+	it("returns empty string when last matching event has only non-text parts", async () => {
+		const agent = makeStubAgent({
+			runAsync: async function* () {
+				yield new Event({
+					author: "stub_agent",
+					content: {
+						role: "model",
+						parts: [{ functionCall: { name: "x", args: {} } } as any],
+					},
+				});
+			},
+		});
+		const tool = new AgentTool({ name: "non_text", agent });
+		const { context } = makeToolContext(agent);
+
+		await expect(tool.runAsync({ input: "x" }, context)).resolves.toBe("");
+	});
+
+	it("filters nullish text parts and joins remaining text with newlines", async () => {
+		const agent = makeStubAgent({
+			runAsync: async function* () {
+				yield new Event({
+					author: "stub_agent",
+					content: {
+						role: "model",
+						parts: [
+							{ text: "keep" },
+							{ text: null as any },
+							{ text: undefined as any },
+							{ text: "also" },
+						],
+					},
+				});
+			},
+		});
+		const tool = new AgentTool({ name: "filter_text", agent });
+		const { context } = makeToolContext(agent);
+
+		await expect(tool.runAsync({ input: "x" }, context)).resolves.toBe(
+			"keep\nalso",
+		);
+	});
+
+	it("keeps invalid JSON merged text as a string", async () => {
+		const agent = makeStubAgent({
+			runAsync: async function* () {
+				yield new Event({
+					author: "stub_agent",
+					content: {
+						role: "model",
+						parts: [{ text: "{not-json" }, { text: " more" }],
+					},
+				});
+			},
+		});
+		const tool = new AgentTool({ name: "bad_json", agent });
+		const { context } = makeToolContext(agent);
+
+		await expect(tool.runAsync({ input: "x" }, context)).resolves.toBe(
+			"{not-json\n more",
+		);
+	});
+
+	it("parses JSON array text results", async () => {
+		const agent = makeStubAgent({
+			runAsync: async function* () {
+				yield new Event({
+					author: "stub_agent",
+					content: {
+						role: "model",
+						parts: [{ text: '[1,{"a":2}]' }],
+					},
+				});
+			},
+		});
+		const tool = new AgentTool({
+			name: "array_json",
+			agent,
+			outputKey: "arr",
+		});
+		const { context } = makeToolContext(agent);
+
+		const result = await tool.runAsync({ input: "go" }, context);
+		expect(result).toEqual([1, { a: 2 }]);
+		expect(context.state.arr).toEqual([1, { a: 2 }]);
+	});
+
+	it("skips outputKey storage when context.state is missing", async () => {
+		const agent = makeStubAgent({
+			runAsync: async function* () {
+				yield new Event({
+					author: "stub_agent",
+					content: { role: "model", parts: [{ text: "stored?" }] },
+				});
+			},
+		});
+		const tool = new AgentTool({
+			name: "no_state",
+			agent,
+			outputKey: "out",
+		});
+		const { context } = makeToolContext(agent);
+		Object.defineProperty(context, "state", {
+			get: () => undefined,
+			configurable: true,
+		});
+
+		await expect(tool.runAsync({ input: "x" }, context)).resolves.toBe(
+			"stored?",
+		);
+	});
+
+	it("does not store when outputKey is unset even if state exists", async () => {
+		const agent = makeStubAgent({
+			runAsync: async function* () {
+				yield new Event({
+					author: "stub_agent",
+					content: { role: "model", parts: [{ text: "plain" }] },
+				});
+			},
+		});
+		const tool = new AgentTool({ name: "no_key", agent });
+		const { context } = makeToolContext(agent);
+		const beforeKeys = Object.keys(context.state);
+
+		await tool.runAsync({ input: "x" }, context);
+
+		expect(Object.keys(context.state)).toEqual(beforeKeys);
+	});
+
+	it("wraps appendEvent rejections as Agent tool execution failed", async () => {
+		const agent = makeStubAgent({
+			runAsync: async function* () {
+				yield new Event({
+					author: "stub_agent",
+					content: { role: "model", parts: [{ text: "x" }] },
+				});
+			},
+		});
+		const tool = new AgentTool({ name: "append_fail", agent });
+		const { context, appendEvent } = makeToolContext(agent);
+		appendEvent.mockRejectedValue(new Error("append boom"));
+
+		await expect(tool.runAsync({ input: "go" }, context)).rejects.toThrow(
+			"Agent tool execution failed: append boom",
+		);
+	});
+
+	it("uses the last author-matching event when multiple are yielded", async () => {
+		const agent = makeStubAgent({
+			name: "multi",
+			runAsync: async function* () {
+				yield new Event({
+					author: "multi",
+					content: { role: "model", parts: [{ text: "first" }] },
+				});
+				yield new Event({
+					author: "other",
+					content: { role: "model", parts: [{ text: "ignored" }] },
+				});
+				yield new Event({
+					author: "multi",
+					content: { role: "model", parts: [{ text: "last" }] },
+				});
+			},
+		});
+		const tool = new AgentTool({ name: "multi_tool", agent });
+		const { context } = makeToolContext(agent);
+
+		await expect(tool.runAsync({ input: "x" }, context)).resolves.toBe("last");
+	});
+
+	it("returns empty string when agent yields no events", async () => {
+		const agent = makeStubAgent({
+			runAsync: async function* () {
+				// no yields
+			},
+		});
+		const tool = new AgentTool({ name: "silent", agent });
+		const { context, appendEvent } = makeToolContext(agent);
+
+		await expect(tool.runAsync({ input: "x" }, context)).resolves.toBe("");
+		expect(appendEvent).not.toHaveBeenCalled();
+	});
+
+	it("returns empty string when matching event has no content", async () => {
+		const agent = makeStubAgent({
+			runAsync: async function* () {
+				yield new Event({
+					author: "stub_agent",
+				});
+			},
+		});
+		const tool = new AgentTool({ name: "no_content", agent });
+		const { context } = makeToolContext(agent);
+
+		await expect(tool.runAsync({ input: "x" }, context)).resolves.toBe("");
+	});
+
+	it("builds nested branch from parent branch and agent name", async () => {
+		const runAsync = vi.fn(async function* () {
+			yield new Event({
+				author: "child",
+				content: { role: "model", parts: [{ text: "ok" }] },
+			});
+		});
+		const agent = makeStubAgent({ name: "child", runAsync });
+		const tool = new AgentTool({ name: "child_tool", agent });
+		const { context } = makeToolContext(agent);
+
+		await tool.runAsync({ input: "x" }, context);
+
+		expect(runAsync.mock.calls[0][0].branch).toBe("root.child");
+	});
+
+	it("propagates parent services into the child invocation context", async () => {
+		const runAsync = vi.fn(async function* () {
+			yield new Event({
+				author: "stub_agent",
+				content: { role: "model", parts: [{ text: "ok" }] },
+			});
+		});
+		const agent = makeStubAgent({ runAsync });
+		const tool = new AgentTool({ name: "svc_tool", agent });
+		const artifactService = { listArtifactKeys: vi.fn() };
+		const memoryService = { searchMemory: vi.fn() };
+		const appendEvent = vi.fn().mockResolvedValue(undefined);
+		const sessionService = { appendEvent } as unknown as BaseSessionService;
+		const pluginManager = new PluginManager();
+		const session = makeSession();
+		const runConfig = { streamingMode: "none" } as any;
+		const invocationContext = new InvocationContext({
+			sessionService,
+			pluginManager,
+			agent,
+			session,
+			artifactService: artifactService as any,
+			memoryService: memoryService as any,
+			runConfig,
+			branch: "parent",
+		});
+		const context = new ToolContext(invocationContext);
+
+		await tool.runAsync({ input: "payload" }, context);
+
+		const child = runAsync.mock.calls[0][0] as InvocationContext;
+		expect(child.session).toBe(session);
+		expect(child.artifactService).toBe(artifactService);
+		expect(child.sessionService).toBe(sessionService);
+		expect(child.memoryService).toBe(memoryService);
+		expect(child.pluginManager).toBe(pluginManager);
+		expect(child.runConfig).toBe(runConfig);
+		expect(child.agent).toBe(agent);
+		expect(child.invocationId).not.toBe(invocationContext.invocationId);
+		expect(child.userContent).toEqual({
+			role: "user",
+			parts: [{ text: "payload" }],
+		});
+	});
+
+	it("stringifies numeric custom-schema values for userContent", async () => {
+		const runAsync = vi.fn(async function* () {
+			yield new Event({
+				author: "stub_agent",
+				content: { role: "model", parts: [{ text: "ok" }] },
+			});
+		});
+		const agent = makeStubAgent({ runAsync });
+		const tool = new AgentTool({ name: "num_tool", agent });
+		const { context } = makeToolContext(agent);
+
+		await tool.runAsync({ n: 42 }, context);
+
+		const childCtx = runAsync.mock.calls[0][0] as {
+			userContent?: { parts?: Array<{ text?: string }> };
+		};
+		expect(childCtx.userContent?.parts?.[0]?.text).toBe("42");
+	});
+
+	it("exposes outputKey on the tool instance when configured", () => {
+		const agent = makeStubAgent();
+		const tool = new AgentTool({
+			name: "keyed",
+			agent,
+			outputKey: "result_key",
+		});
+		expect(tool.outputKey).toBe("result_key");
+	});
+
+	it("leaves skipSummarization stored without changing runAsync result", async () => {
+		const agent = makeStubAgent({
+			runAsync: async function* () {
+				yield new Event({
+					author: "stub_agent",
+					content: { role: "model", parts: [{ text: "same" }] },
+				});
+			},
+		});
+		const withSkip = new AgentTool({
+			name: "skip_on",
+			agent,
+			skipSummarization: true,
+		});
+		const withoutSkip = new AgentTool({
+			name: "skip_off",
+			agent,
+			skipSummarization: false,
+		});
+		const { context: ctx1 } = makeToolContext(agent);
+		const { context: ctx2 } = makeToolContext(agent);
+
+		await expect(withSkip.runAsync({ input: "x" }, ctx1)).resolves.toBe("same");
+		await expect(withoutSkip.runAsync({ input: "x" }, ctx2)).resolves.toBe(
+			"same",
+		);
+		expect((withSkip as any).skipSummarization).toBe(true);
+		expect((withoutSkip as any).skipSummarization).toBe(false);
+	});
 });

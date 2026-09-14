@@ -35,4 +35,34 @@ describe("GoogleSearch", () => {
 		expect(result.results[0].link).toMatch(/^https:\/\//);
 		expect(result.results[1].snippet).toContain("adk");
 	});
+
+	it("ignores num_results for the mock implementation length", async () => {
+		const tool = new GoogleSearch();
+		const result = await tool.runAsync(
+			{ query: "typescript", num_results: 10 },
+			makeContext(),
+		);
+		expect(result.results).toHaveLength(2);
+	});
+
+	it("returns two results when num_results is omitted", async () => {
+		const tool = new GoogleSearch();
+		const result = await tool.runAsync({ query: "agents" }, makeContext());
+		expect(result.results).toHaveLength(2);
+		expect(result.results[0]).toEqual(
+			expect.objectContaining({
+				title: expect.stringContaining("agents"),
+				link: "https://example.com/1",
+				snippet: expect.stringContaining("agents"),
+			}),
+		);
+		expect(result.results[1].link).toBe("https://example.com/2");
+	});
+
+	it("declares num_results default of 5", () => {
+		const tool = new GoogleSearch();
+		expect(tool.getDeclaration().parameters?.properties?.num_results).toEqual(
+			expect.objectContaining({ default: 5 }),
+		);
+	});
 });
