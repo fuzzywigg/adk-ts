@@ -423,4 +423,136 @@ describe("McpSamplingHandler", () => {
 			spy.mockRestore();
 		}
 	});
+
+	it("rejects when messages is not an array after schema validation is bypassed", async () => {
+		const { CreateMessageRequestSchema } = await import(
+			"@modelcontextprotocol/sdk/types.js"
+		);
+		const spy = vi
+			.spyOn(CreateMessageRequestSchema, "safeParse")
+			.mockReturnValue({ success: true, data: {} } as any);
+
+		try {
+			const handler = new McpSamplingHandler(async () => "ok");
+			await expect(
+				handler.handleSamplingRequest({
+					method: "sampling/createMessage",
+					params: {
+						messages: { role: "user" },
+						maxTokens: 10,
+					},
+				} as unknown as McpSamplingRequest),
+			).rejects.toMatchObject({
+				type: McpErrorType.INVALID_REQUEST_ERROR,
+				message: expect.stringContaining("messages array is required"),
+			});
+		} finally {
+			spy.mockRestore();
+		}
+	});
+
+	it("rejects negative maxTokens values", async () => {
+		const handler = new McpSamplingHandler(async () => "ok");
+		await expect(
+			handler.handleSamplingRequest(textRequest({ maxTokens: -5 })),
+		).rejects.toMatchObject({
+			type: McpErrorType.INVALID_REQUEST_ERROR,
+			message: expect.stringContaining("maxTokens"),
+		});
+	});
+
+	it("coerces non-string text content to empty string via converter", () => {
+		const handler = new McpSamplingHandler(async () => "ok");
+		expect(
+			(handler as any).convertMcpContentToADKParts({
+				type: "text",
+				text: 123,
+			}),
+		).toEqual([{ text: "" }]);
+	});
+
+	it("maps assistant role to model and includes temperature in ADK request", async () => {
+		const samplingHandler = vi.fn(async (request) => {
+			expect(request.contents[0].role).toBe("model");
+			expect(request.config?.temperature).toBe(0.4);
+			return "ok";
+		}) as SamplingHandler;
+		const handler = new McpSamplingHandler(samplingHandler);
+
+		await handler.handleSamplingRequest(
+			textRequest({
+				temperature: 0.4,
+				messages: [
+					{
+						role: "assistant",
+						content: { type: "text", text: "prior" },
+					},
+				],
+			}),
+		);
+		expect(samplingHandler).toHaveBeenCalledOnce();
+	});
+
+	it("falls back to default model when modelPreferences hints lack names", async () => {
+		const handler = new McpSamplingHandler(async () => "ok");
+		const response = await handler.handleSamplingRequest(
+			textRequest({
+				modelPreferences: { hints: [{}, { name: undefined }] },
+			}),
+		);
+		expect(response.model).toBe("gemini-2.0-flash");
+	});
+
+	it("includes optional image text alongside binary data", async () => {
+		const imageData = Buffer.from("img2").toString("base64");
+		const samplingHandler = vi.fn(async (request) => {
+			expect(request.contents[0].parts).toEqual([
+				{ text: "look" },
+				{
+					inlineData: {
+						data: imageData,
+						mimeType: "image/png",
+					},
+				},
+			]);
+			return "ok";
+		}) as SamplingHandler;
+		const handler = new McpSamplingHandler(samplingHandler);
+
+		await handler.handleSamplingRequest({
+			method: "sampling/createMessage",
+			params: {
+				maxTokens: 8,
+				messages: [
+					{
+						role: "user",
+						content: {
+							type: "image",
+							text: "look",
+							data: imageData,
+							mimeType: "image/png",
+						},
+					},
+				],
+			},
+		});
+		expect(samplingHandler).toHaveBeenCalledOnce();
+	});
+
+	it("coerces non-string tool_use name and tool_result id to empty placeholders", () => {
+		const handler = new McpSamplingHandler(async () => "ok");
+		expect(
+			(handler as any).convertMcpContentToADKParts({
+				type: "tool_use",
+				name: 99,
+			}),
+		).toEqual([{ text: "[Tool Use: ]" }]);
+		expect(
+			(handler as any).convertMcpContentToADKParts({
+				type: "tool_result",
+				toolUseId: null,
+			}),
+		).toEqual([{ text: "[Tool Result: ]" }]);
+	});
+
 });

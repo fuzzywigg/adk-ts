@@ -422,4 +422,42 @@ describe("McpToolset offline helpers", () => {
 			]),
 		);
 	});
+
+	it("getTools wraps non-Error list failures using String(error)", async () => {
+		listTools.mockRejectedValue("list-string-fail");
+		const toolset = new McpToolset(baseConfig);
+		await expect(toolset.getTools()).rejects.toMatchObject({
+			type: McpErrorType.CONNECTION_ERROR,
+			message: expect.stringContaining("list-string-fail"),
+			originalError: undefined,
+		});
+	});
+
+	it("getTools returns empty when tools is a non-array value", async () => {
+		listTools.mockResolvedValue({ tools: { not: "array" } });
+		const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+		const toolset = new McpToolset(baseConfig);
+		await expect(toolset.getTools()).resolves.toEqual([]);
+		expect(warn).toHaveBeenCalledWith(
+			"MCP server returned no tools or invalid tools array",
+		);
+		warn.mockRestore();
+	});
+
+	it("refreshTools forwards ToolContext to getTools", async () => {
+		const toolset = new McpToolset(baseConfig);
+		const context = { invocationId: "refresh-1" } as any;
+		const getTools = vi.spyOn(toolset, "getTools").mockResolvedValue([]);
+		await toolset.refreshTools(context);
+		expect(getTools).toHaveBeenCalledWith(context);
+	});
+
+	it("setSamplingHandler without debug does not log", () => {
+		const toolset = new McpToolset(baseConfig);
+		const log = vi.spyOn(console, "log").mockImplementation(() => {});
+		toolset.setSamplingHandler(vi.fn() as any);
+		expect(setSamplingHandler).toHaveBeenCalled();
+		expect(log).not.toHaveBeenCalled();
+		log.mockRestore();
+	});
 });

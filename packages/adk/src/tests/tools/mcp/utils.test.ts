@@ -75,6 +75,30 @@ describe("withRetry", () => {
 		expect(fn).toHaveBeenCalledTimes(2);
 		expect(reinit).toHaveBeenCalledTimes(1);
 	});
+
+	it("throws unexpected end of retry loop when maxRetries skips the loop", async () => {
+		const instance = {};
+		const reinit = vi.fn(async () => undefined);
+		const fn = vi.fn(async () => "never");
+
+		const wrapped = withRetry(fn, instance, reinit, -1);
+		await expect(wrapped()).rejects.toThrow("Unexpected end of retry loop");
+		expect(fn).not.toHaveBeenCalled();
+		expect(reinit).not.toHaveBeenCalled();
+	});
+
+	it("does not retry non-Error throws even when message-like", async () => {
+		const instance = {};
+		const reinit = vi.fn(async () => undefined);
+		const fn = vi.fn(async () => {
+			throw "closed resource";
+		});
+
+		const wrapped = withRetry(fn, instance, reinit, 2);
+		await expect(wrapped()).rejects.toBe("closed resource");
+		expect(reinit).not.toHaveBeenCalled();
+		expect(fn).toHaveBeenCalledTimes(1);
+	});
 });
 
 describe("retryOnClosedResource", () => {

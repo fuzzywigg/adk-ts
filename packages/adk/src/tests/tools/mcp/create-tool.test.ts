@@ -330,4 +330,175 @@ describe("convertMcpToolToBaseTool", () => {
 			message: expect.stringContaining("string-ctor-fail"),
 		});
 	});
+
+	it("constructor catch wraps BaseTool validation failures as INVALID_SCHEMA_ERROR", async () => {
+		await expect(
+			convertMcpToolToBaseTool({
+				mcpTool: {
+					name: "bad-name",
+					description: "otherwise valid description text",
+					inputSchema: { type: "object", properties: {} },
+				} as any,
+				toolHandler: async () => ({ content: [] }),
+			}),
+		).rejects.toMatchObject({
+			name: "McpError",
+			type: McpErrorType.INVALID_SCHEMA_ERROR,
+			message: expect.stringContaining("Failed to create tool from MCP tool"),
+			originalError: expect.any(Error),
+		});
+
+		await expect(
+			convertMcpToolToBaseTool({
+				mcpTool: {
+					name: "short_desc",
+					description: "ab",
+					inputSchema: { type: "object", properties: {} },
+				} as any,
+				toolHandler: async () => ({ content: [] }),
+			}),
+		).rejects.toMatchObject({
+			type: McpErrorType.INVALID_SCHEMA_ERROR,
+			message: expect.stringContaining("Failed to create tool from MCP tool"),
+		});
+	});
+
+	it("getDeclaration wraps non-Error schema failures using String(error)", async () => {
+		const schemaConversion = await import(
+			"../../../tools/mcp/schema-conversion"
+		);
+		const spy = vi
+			.spyOn(schemaConversion, "mcpSchemaToParameters")
+			.mockImplementation(() => {
+				throw "schema-string-boom";
+			});
+
+		try {
+			const tool = await convertMcpToolToBaseTool({
+				mcpTool: {
+					name: "string_schema_fail",
+					description: "fails with non-Error throw",
+					inputSchema: { type: "object", properties: {} },
+				} as any,
+				toolHandler: async () => ({ content: [] }),
+			});
+
+			expect(() => tool.getDeclaration()).toThrow(
+				expect.objectContaining({
+					type: McpErrorType.INVALID_SCHEMA_ERROR,
+					message: expect.stringContaining("schema-string-boom"),
+					originalError: undefined,
+				}),
+			);
+		} finally {
+			spy.mockRestore();
+		}
+	});
+
+	it("runAsync wraps non-Error execution failures using String(error)", async () => {
+		const tool = await convertMcpToolToBaseTool({
+			mcpTool: {
+				name: "raw_fail",
+				description: "throws a non-Error value",
+				inputSchema: { type: "object", properties: {} },
+			} as any,
+			toolHandler: async () => {
+				throw 42;
+			},
+		});
+
+		await expect(tool.runAsync({}, makeContext())).rejects.toMatchObject({
+			type: McpErrorType.TOOL_EXECUTION_ERROR,
+			message: expect.stringContaining("Error executing MCP tool raw_fail: 42"),
+			originalError: undefined,
+		});
+	});
+
+	it("runAsync prefers metadata over _meta and skips retry for non-closed errors", async () => {
+		const callTool = vi.fn().mockRejectedValue(new Error("permission denied"));
+		const tool = await convertMcpToolToBaseTool({
+			mcpTool: {
+				name: "meta_priority",
+				description: "metadata wins over underscore meta fields",
+				inputSchema: { type: "object", properties: {} },
+				metadata: { shouldRetryOnFailure: true, maxRetryAttempts: 3 },
+				_meta: { shouldRetryOnFailure: false, maxRetryAttempts: 1 },
+			} as any,
+			client: { callTool } as any,
+		});
+
+		expect(tool.shouldRetryOnFailure).toBe(true);
+		expect(tool.maxRetryAttempts).toBe(3);
+
+		await expect(tool.runAsync({}, makeContext())).rejects.toMatchObject({
+			type: McpErrorType.TOOL_EXECUTION_ERROR,
+			message: expect.stringContaining("permission denied"),
+		});
+		expect(callTool).toHaveBeenCalledTimes(1);
+	});
+
+	it("runAsync uses client.callTool without retry when shouldRetryOnFailure is false", async () => {
+		const callTool = vi.fn().mockRejectedValue(new Error("closed"));
+		const tool = await convertMcpToolToBaseTool({
+			mcpTool: {
+				name: "no_retry",
+				description: "does not retry closed errors without the flag",
+				inputSchema: { type: "object", properties: {} },
+			} as any,
+			client: { callTool } as any,
+		});
+
+		await expect(tool.runAsync({ a: 1 }, makeContext())).rejects.toMatchObject({
+			type: McpErrorType.TOOL_EXECUTION_ERROR,
+			message: expect.stringContaining("closed"),
+		});
+		expect(callTool).toHaveBeenCalledTimes(1);
+	});
+
+	it("retries client.callTool and warns when reinitialize is unavailable", async () => {
+		const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+		let attempts = 0;
+		const callTool = vi.fn(async () => {
+			attempts++;
+			if (attempts === 1) {
+				throw new Error("ECONNRESET");
+			}
+			return { content: [{ type: "text", text: "recovered" }] };
+		});
+
+		const tool = await convertMcpToolToBaseTool({
+			mcpTool: {
+				name: "retry_warn",
+				description: "retry without reinitialize",
+				inputSchema: { type: "object", properties: {} },
+				_meta: { shouldRetryOnFailure: true, maxRetryAttempts: 2 },
+			} as any,
+			client: { callTool } as any,
+		});
+
+		await expect(tool.runAsync({ q: 1 }, makeContext())).resolves.toEqual({
+			content: [{ type: "text", text: "recovered" }],
+		});
+		expect(warn).toHaveBeenCalledWith(
+			expect.stringContaining("cannot reinitialize client"),
+		);
+		warn.mockRestore();
+	});
+
+	it("uses empty metadata object when metadata/_meta are non-objects", async () => {
+		const tool = await convertMcpToolToBaseTool({
+			mcpTool: {
+				name: "no_meta",
+				description: "plain",
+				inputSchema: { type: "object", properties: {} },
+				metadata: "not-object",
+				_meta: 12,
+			} as any,
+			toolHandler: async () => ({ content: [] }),
+		});
+		expect(tool.isLongRunning).toBe(false);
+		expect(tool.shouldRetryOnFailure).toBe(false);
+		expect(tool.maxRetryAttempts).toBe(3);
+	});
+
 });

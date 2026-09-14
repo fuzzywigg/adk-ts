@@ -339,4 +339,98 @@ describe("schema-conversion", () => {
 			type: Type.OBJECT,
 		});
 	});
+
+	it("falls back to Type.OBJECT when schema has no structural type hints", () => {
+		expect(normalizeJsonSchema({})).toEqual({
+			type: Type.OBJECT,
+		});
+	});
+
+	it("preserves enum, title, and description on number schemas", () => {
+		expect(
+			normalizeJsonSchema({
+				type: "number",
+				minimum: 0,
+				maximum: 10,
+				enum: [1, 2.5, 9],
+				title: "score",
+				description: "numeric score",
+			}),
+		).toEqual({
+			type: "number",
+			minimum: 0,
+			maximum: 10,
+			enum: [1, 2.5, 9],
+			title: "score",
+			description: "numeric score",
+		});
+
+		expect(
+			normalizeJsonSchema({
+				type: "integer",
+				enum: [1, 2, 3],
+				title: "count",
+				description: "whole count",
+			}),
+		).toEqual({
+			type: "integer",
+			enum: [1, 2, 3],
+			title: "count",
+			description: "whole count",
+		});
+	});
+
+	it("uses empty string when ADK tool description is missing or empty", () => {
+		const emptyDesc = {
+			name: "silent",
+			description: "",
+			getDeclaration: () => ({
+				name: "silent",
+				description: "",
+				parameters: { type: Type.OBJECT, properties: {} },
+			}),
+		} as BaseTool;
+
+		expect(adkToMcpToolType(emptyDesc)).toEqual({
+			name: "silent",
+			description: "",
+			inputSchema: {
+				type: "object",
+				properties: {},
+			},
+		});
+
+		const missingDesc = {
+			name: "no_desc",
+			description: undefined,
+			getDeclaration: () => ({
+				name: "no_desc",
+				parameters: { type: Type.OBJECT, properties: {} },
+			}),
+		} as unknown as BaseTool;
+
+		expect(adkToMcpToolType(missingDesc).description).toBe("");
+	});
+
+	it("wraps schema objects that lack a string type field as Type.OBJECT", () => {
+		const declaration = jsonSchemaToDeclaration("wrap", "d", {
+			type: 123,
+			foo: { type: "string" },
+		} as any);
+		expect(declaration.parameters).toEqual({
+			type: Type.OBJECT,
+			properties: {
+				type: 123,
+				foo: { type: "string" },
+			},
+		});
+	});
+
+	it("falls back to Type.OBJECT when only multipleOf is present without bounds", () => {
+		expect(normalizeJsonSchema({ multipleOf: 2 })).toEqual({
+			type: Type.OBJECT,
+			multipleOf: 2,
+		});
+	});
+
 });

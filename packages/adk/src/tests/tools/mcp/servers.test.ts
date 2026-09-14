@@ -248,4 +248,33 @@ describe("McpGeneric", () => {
 		expect(config.name).toBe("Custom Client");
 		expect(config.debug).toBe(true);
 	});
+
+	it("forwards samplingHandler through generic factory", () => {
+		const samplingHandler: SamplingHandler = vi.fn();
+		const config = getConfig(
+			McpGeneric("@example/mcp", { samplingHandler }, "Generic Sampled"),
+		);
+		expect(config.samplingHandler).toBe(samplingHandler);
+		expect(config.name).toBe("Generic Sampled");
+	});
+
+	it("uses https CoinGecko Pro URL with env and custom description", () => {
+		const config = getConfig(
+			McpCoinGeckoPro({
+				description: "pro custom",
+				env: { COINGECKO_PRO_API_KEY: "secret", PATH: "/pro" },
+			}),
+		);
+		expect(config.description).toBe("pro custom");
+		if (config.transport.mode !== "stdio") {
+			throw new Error("expected stdio");
+		}
+		expect(config.transport.env?.COINGECKO_PRO_API_KEY).toBe("secret");
+		expect(config.transport.env?.PATH).toBe("/pro");
+		expect(config.transport.args).toEqual([
+			"-y",
+			"mcp-remote@latest",
+			"https://mcp.pro-api.coingecko.com/mcp",
+		]);
+	});
 });
