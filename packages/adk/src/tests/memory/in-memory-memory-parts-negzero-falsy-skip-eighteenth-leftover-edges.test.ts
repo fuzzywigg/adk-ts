@@ -1,0 +1,73 @@
+import { describe, expect, it } from "vitest";
+import { InMemoryMemoryService } from "../../memory/in-memory-memory-service";
+import type { Session } from "../../sessions/session";
+
+/**
+ * Eighteenth leftover (HEAVY tip-relaunch residual after #242):
+ * `event.content?.parts` truthiness — fourteenth pins falsy `0`/`false` drop.
+ * SameValueZero residual: `-0` is likewise falsy (`!!(-0)` false) even though
+ * `Object.is(-0, 0)` is false → event filtered out (skip arm).
+ */
+describe("in-memory memory parts negzero falsy-skip eighteenth leftover", () => {
+	it("parts -0 is falsy → event filtered out", async () => {
+		expect(!!-0).toBe(false);
+		expect(Object.is(-0, 0)).toBe(false);
+		const service = new InMemoryMemoryService();
+		await service.addSessionToMemory({
+			appName: "app",
+			userId: "user",
+			id: "s1",
+			state: {},
+			events: [
+				{
+					author: "user",
+					timestamp: 1,
+					content: { parts: -0 as any },
+				} as any,
+			],
+			lastUpdateTime: 1,
+		} as Session);
+		const stored = (service as any)._sessionEvents.get("app/user").get("s1");
+		expect(stored).toHaveLength(0);
+	});
+
+	it("parts 0 still filtered out (fourteenth control)", async () => {
+		const service = new InMemoryMemoryService();
+		await service.addSessionToMemory({
+			appName: "app",
+			userId: "user",
+			id: "s1",
+			state: {},
+			events: [
+				{
+					author: "user",
+					timestamp: 1,
+					content: { parts: 0 },
+				} as any,
+			],
+			lastUpdateTime: 1,
+		} as Session);
+		const stored = (service as any)._sessionEvents.get("app/user").get("s1");
+		expect(stored).toHaveLength(0);
+	});
+
+	it("parts 1 still indexed (number-one twin control)", async () => {
+		const service = new InMemoryMemoryService();
+		await service.addSessionToMemory({
+			appName: "app",
+			userId: "user",
+			id: "s1",
+			state: {},
+			events: [
+				{
+					author: "user",
+					timestamp: 1,
+					content: { parts: 1 },
+				} as any,
+			],
+			lastUpdateTime: 1,
+		} as Session);
+		const stored = (service as any)._sessionEvents.get("app/user").get("s1");
+		expect(stored).toHaveLength(1);
+	});
+});
