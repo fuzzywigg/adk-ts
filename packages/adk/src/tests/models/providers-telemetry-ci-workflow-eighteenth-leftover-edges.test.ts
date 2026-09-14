@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest";
 
 /**
  * Eighteenth leftover: reversible workflow assertions for the providers /
- * telemetry Vitest slice. Softened while agents true-asymmetry twentieth owns
+ * telemetry Vitest slice. Softened while providers/telemetry nineteenth owns
  * the focused filter pin — pins lint/build/test only.
  */
 describe("providers/telemetry ci workflow eighteenth leftover edges", () => {
