@@ -101,4 +101,72 @@ describe("CodeExecutorContext", () => {
 		expect(context.getExecutionId()).toBe("exec-clone");
 		expect(context.getProcessedFileNames()).toEqual(["a.py"]);
 	});
+
+	it("reuses existing context and input files from session state", () => {
+		const state = State.create({}, {});
+		state["_code_execution_context"] = {
+			execution_session_id: "preexisting",
+			processed_input_files: ["old.py"],
+		};
+		state["_code_executor_input_files"] = [
+			{
+				name: "old.py",
+				content: "cHJpbnQoKSk=",
+				mimeType: "text/x-python",
+			},
+		];
+		state["_code_executor_error_counts"] = { "inv-a": 3 };
+
+		const context = new CodeExecutorContext(state);
+
+		expect(context.getExecutionId()).toBe("preexisting");
+		expect(context.getProcessedFileNames()).toEqual(["old.py"]);
+		expect(context.getInputFiles()).toHaveLength(1);
+		expect(context.getErrorCount("inv-a")).toBe(3);
+		expect(context.getErrorCount("missing")).toBe(0);
+
+		context.addInputFiles([
+			{ name: "new.py", content: "YQ==", mimeType: "text/x-python" },
+		]);
+		expect(context.getInputFiles()).toHaveLength(2);
+
+		context.addProcessedFileNames(["new.py"]);
+		expect(context.getProcessedFileNames()).toEqual(["old.py", "new.py"]);
+
+		context.incrementErrorCount("inv-a");
+		expect(context.getErrorCount("inv-a")).toBe(4);
+		context.resetErrorCount("inv-a");
+		expect(context.getErrorCount("inv-a")).toBe(0);
+		context.resetErrorCount("inv-a");
+		expect(context.getErrorCount("inv-a")).toBe(0);
+	});
+
+	it("isolates error counts and results across invocation ids", () => {
+		vi.spyOn(Date, "now").mockReturnValue(2_000_000_000_000);
+		const state = State.create({}, {});
+		const context = new CodeExecutorContext(state);
+
+		context.incrementErrorCount("a");
+		context.incrementErrorCount("b");
+		context.incrementErrorCount("b");
+		expect(context.getErrorCount("a")).toBe(1);
+		expect(context.getErrorCount("b")).toBe(2);
+
+		context.updateCodeExecutionResult("a", "print(1)", "1", "");
+		context.updateCodeExecutionResult("b", "raise", "", "err");
+		expect(state["_code_execution_results"]["a"]).toEqual([
+			{
+				code: "print(1)",
+				resultStdout: "1",
+				resultStderr: "",
+				timestamp: 2_000_000_000,
+			},
+		]);
+		expect(state["_code_execution_results"]["b"][0].resultStderr).toBe("err");
+
+		context.clearInputFiles();
+		context.addProcessedFileNames(["x"]);
+		context.clearInputFiles();
+		expect(context.getProcessedFileNames()).toEqual([]);
+	});
 });

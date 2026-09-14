@@ -469,3 +469,362 @@ describe("telemetry module exports", () => {
 		expect(shutSpy).toHaveBeenCalledWith(1);
 	});
 });
+
+describe("TelemetryService edge coverage", () => {
+	it("omits session/user attributes when invocationContext is missing on tool calls", async () => {
+		const setAttributes = vi.fn();
+		const { trace } = await import("@opentelemetry/api");
+		vi.spyOn(trace, "getActiveSpan").mockReturnValue({
+			setAttributes,
+			addEvent: vi.fn(),
+		} as any);
+
+		const service = new TelemetryService();
+		service.traceToolCall(
+			fakeTool("t"),
+			{ a: 1 },
+			fakeEvent({
+				content: {
+					role: "user",
+					parts: [
+						{
+							functionResponse: {
+								id: "c1",
+								name: "t",
+								response: { v: 1 },
+							},
+						},
+					],
+				},
+			} as any),
+		);
+
+		const attrs = setAttributes.mock.calls[0][0];
+		expect(attrs["session.id"]).toBeUndefined();
+		expect(attrs["user.id"]).toBeUndefined();
+		expect(attrs["adk.llm_request"]).toBe("{}");
+	});
+
+	it("uses placeholders when parts are empty or functionResponse has no id", async () => {
+		const setAttributes = vi.fn();
+		const { trace } = await import("@opentelemetry/api");
+		vi.spyOn(trace, "getActiveSpan").mockReturnValue({
+			setAttributes,
+			addEvent: vi.fn(),
+		} as any);
+		const service = new TelemetryService();
+
+		service.traceToolCall(
+			fakeTool(),
+			{},
+			fakeEvent({ content: { role: "user", parts: [] } } as any),
+		);
+		expect(setAttributes.mock.calls[0][0]["gen_ai.tool.call.id"]).toBe(
+			"<not specified>",
+		);
+
+		service.traceToolCall(
+			fakeTool(),
+			{},
+			fakeEvent({
+				content: {
+					role: "user",
+					parts: [{ functionResponse: { name: "x", response: {} } }],
+				},
+			} as any),
+		);
+		expect(setAttributes.mock.calls[1][0]["gen_ai.tool.call.id"]).toBe(
+			"<not specified>",
+		);
+	});
+
+	it("filters inlineData from traced llm contents and defaults missing token fields", async () => {
+		const setAttributes = vi.fn();
+		const addEvent = vi.fn();
+		const { trace } = await import("@opentelemetry/api");
+		vi.spyOn(trace, "getActiveSpan").mockReturnValue({
+			setAttributes,
+			addEvent,
+		} as any);
+
+		const service = new TelemetryService();
+		service.traceLlmCall(
+			{
+				invocationId: "inv",
+				userId: "u",
+				session: { id: "s" },
+			} as any,
+			"evt",
+			{
+				model: "m",
+				config: {},
+				contents: [
+					{
+						role: "user",
+						parts: [
+							{ text: "keep" },
+							{ inlineData: { data: "deadbeef", mimeType: "text/plain" } },
+						],
+					},
+					{ role: "model", parts: undefined },
+				],
+			} as any,
+			{
+				usageMetadata: {},
+			} as LlmResponse,
+		);
+
+		const request = JSON.parse(
+			setAttributes.mock.calls[0][0]["adk.llm_request"],
+		);
+		expect(request.contents[0].parts).toEqual([{ text: "keep" }]);
+		expect(request.contents[1].parts).toEqual([]);
+		expect(setAttributes).toHaveBeenCalledWith(
+			expect.objectContaining({
+				"gen_ai.usage.input_tokens": 0,
+				"gen_ai.usage.output_tokens": 0,
+			}),
+		);
+		expect(addEvent).toHaveBeenCalledWith(
+			"gen_ai.content.completion",
+			expect.objectContaining({
+				"gen_ai.completion": expect.any(String),
+			}),
+		);
+	});
+
+	it("defaults missing model config numeric fields to 0", async () => {
+		const setAttributes = vi.fn();
+		const { trace } = await import("@opentelemetry/api");
+		vi.spyOn(trace, "getActiveSpan").mockReturnValue({
+			setAttributes,
+			addEvent: vi.fn(),
+		} as any);
+
+		const service = new TelemetryService();
+		service.traceLlmCall(
+			{
+				invocationId: "inv",
+				userId: "u",
+				session: { id: "s" },
+			} as any,
+			"evt",
+			{ model: "m", config: {}, contents: [] } as any,
+			{ content: { role: "model", parts: [{ text: "x" }] } } as LlmResponse,
+		);
+
+		expect(setAttributes.mock.calls[0][0]).toEqual(
+			expect.objectContaining({
+				"gen_ai.request.max_tokens": 0,
+				"gen_ai.request.temperature": 0,
+				"gen_ai.request.top_p": 0,
+			}),
+		);
+	});
+
+	it("does not set usage attributes when usageMetadata is absent", async () => {
+		const setAttributes = vi.fn();
+		const { trace } = await import("@opentelemetry/api");
+		vi.spyOn(trace, "getActiveSpan").mockReturnValue({
+			setAttributes,
+			addEvent: vi.fn(),
+		} as any);
+
+		const service = new TelemetryService();
+		service.traceLlmCall(
+			{
+				invocationId: "inv",
+				userId: "u",
+				session: { id: "s" },
+			} as any,
+			"evt",
+			{ model: "m", config: {}, contents: undefined } as any,
+			{ content: { role: "model", parts: [{ text: "x" }] } } as LlmResponse,
+		);
+
+		const usageCalls = setAttributes.mock.calls.filter(
+			(call) => call[0]["gen_ai.usage.input_tokens"] !== undefined,
+		);
+		expect(usageCalls).toHaveLength(0);
+		const request = JSON.parse(
+			setAttributes.mock.calls[0][0]["adk.llm_request"],
+		);
+		expect(request.contents).toEqual([]);
+	});
+
+	it("serializes circular llm responses as not serializable", async () => {
+		const setAttributes = vi.fn();
+		const { trace } = await import("@opentelemetry/api");
+		vi.spyOn(trace, "getActiveSpan").mockReturnValue({
+			setAttributes,
+			addEvent: vi.fn(),
+		} as any);
+
+		const circular: any = { content: { role: "model", parts: [] } };
+		circular.self = circular;
+
+		const service = new TelemetryService();
+		service.traceLlmCall(
+			{
+				invocationId: "inv",
+				userId: "u",
+				session: { id: "s" },
+			} as any,
+			"evt",
+			{ model: "m", config: {}, contents: [] } as any,
+			circular as LlmResponse,
+		);
+
+		expect(setAttributes.mock.calls[0][0]["adk.llm_response"]).toBe(
+			"<not serializable>",
+		);
+	});
+
+	it("records non-Error throws from async generators with undefined message", async () => {
+		const end = vi.fn();
+		const recordException = vi.fn();
+		const setStatus = vi.fn();
+		const startSpan = vi.fn(() => ({ end, recordException, setStatus }));
+
+		const service = new TelemetryService();
+		(service as any).tracer = { startSpan };
+
+		async function* gen(): AsyncGenerator<number, void, unknown> {
+			yield 1;
+			throw "string-failure";
+		}
+
+		const iterator = service.traceAsyncGenerator("boom", gen());
+		await expect(iterator.next()).resolves.toEqual({ value: 1, done: false });
+		await expect(iterator.next()).rejects.toBe("string-failure");
+		expect(recordException).toHaveBeenCalledWith("string-failure");
+		expect(setStatus).toHaveBeenCalledWith({
+			code: 2,
+			message: undefined,
+		});
+		expect(end).toHaveBeenCalled();
+	});
+
+	it("passes otlp headers and wires http ignoreIncomingRequestHook", async () => {
+		const { diag } = await import("@opentelemetry/api");
+		const { getNodeAutoInstrumentations } = await import(
+			"@opentelemetry/auto-instrumentations-node"
+		);
+		const { OTLPTraceExporter } = await import(
+			"@opentelemetry/exporter-trace-otlp-http"
+		);
+		vi.spyOn(diag, "setLogger").mockImplementation(() => {});
+		vi.spyOn(diag, "debug").mockImplementation(diagDebug);
+
+		const service = new TelemetryService();
+		service.initialize({
+			appName: "adk-tests",
+			appVersion: "9.9.9",
+			otlpEndpoint: "http://localhost:4318/v1/traces",
+			otlpHeaders: { Authorization: "Bearer t" },
+			environment: "staging",
+		});
+
+		expect(OTLPTraceExporter).toHaveBeenCalledWith({
+			url: "http://localhost:4318/v1/traces",
+			headers: { Authorization: "Bearer t" },
+		});
+		expect(getNodeAutoInstrumentations).toHaveBeenCalled();
+		const autoOpts = (getNodeAutoInstrumentations as any).mock.calls.at(-1)[0];
+		expect(
+			autoOpts["@opentelemetry/instrumentation-http"].ignoreIncomingRequestHook(
+				{},
+			),
+		).toBe(true);
+		expect(service.getConfig()?.appVersion).toBe("9.9.9");
+		expect(service.getTracer()).toBeTruthy();
+
+		await service.shutdown();
+		expect(service.initialized).toBe(false);
+		await expect(service.shutdown()).resolves.toBeUndefined();
+	});
+
+	it("omits deployment.environment.name when NODE_ENV is unset", async () => {
+		const setAttributes = vi.fn();
+		const { trace } = await import("@opentelemetry/api");
+		vi.spyOn(trace, "getActiveSpan").mockReturnValue({
+			setAttributes,
+			addEvent: vi.fn(),
+		} as any);
+		const prev = process.env.NODE_ENV;
+		delete process.env.NODE_ENV;
+
+		const service = new TelemetryService();
+		service.traceToolCall(
+			fakeTool(),
+			{},
+			fakeEvent({
+				content: {
+					role: "user",
+					parts: [
+						{
+							functionResponse: {
+								id: "x",
+								name: "t",
+								response: null,
+							},
+						},
+					],
+				},
+			} as any),
+			undefined,
+			{
+				invocationId: "inv",
+				userId: "u",
+				session: { id: "s" },
+			} as any,
+		);
+
+		expect(
+			setAttributes.mock.calls[0][0]["deployment.environment.name"],
+		).toBeUndefined();
+		if (prev === undefined) delete process.env.NODE_ENV;
+		else process.env.NODE_ENV = prev;
+	});
+
+	it("includes llm request payload when provided to traceToolCall", async () => {
+		const setAttributes = vi.fn();
+		const { trace } = await import("@opentelemetry/api");
+		vi.spyOn(trace, "getActiveSpan").mockReturnValue({
+			setAttributes,
+			addEvent: vi.fn(),
+		} as any);
+
+		const service = new TelemetryService();
+		service.traceToolCall(
+			fakeTool("calc"),
+			{ n: 2 },
+			fakeEvent({
+				content: {
+					role: "user",
+					parts: [
+						{
+							functionResponse: {
+								id: "call-9",
+								name: "calc",
+								response: { sum: 3 },
+							},
+						},
+					],
+				},
+			} as any),
+			{
+				model: "gpt",
+				config: { temperature: 1 },
+				contents: [{ role: "user", parts: [{ text: "2+1" }] }],
+			} as LlmRequest,
+		);
+
+		const request = JSON.parse(
+			setAttributes.mock.calls[0][0]["adk.llm_request"],
+		);
+		expect(request.model).toBe("gpt");
+		expect(request.config.temperature).toBe(1);
+		expect(request.contents[0].parts[0].text).toBe("2+1");
+	});
+});
