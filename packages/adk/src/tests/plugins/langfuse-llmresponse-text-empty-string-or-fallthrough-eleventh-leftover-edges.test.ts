@@ -2,53 +2,42 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { LlmRequest } from "../../models/llm-request";
 import { LlmResponse } from "../../models/llm-response";
 
-const {
-	traceMock,
-	spanMock,
-	generationMock,
-	updateMock,
-	endMock,
-	flushAsync,
-	shutdownAsync,
-	LangfuseMock,
-} = vi.hoisted(() => {
-	const updateMock = vi.fn();
-	const endMock = vi.fn();
-	const generationMock = vi.fn(() => ({
-		update: updateMock,
-		end: endMock,
-	}));
-	const spanMock = vi.fn(() => ({
-		update: updateMock,
-		end: endMock,
-		event: vi.fn(),
-		span: vi.fn(),
-		generation: generationMock,
-	}));
-	const traceMock = vi.fn(() => ({
-		update: updateMock,
-		event: vi.fn(),
-		span: spanMock,
-		generation: generationMock,
-	}));
-	const flushAsync = vi.fn().mockResolvedValue(undefined);
-	const shutdownAsync = vi.fn().mockResolvedValue(undefined);
-	const LangfuseMock = vi.fn(function Langfuse(this: any) {
-		this.trace = traceMock;
-		this.flushAsync = flushAsync;
-		this.shutdownAsync = shutdownAsync;
+const { spanMock, generationMock, updateMock, endMock, LangfuseMock } =
+	vi.hoisted(() => {
+		const updateMock = vi.fn();
+		const endMock = vi.fn();
+		const generationMock = vi.fn(() => ({
+			update: updateMock,
+			end: endMock,
+		}));
+		const spanMock = vi.fn(() => ({
+			update: updateMock,
+			end: endMock,
+			event: vi.fn(),
+			span: vi.fn(),
+			generation: generationMock,
+		}));
+		const traceMock = vi.fn(() => ({
+			update: updateMock,
+			event: vi.fn(),
+			span: spanMock,
+			generation: generationMock,
+		}));
+		const flushAsync = vi.fn().mockResolvedValue(undefined);
+		const shutdownAsync = vi.fn().mockResolvedValue(undefined);
+		const LangfuseMock = vi.fn(function Langfuse(this: any) {
+			this.trace = traceMock;
+			this.flushAsync = flushAsync;
+			this.shutdownAsync = shutdownAsync;
+		});
+		return {
+			spanMock,
+			generationMock,
+			updateMock,
+			endMock,
+			LangfuseMock,
+		};
 	});
-	return {
-		traceMock,
-		spanMock,
-		generationMock,
-		updateMock,
-		endMock,
-		flushAsync,
-		shutdownAsync,
-		LangfuseMock,
-	};
-});
 
 vi.mock("langfuse", () => ({
 	Langfuse: LangfuseMock,
