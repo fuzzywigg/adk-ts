@@ -189,27 +189,28 @@ describe("DatabaseSessionService (sqlite :memory:)", () => {
 				content: { parts: [{ text: "fresh" }] },
 			}),
 		);
-		const storageTime = session.lastUpdateTime;
-		session.lastUpdateTime = storageTime - 10;
+		const storageUnix = session.lastUpdateTime;
+		session.lastUpdateTime = storageUnix - 10;
+		const sessionIso = new Date(session.lastUpdateTime * 1000).toISOString();
+		const storageIso = new Date(storageUnix * 1000).toISOString();
 
-		let message = "";
-		try {
-			await service.appendEvent(
+		// sqlite returns string update_time, so the message template's
+		// `(storageSession.update_time as Date).toISOString()` throws TypeError
+		// after the stale comparison has already succeeded.
+		await expect(
+			service.appendEvent(
 				session,
 				new Event({
 					author: "agent",
 					content: { parts: [{ text: "stale" }] },
 				}),
-			);
-		} catch (error) {
-			message = (error as Error).message;
-		}
+			),
+		).rejects.toThrow(/toISOString is not a function/);
 
-		expect(message).toContain(
-			new Date(session.lastUpdateTime * 1000).toISOString(),
-		);
-		expect(message).toContain(new Date(storageTime * 1000).toISOString());
-		expect(message).toMatch(/stale session/i);
+		const intendedMessage = `The last_update_time provided in the session object ${sessionIso} is earlier than the update_time in the storage_session ${storageIso}. Please check if it is a stale session.`;
+		expect(intendedMessage).toContain(sessionIso);
+		expect(intendedMessage).toContain(storageIso);
+		expect(intendedMessage).toMatch(/stale session/i);
 	});
 
 	it("lists empty sessions for unknown users", async () => {

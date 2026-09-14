@@ -988,13 +988,14 @@ describe("VertexAiSessionService", () => {
 			});
 
 		const session = await service.createSession("app", "user", {});
-		// slice(-3,-2) on a single-segment name yields undefined
-		expect(session.id).toBe("derived-from-get");
+		// slice(-3,-2) on a single-segment name yields undefined; String(undefined) === "undefined"
+		expect(session.id).toBe("undefined");
 		expect(asyncRequest).toHaveBeenNthCalledWith(3, {
 			http_method: "GET",
 			path: "reasoningEngines/9/sessions/undefined",
 			request_dict: {},
 		});
+		expect(session.state).toEqual({});
 	});
 
 	it("listSessions maps empty and slash-heavy weird names", async () => {

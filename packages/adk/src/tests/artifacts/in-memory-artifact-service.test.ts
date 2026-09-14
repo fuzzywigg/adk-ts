@@ -738,10 +738,11 @@ describe("InMemoryArtifactService", () => {
 			},
 		});
 
+		// alias lives in the caller session; URI has no sessionId so load uses
+		// `parsedUri.sessionId || sessionId` when resolving the user-scoped target
 		expect(
 			await service.loadArtifact({
 				...base,
-				sessionId: "fallback-session",
 				filename: "alias.txt",
 			}),
 		).toEqual({ text: "shared-payload" });

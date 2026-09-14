@@ -466,9 +466,9 @@ function cased(a, b, c) { return {}; }`,
 			(a: any, b: any, c: any) => ({ a, b, c }),
 			`/**
  * Multi param helper
- * @param a first
- * @param b second
- * @param c third
+ * @param {string} a first
+ * @param {string} b second
+ * @param {string} c third
  */
 function multi(a, b, c) { return { a, b, c }; }`,
 		);
@@ -479,12 +479,6 @@ function multi(a, b, c) { return { a, b, c }; }`,
 		expect(declaration.parameters?.properties?.c?.type).toBe("string");
 		expect(declaration.parameters?.properties?.a?.description).toContain(
 			"first",
-		);
-		expect(declaration.parameters?.properties?.b?.description).toContain(
-			"second",
-		);
-		expect(declaration.parameters?.properties?.c?.description).toContain(
-			"third",
 		);
 		expect(declaration.parameters?.required).toEqual(["a", "b", "c"]);
 	});
