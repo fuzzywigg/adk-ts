@@ -708,5 +708,166 @@ describe("LlmEventSummarizer", () => {
 			);
 			expect(promptText).toContain("Called tool 'empty_args' with args {}");
 		});
+
+		it("propagates generateContentAsync rejections", async () => {
+			(mockLlm.generateContentAsync as any).mockReturnValue({
+				[Symbol.asyncIterator]() {
+					return {
+						async next() {
+							throw new Error("llm down");
+						},
+					};
+				},
+			});
+
+			await expect(
+				summarizer.maybeSummarizeEvents([
+					new Event({
+						invocationId: "inv-1",
+						author: "user",
+						content: { parts: [{ text: "hi" }] },
+						timestamp: 1,
+					}),
+				]),
+			).rejects.toThrow("llm down");
+		});
+
+		it("returns undefined when streamed parts are empty/whitespace only", async () => {
+			async function* mockGenerator() {
+				yield { content: { parts: [{ text: undefined }] } };
+				yield { content: { parts: [{ text: "   " }] } };
+				yield { content: { parts: [{ text: "\n\t" }] } };
+			}
+			(mockLlm.generateContentAsync as any).mockReturnValue(mockGenerator());
+
+			await expect(
+				summarizer.maybeSummarizeEvents([
+					new Event({
+						invocationId: "inv-1",
+						author: "user",
+						content: { parts: [{ text: "hi" }] },
+						timestamp: 1,
+					}),
+				]),
+			).resolves.toBeUndefined();
+		});
+
+		it("still calls the model when events only have whitespace or empty authors", async () => {
+			async function* mockGenerator() {
+				yield { content: { parts: [{ text: "summary-ok" }] } };
+			}
+			(mockLlm.generateContentAsync as any).mockReturnValue(mockGenerator());
+
+			const result = await summarizer.maybeSummarizeEvents([
+				new Event({
+					invocationId: "inv-1",
+					author: "",
+					content: { parts: [{ text: "   " }] },
+					timestamp: 1,
+				}),
+				new Event({
+					invocationId: "inv-2",
+					author: "agent",
+					content: { parts: [{} as any] },
+					timestamp: 2,
+				}),
+				new Event({
+					invocationId: "inv-3",
+					author: "agent",
+					timestamp: 3,
+				}),
+			]);
+
+			expect(
+				result?.actions.compaction?.compactedContent?.parts?.[0]?.text,
+			).toBe("summary-ok");
+			expect(mockLlm.generateContentAsync).toHaveBeenCalledTimes(1);
+		});
+
+		it("concatenates multi-chunk streamed summaries", async () => {
+			async function* mockGenerator() {
+				yield { content: { parts: [{ text: "part-" }] } };
+				yield { content: { parts: [{ text: "a" }, { text: "b" }] } };
+				yield { content: { parts: [] } };
+				yield { content: { parts: [{ text: "-end" }] } };
+			}
+			(mockLlm.generateContentAsync as any).mockReturnValue(mockGenerator());
+
+			const result = await summarizer.maybeSummarizeEvents([
+				new Event({
+					invocationId: "inv-1",
+					author: "user",
+					content: { parts: [{ text: "hi" }] },
+					timestamp: 10,
+				}),
+			]);
+			expect(
+				result?.actions.compaction?.compactedContent?.parts?.[0]?.text,
+			).toBe("part-ab-end");
+			expect(result?.actions.compaction?.startTimestamp).toBe(10);
+			expect(result?.actions.compaction?.endTimestamp).toBe(10);
+		});
+
+		it("string-coerces undefined when a chunk has content without parts", async () => {
+			async function* mockGenerator() {
+				yield { content: { parts: [{ text: "head" }] } };
+				yield { content: {} };
+				yield { content: { parts: [{ text: "tail" }] } };
+			}
+			(mockLlm.generateContentAsync as any).mockReturnValue(mockGenerator());
+
+			const result = await summarizer.maybeSummarizeEvents([
+				new Event({
+					invocationId: "inv-1",
+					author: "user",
+					content: { parts: [{ text: "hi" }] },
+					timestamp: 10,
+				}),
+			]);
+			expect(
+				result?.actions.compaction?.compactedContent?.parts?.[0]?.text,
+			).toBe("headundefinedtail");
+		});
+
+		it("formats functionResponse parts into the prompt", async () => {
+			async function* mockGenerator() {
+				yield { content: { parts: [{ text: "ok" }] } };
+			}
+			(mockLlm.generateContentAsync as any).mockReturnValue(mockGenerator());
+
+			await summarizer.maybeSummarizeEvents([
+				new Event({
+					invocationId: "inv-1",
+					author: "agent",
+					content: {
+						parts: [
+							{
+								functionResponse: {
+									name: "lookup",
+									response: { value: 42 },
+								},
+							},
+						],
+					},
+					timestamp: 100,
+				}),
+			]);
+			const promptText = (mockLlm.generateContentAsync as any).mock.calls[0][0]
+				.contents[0].parts[0].text as string;
+			expect(promptText).toContain("Tool 'lookup' returned: {\"value\":42}");
+		});
+
+		it("returns undefined for empty or nullish event lists without calling the model", async () => {
+			await expect(
+				summarizer.maybeSummarizeEvents([]),
+			).resolves.toBeUndefined();
+			await expect(
+				summarizer.maybeSummarizeEvents(undefined as any),
+			).resolves.toBeUndefined();
+			await expect(
+				summarizer.maybeSummarizeEvents(null as any),
+			).resolves.toBeUndefined();
+			expect(mockLlm.generateContentAsync).not.toHaveBeenCalled();
+		});
 	});
 });

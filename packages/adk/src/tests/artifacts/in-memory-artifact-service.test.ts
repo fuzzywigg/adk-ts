@@ -537,4 +537,111 @@ describe("InMemoryArtifactService", () => {
 			await service.listVersions({ ...base, filename: "dense.txt" }),
 		).toEqual([0, 1, 2]);
 	});
+
+	it("resolves artifact refs when fileUri is missing via || empty string", async () => {
+		const service = new InMemoryArtifactService();
+		await service.saveArtifact({
+			...base,
+			filename: "ref-hole.txt",
+			artifact: { text: "placeholder" },
+		});
+		const artifactsMap = (service as any).artifacts as Map<string, any[]>;
+		const [, versions] = Array.from(artifactsMap.entries())[0];
+		versions[0] = {
+			fileData: { fileUri: undefined, mimeType: "text/plain" },
+		};
+
+		const isRef = await import("../../artifacts/artifact-util.js");
+		const spy = vi.spyOn(isRef, "isArtifactRef").mockReturnValue(true);
+		await expect(
+			service.loadArtifact({ ...base, filename: "ref-hole.txt", version: 0 }),
+		).rejects.toThrow(/Invalid artifact reference URI/);
+		spy.mockRestore();
+	});
+
+	it("resolves artifact refs with empty fileUri string the same way", async () => {
+		const service = new InMemoryArtifactService();
+		await service.saveArtifact({
+			...base,
+			filename: "ref-empty.txt",
+			artifact: { text: "placeholder" },
+		});
+		const artifactsMap = (service as any).artifacts as Map<string, any[]>;
+		const [, versions] = Array.from(artifactsMap.entries())[0];
+		versions[0] = {
+			fileData: { fileUri: "", mimeType: "text/plain" },
+		};
+
+		const isRef = await import("../../artifacts/artifact-util.js");
+		const spy = vi.spyOn(isRef, "isArtifactRef").mockReturnValue(true);
+		await expect(
+			service.loadArtifact({
+				...base,
+				filename: "ref-empty.txt",
+				version: 0,
+			}),
+		).rejects.toThrow(/Invalid artifact reference URI/);
+		spy.mockRestore();
+	});
+
+	it("follows a valid planted artifact ref to another stored artifact", async () => {
+		const service = new InMemoryArtifactService();
+		await service.saveArtifact({
+			...base,
+			filename: "target.txt",
+			artifact: { text: "payload" },
+		});
+		await service.saveArtifact({
+			...base,
+			filename: "pointer.txt",
+			artifact: { text: "ignored" },
+		});
+		const artifactsMap = (service as any).artifacts as Map<string, any[]>;
+		const pointerEntry = Array.from(artifactsMap.entries()).find(([path]) =>
+			path.includes("pointer.txt"),
+		);
+		expect(pointerEntry).toBeTruthy();
+		pointerEntry![1][0] = {
+			fileData: {
+				fileUri:
+					"artifact://apps/app/users/user-1/sessions/session-1/artifacts/target.txt/versions/0",
+				mimeType: "text/plain",
+			},
+		};
+		await expect(
+			service.loadArtifact({ ...base, filename: "pointer.txt" }),
+		).resolves.toEqual({ text: "payload" });
+	});
+
+	it("deleteArtifact removes all versions for a filename", async () => {
+		const service = new InMemoryArtifactService();
+		await service.saveArtifact({
+			...base,
+			filename: "gone.txt",
+			artifact: { text: "v0" },
+		});
+		await service.saveArtifact({
+			...base,
+			filename: "gone.txt",
+			artifact: { text: "v1" },
+		});
+		await service.deleteArtifact({ ...base, filename: "gone.txt" });
+		expect(
+			await service.loadArtifact({ ...base, filename: "gone.txt" }),
+		).toBeNull();
+		expect(
+			await service.listVersions({ ...base, filename: "gone.txt" }),
+		).toEqual([]);
+	});
+
+	it("listArtifactKeys returns empty for unknown session paths", async () => {
+		const service = new InMemoryArtifactService();
+		await expect(
+			service.listArtifactKeys({
+				appName: "other",
+				userId: "u",
+				sessionId: "s",
+			}),
+		).resolves.toEqual([]);
+	});
 });

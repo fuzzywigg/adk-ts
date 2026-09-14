@@ -923,4 +923,341 @@ describe("DatabaseSessionService (sqlite :memory:)", () => {
 			),
 		).rejects.toThrow();
 	});
+
+	it("eventToStorageEvent coalesces falsy author and nullish actions", async () => {
+		const session = await service.createSession("app", "user", {}, "s-falsy");
+		const emptyAuthor = (service as any).eventToStorageEvent(session, {
+			id: "e-empty-author",
+			invocationId: "inv",
+			author: "",
+			content: { parts: [{ text: "x" }] },
+			actions: undefined,
+		});
+		expect(emptyAuthor.author).toBe("");
+		expect(emptyAuthor.actions).toBeNull();
+
+		const nullActions = (service as any).eventToStorageEvent(session, {
+			id: "e-null-actions",
+			invocationId: "inv",
+			author: undefined,
+			content: null,
+			actions: null,
+		});
+		expect(nullActions.author).toBe("");
+		expect(nullActions.content).toBeNull();
+		expect(nullActions.actions).toBeNull();
+
+		const withActions = (service as any).eventToStorageEvent(session, {
+			id: "e-with-actions",
+			invocationId: "inv",
+			author: "agent",
+			content: { parts: [{ text: "y" }] },
+			actions: new EventActions({ stateDelta: { k: 1 } }),
+		});
+		expect(withActions.author).toBe("agent");
+		expect(JSON.parse(withActions.actions).stateDelta).toEqual({ k: 1 });
+	});
+
+	it("storageEventToEvent coalesces falsy functionCalls/functionResponses arrays", () => {
+		const withNullBags = (service as any).storageEventToEvent({
+			id: "e-null-bags",
+			app_name: "app",
+			user_id: "user",
+			session_id: "s1",
+			invocation_id: "inv",
+			author: "agent",
+			branch: null,
+			timestamp: new Date(),
+			content: null,
+			actions: JSON.stringify({
+				functionCalls: null,
+				functionResponses: null,
+				hasTrailingCodeExecutionResult: null,
+			}),
+			long_running_tool_ids_json: null,
+			grounding_metadata: null,
+			partial: null,
+			turn_complete: null,
+			error_code: null,
+			error_message: null,
+			interrupted: null,
+		});
+		expect(withNullBags.getFunctionCalls()).toEqual([]);
+		expect(withNullBags.getFunctionResponses()).toEqual([]);
+		expect(withNullBags.hasTrailingCodeExecutionResult()).toBe(false);
+
+		const withZeroishBags = (service as any).storageEventToEvent({
+			id: "e-zeroish",
+			app_name: "app",
+			user_id: "user",
+			session_id: "s1",
+			invocation_id: "inv",
+			author: "agent",
+			branch: null,
+			timestamp: new Date(),
+			content: null,
+			actions: JSON.stringify({
+				functionCalls: 0,
+				functionResponses: "",
+				hasTrailingCodeExecutionResult: false,
+			}),
+			long_running_tool_ids_json: null,
+			grounding_metadata: null,
+			partial: null,
+			turn_complete: null,
+			error_code: null,
+			error_message: null,
+			interrupted: null,
+		});
+		expect(withZeroishBags.getFunctionCalls()).toEqual([]);
+		expect(withZeroishBags.getFunctionResponses()).toEqual([]);
+		expect(withZeroishBags.hasTrailingCodeExecutionResult()).toBe(false);
+
+		const withRealBags = (service as any).storageEventToEvent({
+			id: "e-real-bags",
+			app_name: "app",
+			user_id: "user",
+			session_id: "s1",
+			invocation_id: "inv",
+			author: "agent",
+			branch: null,
+			timestamp: new Date(),
+			content: null,
+			actions: JSON.stringify({
+				functionCalls: [{ name: "search", args: { q: 1 } }],
+				functionResponses: [{ name: "search", response: { ok: true } }],
+				hasTrailingCodeExecutionResult: true,
+			}),
+			long_running_tool_ids_json: null,
+			grounding_metadata: null,
+			partial: null,
+			turn_complete: null,
+			error_code: null,
+			error_message: null,
+			interrupted: null,
+		});
+		expect(withRealBags.getFunctionCalls()).toEqual([
+			{ name: "search", args: { q: 1 } },
+		]);
+		expect(withRealBags.getFunctionResponses()).toEqual([
+			{ name: "search", response: { ok: true } },
+		]);
+		expect(withRealBags.hasTrailingCodeExecutionResult()).toBe(true);
+	});
+
+	it("storageEventToEvent returns empty FC helpers when actions omit the keys", () => {
+		const event = (service as any).storageEventToEvent({
+			id: "e-no-fc-keys",
+			app_name: "app",
+			user_id: "user",
+			session_id: "s1",
+			invocation_id: "inv",
+			author: "agent",
+			branch: null,
+			timestamp: new Date(),
+			content: null,
+			actions: JSON.stringify({ stateDelta: {} }),
+			long_running_tool_ids_json: null,
+			grounding_metadata: null,
+			partial: null,
+			turn_complete: null,
+			error_code: null,
+			error_message: null,
+			interrupted: null,
+		});
+		expect(event.getFunctionCalls()).toEqual([]);
+		expect(event.getFunctionResponses()).toEqual([]);
+		expect(event.hasTrailingCodeExecutionResult()).toBe(false);
+	});
+
+	it("appendEvent without stateDelta still persists the event row", async () => {
+		const session = await service.createSession("app", "user", {}, "s-nostate");
+		const before = await service.getSession("app", "user", "s-nostate");
+		await service.appendEvent(
+			session,
+			new Event({
+				author: "agent",
+				content: { role: "model", parts: [{ text: "plain" }] },
+			}),
+		);
+		const after = await service.getSession("app", "user", "s-nostate");
+		expect(after?.events).toHaveLength(1);
+		expect(after?.events[0].content?.parts?.[0]?.text).toBe("plain");
+		expect(after?.state).toEqual(before?.state);
+	});
+
+	it("appendEvent with missing app/user state rows still persists session delta and event", async () => {
+		const session = await service.createSession(
+			"app-miss",
+			"user-miss",
+			{ [`${State.APP_PREFIX}a`]: 1, [`${State.USER_PREFIX}u`]: 2, local: 0 },
+			"s-miss",
+		);
+		const db = (service as any).db;
+		await db
+			.deleteFrom("app_states")
+			.where("app_name", "=", "app-miss")
+			.execute();
+		await db
+			.deleteFrom("user_states")
+			.where("app_name", "=", "app-miss")
+			.where("user_id", "=", "user-miss")
+			.execute();
+
+		await expect(
+			service.appendEvent(
+				session,
+				new Event({
+					author: "agent",
+					actions: new EventActions({
+						stateDelta: {
+							[`${State.APP_PREFIX}a`]: 9,
+							[`${State.USER_PREFIX}u`]: 8,
+							local: 7,
+						},
+					}),
+					content: { role: "model", parts: [{ text: "recreate" }] },
+				}),
+			),
+		).resolves.toBeTruthy();
+
+		const fetched = await service.getSession("app-miss", "user-miss", "s-miss");
+		expect(fetched?.events).toHaveLength(1);
+		expect(fetched?.state.local).toBe(7);
+		// updateTable on missing app/user rows is a no-op; prefixes are absent after delete
+		expect(fetched?.state[`${State.APP_PREFIX}a`]).toBeUndefined();
+		expect(fetched?.state[`${State.USER_PREFIX}u`]).toBeUndefined();
+	});
+
+	it("getSession recovers from corrupt JSON in session and event columns", async () => {
+		const session = await service.createSession(
+			"app",
+			"user",
+			{ ok: 1 },
+			"s-bad",
+		);
+		await service.appendEvent(
+			session,
+			new Event({
+				author: "agent",
+				content: { role: "model", parts: [{ text: "good" }] },
+			}),
+		);
+		const db = (service as any).db;
+		await db
+			.updateTable("sessions")
+			.set({ state: "{not-json" })
+			.where("app_name", "=", "app")
+			.where("user_id", "=", "user")
+			.where("id", "=", "s-bad")
+			.execute();
+		await db
+			.updateTable("events")
+			.set({
+				content: "{bad",
+				actions: "not-json",
+				grounding_metadata: "{x",
+				long_running_tool_ids_json: "nope",
+			})
+			.where("session_id", "=", "s-bad")
+			.execute();
+
+		const fetched = await service.getSession("app", "user", "s-bad");
+		expect(fetched?.id).toBe("s-bad");
+		expect(fetched?.events).toHaveLength(1);
+		expect(fetched?.events[0].content).toBeNull();
+		expect(fetched?.events[0].actions).toBeNull();
+	});
+
+	it("createSession generates unique ids under parallel creates without custom ids", async () => {
+		const created = await Promise.all(
+			Array.from({ length: 12 }, () =>
+				service.createSession("app-par", "user-par", { n: 1 }),
+			),
+		);
+		const ids = created.map((s) => s.id);
+		expect(new Set(ids).size).toBe(12);
+		const listed = await service.listSessions("app-par", "user-par");
+		expect(listed.sessions).toHaveLength(12);
+	});
+
+	it("getSession numRecentEvents limits rows; afterTimestamp alone rejects on sqlite bind", async () => {
+		const session = await service.createSession("app", "user", {}, "s-filter");
+		for (const ts of [1000, 2000, 3000, 4000, 5000]) {
+			await service.appendEvent(
+				session,
+				new Event({
+					author: "agent",
+					timestamp: ts,
+					content: { role: "model", parts: [{ text: `t-${ts}` }] },
+				}),
+			);
+		}
+
+		const recent = await service.getSession("app", "user", "s-filter", {
+			numRecentEvents: 2,
+		});
+		// sqlite LIMIT without ORDER BY returns earliest inserted rows; reverse restores chrono
+		expect(recent?.events.map((e) => e.content?.parts?.[0]?.text)).toEqual([
+			"t-2000",
+			"t-1000",
+		]);
+		expect(recent?.events).toHaveLength(2);
+
+		await expect(
+			service.getSession("app", "user", "s-filter", {
+				numRecentEvents: 3,
+				afterTimestamp: 2500,
+			}),
+		).rejects.toThrow(/SQLite3 can only bind/);
+	});
+
+	it("eventToStorageEvent serializes optional Event fields and clears them when absent", async () => {
+		const session = await service.createSession("app", "user", {}, "s-opt");
+		const fullEvent = new Event({
+			id: "full",
+			invocationId: "inv-full",
+			author: "agent",
+			branch: "main",
+			content: { role: "model", parts: [{ text: "hi" }] },
+			actions: new EventActions({ escalate: true }),
+			longRunningToolIds: new Set(["t1", "t2"]),
+			partial: true,
+		});
+		fullEvent.groundingMetadata = {
+			searchEntryPoint: { renderedContent: "g" },
+		} as any;
+		fullEvent.turnComplete = false;
+		fullEvent.errorCode = "E1";
+		fullEvent.errorMessage = "oops";
+		fullEvent.interrupted = true;
+
+		const full = (service as any).eventToStorageEvent(session, fullEvent);
+		expect(full.branch).toBe("main");
+		expect(JSON.parse(full.long_running_tool_ids_json).sort()).toEqual([
+			"t1",
+			"t2",
+		]);
+		expect(JSON.parse(full.grounding_metadata).searchEntryPoint).toEqual({
+			renderedContent: "g",
+		});
+		expect(full.partial).toBe(true);
+		expect(full.error_code).toBe("E1");
+		expect(full.interrupted).toBe(true);
+
+		const sparse = (service as any).eventToStorageEvent(session, {
+			id: "sparse",
+			invocationId: undefined,
+			author: "agent",
+		});
+		expect(sparse.invocation_id).toBe("");
+		expect(sparse.branch).toBeNull();
+		expect(sparse.long_running_tool_ids_json).toBeNull();
+		expect(sparse.grounding_metadata).toBeNull();
+		expect(sparse.partial).toBeNull();
+		expect(sparse.turn_complete).toBeNull();
+		expect(sparse.error_code).toBeNull();
+		expect(sparse.error_message).toBeNull();
+		expect(sparse.interrupted).toBeNull();
+	});
 });

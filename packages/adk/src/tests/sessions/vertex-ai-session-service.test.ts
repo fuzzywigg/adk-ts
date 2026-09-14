@@ -868,4 +868,180 @@ describe("VertexAiSessionService", () => {
 		expect(event.errorCode).toBe("ERR");
 		expect(event.errorMessage).toBe("failed");
 	});
+
+	it.each([
+		{ sessionState: null, label: "null" },
+		{ sessionState: undefined, label: "undefined" },
+		{ sessionState: 0, label: "0" },
+		{ sessionState: "", label: "empty-string" },
+		{ sessionState: false, label: "false" },
+	] as const)("getSession coalesces falsy sessionState ($label) to {}", async ({
+		sessionState,
+	}) => {
+		const { service, asyncRequest } = createService();
+		const response: Record<string, unknown> = {
+			name: "projects/p/locations/l/reasoningEngines/9/sessions/sess-state",
+			updateTime: "2024-01-01T00:00:00.000Z",
+		};
+		if (sessionState !== undefined) {
+			response.sessionState = sessionState;
+		}
+		asyncRequest
+			.mockResolvedValueOnce(response)
+			.mockResolvedValueOnce({ httpHeaders: {} });
+
+		const session = await service.getSession("app", "u", "sess-state");
+		expect(session?.state).toEqual({});
+		expect(session?.events).toEqual([]);
+	});
+
+	it("listSessions tolerates null sessions payload and malformed names", async () => {
+		const { service, asyncRequest } = createService();
+		asyncRequest.mockResolvedValueOnce({ sessions: null });
+		await expect(service.listSessions("app", "u")).resolves.toEqual({
+			sessions: [],
+		});
+
+		asyncRequest.mockResolvedValueOnce({
+			sessions: [
+				{
+					name: "no-slash-name",
+					userId: "u",
+					updateTime: "2024-01-01T00:00:00.000Z",
+					sessionState: { a: 1 },
+				},
+				{
+					name: "projects/p/locations/l/reasoningEngines/9/sessions/ok-id",
+					userId: "u",
+					updateTime: "2024-01-01T00:00:01.000Z",
+					sessionState: null,
+				},
+			],
+		});
+		const listed = await service.listSessions("app", "u");
+		expect(listed.sessions.map((s) => s.id)).toEqual([
+			"no-slash-name",
+			"ok-id",
+		]);
+		expect(listed.sessions[1].state).toEqual({});
+	});
+
+	it("waits for LRO when done is missing then false before completing", async () => {
+		vi.useFakeTimers();
+		const { service, asyncRequest } = createService({
+			agentEngineId: "9",
+			project: "p",
+			location: "l",
+		});
+		asyncRequest
+			.mockResolvedValueOnce({
+				name: "projects/p/locations/l/reasoningEngines/9/sessions/s1/operations/op",
+			})
+			.mockResolvedValueOnce({})
+			.mockResolvedValueOnce({ done: false })
+			.mockResolvedValueOnce({ done: true })
+			.mockResolvedValueOnce({
+				name: "projects/p/locations/l/reasoningEngines/9/sessions/s1",
+				updateTime: "2024-01-01T00:00:00.000Z",
+				sessionState: { ready: true },
+			});
+
+		const pending = service.createSession("app", "user", {});
+		await vi.advanceTimersByTimeAsync(1000);
+		await vi.advanceTimersByTimeAsync(1000);
+		const session = await pending;
+		expect(session.state).toEqual({ ready: true });
+		expect(asyncRequest).toHaveBeenCalledTimes(5);
+	});
+
+	it("fromApiEvent handles empty metadata and empty longRunningToolIds list", () => {
+		const { service } = createService();
+		const event = (service as any).fromApiEvent({
+			name: "projects/p/locations/l/reasoningEngines/9/sessions/s/events/eid",
+			invocationId: "inv",
+			author: "agent",
+			timestamp: "2024-01-01T00:00:00.500Z",
+			content: { parts: [{ text: "hi" }] },
+			eventMetadata: {
+				longRunningToolIds: [],
+			},
+			actions: {
+				stateDelta: { k: 1 },
+				artifactDelta: { f: 2 },
+				requestedAuthConfigs: { a: {} },
+			},
+		});
+		expect(event.id).toBe("eid");
+		expect(event.longRunningToolIds).toEqual(new Set());
+		expect(event.actions.stateDelta).toEqual({ k: 1 });
+		expect(event.partial).toBeUndefined();
+		expect(event.turnComplete).toBeUndefined();
+	});
+
+	it("convertEventToJson includes error, branch, interrupted and fractional timestamps", () => {
+		const { service } = createService();
+		const event = new Event({
+			id: "e1",
+			invocationId: "inv",
+			author: "agent",
+			branch: "b1",
+			timestamp: 1700000000.1234567,
+			partial: true,
+			content: { role: "model", parts: [{ text: "x" }] },
+			actions: new EventActions({
+				stateDelta: { a: 1 },
+				escalate: true,
+				transferToAgent: "child",
+			}),
+		});
+		event.errorCode = "E";
+		event.errorMessage = "msg";
+		event.interrupted = true;
+		event.turnComplete = true;
+
+		const payload = (service as any).convertEventToJson(event);
+		expect(payload.error_code).toBe("E");
+		expect(payload.error_message).toBe("msg");
+		expect(payload.event_metadata.interrupted).toBe(true);
+		expect(payload.event_metadata.branch).toBe("b1");
+		expect(payload.event_metadata.partial).toBe(true);
+		expect(payload.event_metadata.turn_complete).toBe(true);
+		expect(payload.actions.transfer_agent).toBe("child");
+		expect(payload.timestamp).toEqual({
+			seconds: 1700000000,
+			nanos: expect.any(Number),
+		});
+		expect(payload.timestamp.nanos).toBeGreaterThan(0);
+	});
+
+	it("appendEvent posts convertEventToJson to the :appendEvent path", async () => {
+		const { service, asyncRequest } = createService();
+		const session = {
+			appName: "app",
+			userId: "u",
+			id: "sess-append",
+			state: {},
+			events: [],
+			lastUpdateTime: 0,
+		};
+		asyncRequest.mockResolvedValueOnce({});
+
+		const event = new Event({
+			author: "agent",
+			content: { role: "model", parts: [{ text: "echo" }] },
+		});
+		const result = await service.appendEvent(session as any, event);
+		expect(result).toBe(event);
+		expect(asyncRequest).toHaveBeenCalledWith(
+			expect.objectContaining({
+				http_method: "POST",
+				path: "reasoningEngines/9/sessions/sess-append:appendEvent",
+				request_dict: expect.objectContaining({
+					author: "agent",
+					content: { role: "model", parts: [{ text: "echo" }] },
+				}),
+			}),
+		);
+		expect(session.events).toHaveLength(1);
+	});
 });

@@ -309,4 +309,114 @@ describe("PlanReActPlanner", () => {
 		expect(parts?.[1].functionCall?.name).toBe("search");
 		expect(parts?.some((p) => p.text === "")).toBe(false);
 	});
+
+	it("_splitByLastPattern returns [text, ''] when separator is missing", () => {
+		expect(
+			(planner as any)._splitByLastPattern(
+				"no marker here",
+				"/*FINAL_ANSWER*/",
+			),
+		).toEqual(["no marker here", ""]);
+		expect(
+			(planner as any)._splitByLastPattern("", "/*FINAL_ANSWER*/"),
+		).toEqual(["", ""]);
+		expect(
+			(planner as any)._splitByLastPattern("short", "much-longer-separator"),
+		).toEqual(["short", ""]);
+	});
+
+	it("_splitByLastPattern splits on the last separator occurrence", () => {
+		expect(
+			(planner as any)._splitByLastPattern(
+				"a /*FINAL_ANSWER*/ b /*FINAL_ANSWER*/ c",
+				"/*FINAL_ANSWER*/",
+			),
+		).toEqual(["a /*FINAL_ANSWER*/ b /*FINAL_ANSWER*/", " c"]);
+	});
+
+	it("_handleNonFunctionCallParts preserves non-text parts without thought", () => {
+		const preserved: any[] = [];
+		(planner as any)._handleNonFunctionCallParts(
+			{ inlineData: { data: "x", mimeType: "text/plain" } },
+			preserved,
+		);
+		expect(preserved).toHaveLength(1);
+		expect(preserved[0].thought).toBeUndefined();
+		expect(preserved[0].inlineData?.data).toBe("x");
+	});
+
+	it("_markAsThought is a no-op when text is missing", () => {
+		const part: any = { functionCall: { name: "x", args: {} } };
+		(planner as any)._markAsThought(part);
+		expect(part.thought).toBeUndefined();
+	});
+
+	it("processes mixed planning/reasoning/action/replanning/final-answer with FC groups", () => {
+		const parts = planner.processPlanningResponse({} as any, [
+			{ text: "/*PLANNING*/ step 1" },
+			{ text: "/*REASONING*/ observe" },
+			{ text: "/*ACTION*/ prepare" },
+			{ text: "/*REPLANNING*/ revise" },
+			{
+				text: "/*REASONING*/ almost /*FINAL_ANSWER*/ done-answer",
+			},
+			{ functionCall: { name: "", args: {} } },
+			{ functionCall: { name: "tool_a", args: { n: 1 } } },
+			{ functionCall: { name: "tool_b", args: { n: 2 } } },
+			{ text: "trailing ignored" },
+			{ functionCall: { name: "late", args: {} } },
+		]);
+
+		expect(parts?.map((p) => p.functionCall?.name || p.text)).toEqual([
+			"/*PLANNING*/ step 1",
+			"/*REASONING*/ observe",
+			"/*ACTION*/ prepare",
+			"/*REPLANNING*/ revise",
+			"/*REASONING*/ almost /*FINAL_ANSWER*/",
+			" done-answer",
+			"tool_a",
+			"tool_b",
+		]);
+		expect(parts?.slice(0, 5).every((p) => p.thought === true)).toBe(true);
+		expect(parts?.[5].thought).toBeUndefined();
+	});
+
+	it("returns undefined for empty and nullish responseParts", () => {
+		expect(planner.processPlanningResponse({} as any, [])).toBeUndefined();
+		expect(
+			planner.processPlanningResponse({} as any, undefined as any),
+		).toBeUndefined();
+		expect(
+			planner.processPlanningResponse({} as any, null as any),
+		).toBeUndefined();
+	});
+
+	it("buildPlanningInstruction includes all required tags and preambles", () => {
+		const instruction = planner.buildPlanningInstruction({} as any, {} as any);
+		for (const tag of [
+			"/*PLANNING*/",
+			"/*REPLANNING*/",
+			"/*REASONING*/",
+			"/*ACTION*/",
+			"/*FINAL_ANSWER*/",
+		]) {
+			expect(instruction).toContain(tag);
+		}
+		expect(instruction).toContain("Available Tools");
+		expect(instruction).toContain("VERY IMPORTANT instruction");
+		expect(instruction).toContain("revised plan");
+	});
+
+	it("stops FC group collection on the first non-function-call part", () => {
+		const parts = planner.processPlanningResponse({} as any, [
+			{ text: "/*ACTION*/ go" },
+			{ functionCall: { name: "first", args: {} } },
+			{ text: "interrupt" },
+			{ functionCall: { name: "second", args: {} } },
+		]);
+		expect(parts?.map((p) => p.functionCall?.name || p.text)).toEqual([
+			"/*ACTION*/ go",
+			"first",
+		]);
+	});
 });

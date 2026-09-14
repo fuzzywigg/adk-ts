@@ -1250,5 +1250,525 @@ describe("Event Compaction", () => {
 			expect(compacted.some((e) => e.invocationId === "inv-2")).toBe(false);
 			expect(compacted.some((e) => e.actions?.compaction)).toBe(false);
 		});
+
+		it("excludes timestamp-0 events from the invocation map (0 never exceeds current)", async () => {
+			const config: EventsCompactionConfig = {
+				compactionInterval: 1,
+				overlapSize: 0,
+			};
+
+			await sessionService.appendEvent(
+				session,
+				new Event({
+					invocationId: "zero-ts",
+					author: "agent",
+					content: { parts: [{ text: "at-zero" }] },
+					timestamp: 0,
+				}),
+			);
+			await sessionService.appendEvent(
+				session,
+				new Event({
+					invocationId: "later",
+					author: "agent",
+					content: { parts: [{ text: "later" }] },
+					timestamp: 10,
+				}),
+			);
+
+			session = await refreshSession(session);
+			await runCompactionForSlidingWindow(
+				config,
+				session,
+				sessionService,
+				mockSummarizer,
+			);
+
+			expect(mockSummarizer.maybeSummarizeEvents).toHaveBeenCalledTimes(1);
+			const compacted = (mockSummarizer.maybeSummarizeEvents as any).mock
+				.calls[0][0] as Event[];
+			expect(compacted.map((e) => e.invocationId)).toEqual(["later"]);
+			expect(compacted.some((e) => e.invocationId === "zero-ts")).toBe(false);
+		});
+
+		it("returns early when sliceEventsByInvocationRange yields no non-compaction events", async () => {
+			const config: EventsCompactionConfig = {
+				compactionInterval: 2,
+				overlapSize: 0,
+			};
+
+			const mapEvents = [
+				new Event({
+					invocationId: "a",
+					author: "agent",
+					content: { parts: [{ text: "a" }] },
+					timestamp: 100,
+				}),
+				new Event({
+					invocationId: "b",
+					author: "agent",
+					content: { parts: [{ text: "b" }] },
+					timestamp: 200,
+				}),
+			];
+			const emptySliceEvents = [
+				new Event({
+					invocationId: "a",
+					author: "user",
+					timestamp: 50,
+					actions: new EventActions({
+						compaction: {
+							startTimestamp: 1,
+							endTimestamp: 2,
+							compactedContent: {
+								role: "model",
+								parts: [{ text: "carrier-a" }],
+							},
+						},
+					}),
+				}),
+				new Event({
+					invocationId: "b",
+					author: "user",
+					timestamp: 60,
+					actions: new EventActions({
+						compaction: {
+							startTimestamp: 1,
+							endTimestamp: 2,
+							compactedContent: {
+								role: "model",
+								parts: [{ text: "carrier-b" }],
+							},
+						},
+					}),
+				}),
+			];
+
+			let reads = 0;
+			Object.defineProperty(session, "events", {
+				configurable: true,
+				get() {
+					reads += 1;
+					// !events + .length + findLast + buildMap; slice sees only carriers
+					return reads <= 4 ? mapEvents : emptySliceEvents;
+				},
+			});
+
+			await runCompactionForSlidingWindow(
+				config,
+				session,
+				sessionService,
+				mockSummarizer,
+			);
+
+			expect(mockSummarizer.maybeSummarizeEvents).not.toHaveBeenCalled();
+			expect(reads).toBeGreaterThanOrEqual(5);
+		});
+
+		it("returns empty when firstIndex > lastIndex via divergent event list for slice", async () => {
+			const config: EventsCompactionConfig = {
+				compactionInterval: 2,
+				overlapSize: 0,
+			};
+
+			const mapEvents = [
+				new Event({
+					invocationId: "start-id",
+					author: "agent",
+					content: { parts: [{ text: "start" }] },
+					timestamp: 100,
+				}),
+				new Event({
+					invocationId: "end-id",
+					author: "agent",
+					content: { parts: [{ text: "end" }] },
+					timestamp: 200,
+				}),
+			];
+			const invertedEvents = [
+				new Event({
+					invocationId: "end-id",
+					author: "agent",
+					content: { parts: [{ text: "end-first" }] },
+					timestamp: 50,
+				}),
+				new Event({
+					invocationId: "start-id",
+					author: "agent",
+					content: { parts: [{ text: "start-second" }] },
+					timestamp: 150,
+				}),
+			];
+
+			let reads = 0;
+			Object.defineProperty(session, "events", {
+				configurable: true,
+				get() {
+					reads += 1;
+					// !events + .length + findLast + buildMap use ordered mapEvents; slice sees inverted
+					return reads <= 4 ? mapEvents : invertedEvents;
+				},
+			});
+
+			await runCompactionForSlidingWindow(
+				config,
+				session,
+				sessionService,
+				mockSummarizer,
+			);
+
+			expect(mockSummarizer.maybeSummarizeEvents).not.toHaveBeenCalled();
+			expect(reads).toBeGreaterThanOrEqual(5);
+		});
+
+		it("propagates summarizer failures without appending", async () => {
+			const config: EventsCompactionConfig = {
+				compactionInterval: 2,
+				overlapSize: 0,
+			};
+			mockSummarizer.maybeSummarizeEvents = vi
+				.fn()
+				.mockRejectedValue(new Error("summarizer boom"));
+
+			for (let i = 0; i < 2; i++) {
+				await sessionService.appendEvent(
+					session,
+					new Event({
+						invocationId: `inv-${i}`,
+						author: "agent",
+						content: { parts: [{ text: `m${i}` }] },
+						timestamp: 1000 + i,
+					}),
+				);
+			}
+			session = await refreshSession(session);
+
+			await expect(
+				runCompactionForSlidingWindow(
+					config,
+					session,
+					sessionService,
+					mockSummarizer,
+				),
+			).rejects.toThrow("summarizer boom");
+
+			session = await refreshSession(session);
+			expect(session.events.some((e) => e.actions?.compaction)).toBe(false);
+		});
+
+		it("propagates sessionService.appendEvent failures after summarizer success", async () => {
+			const config: EventsCompactionConfig = {
+				compactionInterval: 2,
+				overlapSize: 0,
+			};
+			for (let i = 0; i < 2; i++) {
+				await sessionService.appendEvent(
+					session,
+					new Event({
+						invocationId: `inv-${i}`,
+						author: "agent",
+						content: { parts: [{ text: `m${i}` }] },
+						timestamp: 2000 + i,
+					}),
+				);
+			}
+			session = await refreshSession(session);
+
+			const appendSpy = vi
+				.spyOn(sessionService, "appendEvent")
+				.mockRejectedValueOnce(new Error("append failed"));
+
+			await expect(
+				runCompactionForSlidingWindow(
+					config,
+					session,
+					sessionService,
+					mockSummarizer,
+				),
+			).rejects.toThrow("append failed");
+
+			expect(mockSummarizer.maybeSummarizeEvents).toHaveBeenCalledTimes(1);
+			appendSpy.mockRestore();
+		});
+
+		it("skips append when summarizer returns undefined", async () => {
+			const config: EventsCompactionConfig = {
+				compactionInterval: 2,
+				overlapSize: 0,
+			};
+			mockSummarizer.maybeSummarizeEvents = vi
+				.fn()
+				.mockResolvedValue(undefined);
+
+			for (let i = 0; i < 2; i++) {
+				await sessionService.appendEvent(
+					session,
+					new Event({
+						invocationId: `inv-${i}`,
+						author: "agent",
+						content: { parts: [{ text: `m${i}` }] },
+						timestamp: 3000 + i,
+					}),
+				);
+			}
+			session = await refreshSession(session);
+			const beforeCount = session.events.length;
+
+			await runCompactionForSlidingWindow(
+				config,
+				session,
+				sessionService,
+				mockSummarizer,
+			);
+
+			session = await refreshSession(session);
+			expect(session.events).toHaveLength(beforeCount);
+			expect(session.events.some((e) => e.actions?.compaction)).toBe(false);
+		});
+
+		it.each([
+			{ interval: 1, overlap: 0, invocations: 1, expectCall: true },
+			{ interval: 1, overlap: 1, invocations: 2, expectCall: true },
+			{ interval: 2, overlap: 0, invocations: 1, expectCall: false },
+			{ interval: 2, overlap: 0, invocations: 2, expectCall: true },
+			{ interval: 2, overlap: 1, invocations: 2, expectCall: true },
+			{ interval: 3, overlap: 0, invocations: 2, expectCall: false },
+			{ interval: 3, overlap: 0, invocations: 3, expectCall: true },
+			{ interval: 3, overlap: 2, invocations: 3, expectCall: true },
+			{ interval: 4, overlap: 3, invocations: 4, expectCall: true },
+			{ interval: 5, overlap: 0, invocations: 4, expectCall: false },
+			{ interval: 5, overlap: 1, invocations: 5, expectCall: true },
+			{ interval: 1, overlap: 0, invocations: 3, expectCall: true },
+		] as const)("interval=$interval overlap=$overlap with $invocations invocations → call=$expectCall", async ({
+			interval,
+			overlap,
+			invocations,
+			expectCall,
+		}) => {
+			session = await sessionService.createSession(
+				"test-app",
+				`user-${interval}-${overlap}-${invocations}`,
+			);
+			const config: EventsCompactionConfig = {
+				compactionInterval: interval,
+				overlapSize: overlap,
+			};
+
+			for (let i = 0; i < invocations; i++) {
+				await sessionService.appendEvent(
+					session,
+					new Event({
+						invocationId: `inv-${i}`,
+						author: "agent",
+						content: { parts: [{ text: `m${i}` }] },
+						timestamp: 5000 + i * 10,
+					}),
+				);
+			}
+			session = await refreshSession(session);
+
+			await runCompactionForSlidingWindow(
+				config,
+				session,
+				sessionService,
+				mockSummarizer,
+			);
+
+			if (expectCall) {
+				expect(mockSummarizer.maybeSummarizeEvents).toHaveBeenCalledTimes(1);
+				const compacted = (mockSummarizer.maybeSummarizeEvents as any).mock
+					.calls[0][0] as Event[];
+				expect(compacted.length).toBeGreaterThan(0);
+				expect(compacted.every((e) => !e.actions?.compaction)).toBe(true);
+			} else {
+				expect(mockSummarizer.maybeSummarizeEvents).not.toHaveBeenCalled();
+			}
+		});
+
+		it("compacts when prior compaction endTimestamp is 0 and later events are strictly newer", async () => {
+			const config: EventsCompactionConfig = {
+				compactionInterval: 2,
+				overlapSize: 0,
+			};
+
+			await sessionService.appendEvent(
+				session,
+				new Event({
+					invocationId: "prior",
+					author: "user",
+					timestamp: 0,
+					actions: new EventActions({
+						compaction: {
+							startTimestamp: 0,
+							endTimestamp: 0,
+							compactedContent: {
+								role: "model",
+								parts: [{ text: "prior empty end" }],
+							},
+						},
+					}),
+				}),
+			);
+			await sessionService.appendEvent(
+				session,
+				new Event({
+					invocationId: "n0",
+					author: "agent",
+					content: { parts: [{ text: "one" }] },
+					timestamp: 1,
+				}),
+			);
+			await sessionService.appendEvent(
+				session,
+				new Event({
+					invocationId: "n1",
+					author: "agent",
+					content: { parts: [{ text: "two" }] },
+					timestamp: 2,
+				}),
+			);
+
+			session = await refreshSession(session);
+			await runCompactionForSlidingWindow(
+				config,
+				session,
+				sessionService,
+				mockSummarizer,
+			);
+
+			expect(mockSummarizer.maybeSummarizeEvents).toHaveBeenCalledTimes(1);
+			const compacted = (mockSummarizer.maybeSummarizeEvents as any).mock
+				.calls[0][0] as Event[];
+			expect(compacted.map((e) => e.invocationId)).toEqual(["n0", "n1"]);
+		});
+
+		it("includes overlap invocations that sit before the new window", async () => {
+			const config: EventsCompactionConfig = {
+				compactionInterval: 2,
+				overlapSize: 3,
+			};
+
+			for (let i = 0; i < 6; i++) {
+				await sessionService.appendEvent(
+					session,
+					new Event({
+						invocationId: `hist-${i}`,
+						author: "agent",
+						content: { parts: [{ text: `h${i}` }] },
+						timestamp: 100 + i,
+					}),
+				);
+			}
+			await sessionService.appendEvent(
+				session,
+				new Event({
+					invocationId: "c1",
+					author: "user",
+					timestamp: 150,
+					actions: new EventActions({
+						compaction: {
+							startTimestamp: 100,
+							endTimestamp: 103,
+							compactedContent: {
+								role: "model",
+								parts: [{ text: "hist-0..3" }],
+							},
+						},
+					}),
+				}),
+			);
+			await sessionService.appendEvent(
+				session,
+				new Event({
+					invocationId: "new-a",
+					author: "agent",
+					content: { parts: [{ text: "na" }] },
+					timestamp: 200,
+				}),
+			);
+			await sessionService.appendEvent(
+				session,
+				new Event({
+					invocationId: "new-b",
+					author: "agent",
+					content: { parts: [{ text: "nb" }] },
+					timestamp: 210,
+				}),
+			);
+
+			session = await refreshSession(session);
+			await runCompactionForSlidingWindow(
+				config,
+				session,
+				sessionService,
+				mockSummarizer,
+			);
+
+			const compacted = (mockSummarizer.maybeSummarizeEvents as any).mock
+				.calls[0][0] as Event[];
+			// firstNew=hist-4 (idx 4); overlapSize 3 → startIdx=1 → hist-1..new-b
+			expect(compacted.map((e) => e.invocationId)).toEqual([
+				"hist-1",
+				"hist-2",
+				"hist-3",
+				"hist-4",
+				"hist-5",
+				"new-a",
+				"new-b",
+			]);
+		});
+
+		it("ignores events without invocationId when building the invocation map", async () => {
+			const config: EventsCompactionConfig = {
+				compactionInterval: 2,
+				overlapSize: 0,
+			};
+
+			await sessionService.appendEvent(
+				session,
+				new Event({
+					invocationId: "",
+					author: "agent",
+					content: { parts: [{ text: "no-id" }] },
+					timestamp: 10,
+				}),
+			);
+			await sessionService.appendEvent(
+				session,
+				new Event({
+					invocationId: "keep-0",
+					author: "agent",
+					content: { parts: [{ text: "k0" }] },
+					timestamp: 20,
+				}),
+			);
+			await sessionService.appendEvent(
+				session,
+				new Event({
+					invocationId: "keep-1",
+					author: "agent",
+					content: { parts: [{ text: "k1" }] },
+					timestamp: 30,
+				}),
+			);
+
+			session = await refreshSession(session);
+			await runCompactionForSlidingWindow(
+				config,
+				session,
+				sessionService,
+				mockSummarizer,
+			);
+
+			const compacted = (mockSummarizer.maybeSummarizeEvents as any).mock
+				.calls[0][0] as Event[];
+			expect(compacted.map((e) => e.invocationId)).toEqual([
+				"keep-0",
+				"keep-1",
+			]);
+			expect(
+				compacted.some((e) => e.content?.parts?.[0]?.text === "no-id"),
+			).toBe(false);
+		});
 	});
 });
