@@ -140,7 +140,7 @@ describe('shared-memory leftover: p.text || "" on memory parts', () => {
 		{
 			label: "multiple empty coalesces",
 			memoryParts: [{}, { text: "" }, {}],
-			expectedSuffix: "[past] said:  ",
+			expectedSuffix: "[past] said:   ",
 		},
 		{
 			label: "normal text",

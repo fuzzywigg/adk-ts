@@ -488,10 +488,11 @@ describe("base-llm-flow leftover: secondary tool dedup mystery shapes", () => {
 	}> = [
 		{
 			label: "keeps mystery objects without name",
-			tools: [{ mystery: true }, { weird: 1 }, null],
+			tools: [{ mystery: true }, { weird: 1 }, { orphan: true }],
 			assert: (tools) => {
 				expect(tools.some((t) => t?.mystery)).toBe(true);
 				expect(tools.some((t) => t?.weird === 1)).toBe(true);
+				expect(tools.some((t) => t?.orphan)).toBe(true);
 			},
 		},
 		{
@@ -530,7 +531,8 @@ describe("base-llm-flow leftover: secondary tool dedup mystery shapes", () => {
 			},
 		},
 		{
-			label: "drops functionDeclarations tool when all fds filtered empty",
+			label:
+				"named tool skipped when name already seen via functionDeclarations",
 			tools: [
 				{
 					functionDeclarations: [{ name: "x" }, { name: "x" }],
@@ -538,7 +540,12 @@ describe("base-llm-flow leftover: secondary tool dedup mystery shapes", () => {
 				{ name: "x" },
 			],
 			assert: (tools) => {
-				expect(tools.some((t) => t?.name === "x")).toBe(true);
+				expect(
+					tools.some((t) =>
+						t?.functionDeclarations?.some((fd: any) => fd?.name === "x"),
+					),
+				).toBe(true);
+				expect(tools.some((t) => t?.name === "x")).toBe(false);
 			},
 		},
 		{
