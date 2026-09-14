@@ -213,4 +213,53 @@ describe("AgentTransferLlmRequestProcessor", () => {
 		}
 		expect(events).toEqual([]);
 	});
+
+	it("omits peers but still mentions parent when only disallowTransferToPeers is set", async () => {
+		const request = new LlmRequest();
+		const parent = new StubAgent("parent", "Parent agent");
+		const peer = new StubAgent("peer", "Peer agent");
+		const agent = new StubAgent("child", "Child agent");
+		(agent as any).disallowTransferToPeers = true;
+		parent.subAgents = [agent, peer];
+		agent.parentAgent = parent;
+		peer.parentAgent = parent;
+		agent.subAgents = [new StubAgent("leaf", "Leaf")];
+
+		for await (const _ of requestProcessor.runAsync(
+			makeContext(agent),
+			request,
+		)) {
+		}
+
+		expect(request.config?.systemInstruction).toContain(
+			"Your parent agent is parent",
+		);
+		expect(request.config?.systemInstruction).toContain("leaf");
+		expect(request.config?.systemInstruction).not.toContain("Peer agent");
+	});
+
+	it("omits parent blurb but still lists peers when only disallowTransferToParent is set", async () => {
+		const request = new LlmRequest();
+		const parent = new StubAgent("parent", "Parent agent");
+		const peer = new StubAgent("peer", "Peer agent");
+		const agent = new StubAgent("child", "Child agent");
+		(agent as any).disallowTransferToParent = true;
+		parent.subAgents = [agent, peer];
+		agent.parentAgent = parent;
+		peer.parentAgent = parent;
+		agent.subAgents = [new StubAgent("leaf", "Leaf")];
+
+		for await (const _ of requestProcessor.runAsync(
+			makeContext(agent),
+			request,
+		)) {
+		}
+
+		expect(request.config?.systemInstruction).not.toContain(
+			"Your parent agent is parent",
+		);
+		expect(request.config?.systemInstruction).toContain("peer");
+		expect(request.config?.systemInstruction).toContain("Peer agent");
+		expect(request.config?.systemInstruction).toContain("leaf");
+	});
 });

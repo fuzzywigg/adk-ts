@@ -379,4 +379,18 @@ describe("McpSamplingHandler", () => {
 			message: expect.stringContaining("Invalid response generated"),
 		});
 	});
+
+	it("rejects when maxTokens is missing after schema validation bypass", async () => {
+		const handler = new McpSamplingHandler(async () => "ok");
+		const request = {
+			method: "sampling/createMessage",
+			params: {
+				messages: [{ role: "user", content: { type: "text", text: "hi" } }],
+			},
+		} as any;
+		await expect(handler.handleSamplingRequest(request)).rejects.toMatchObject({
+			type: McpErrorType.INVALID_REQUEST_ERROR,
+			message: expect.stringMatching(/Invalid sampling request|maxTokens/),
+		});
+	});
 });

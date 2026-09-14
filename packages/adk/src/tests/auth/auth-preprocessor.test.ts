@@ -1702,3 +1702,105 @@ describe("auth requestProcessor.parseAndStoreAuthResponse leftover edges", () =>
 		expect(state["temp:http-cred"]).toEqual({ token: "bearer-x" });
 	});
 });
+
+describe("auth requestProcessor trailing non-user continue", () => {
+	it("continues past trailing non-user and falsy-author events before EUC resume", async () => {
+		const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+		handleFunctionCallsAsyncMock.mockResolvedValue(null);
+
+		const originalCall = new Event({
+			author: "auth-agent",
+			content: {
+				role: "model",
+				parts: [
+					{
+						functionCall: {
+							id: "tool-trailing",
+							name: "secure_api",
+							args: {},
+						},
+					},
+				],
+			},
+		});
+		const eucCall = new Event({
+			author: "auth-agent",
+			content: {
+				role: "model",
+				parts: [
+					{
+						functionCall: {
+							id: "euc-trailing",
+							name: REQUEST_EUC_FUNCTION_CALL_NAME,
+							args: JSON.stringify({
+								function_call_id: "tool-trailing",
+							}) as any,
+						},
+					},
+				],
+			},
+		});
+		const eucResponse = new Event({
+			author: "user",
+			content: {
+				role: "user",
+				parts: [
+					{
+						functionResponse: {
+							id: "euc-trailing",
+							name: REQUEST_EUC_FUNCTION_CALL_NAME,
+							response: JSON.stringify({
+								authScheme: { type: "apiKey" },
+								rawAuthCredential: { apiKey: "k" },
+							}),
+						},
+					},
+				],
+			},
+		});
+		const trailingAssistant = new Event({
+			author: "assistant",
+			content: {
+				role: "model",
+				parts: [{ text: "later model noise" }],
+			},
+		});
+		const trailingEmptyAuthor = new Event({
+			author: "user",
+			content: {
+				role: "user",
+				parts: [{ text: "should-be-skipped" }],
+			},
+		});
+		(trailingEmptyAuthor as { author: string }).author = "";
+
+		const tool = { name: "secure_api" };
+		const events = await collect(
+			requestProcessor.runAsync(
+				baseCtx({
+					agent: {
+						name: "auth-agent",
+						canonicalTools: async () => [tool],
+					},
+					events: [
+						originalCall,
+						eucCall,
+						eucResponse,
+						trailingEmptyAuthor,
+						trailingAssistant,
+					],
+				}),
+				new LlmRequest(),
+			),
+		);
+
+		expect(events).toEqual([]);
+		expect(handleFunctionCallsAsyncMock).toHaveBeenCalledWith(
+			expect.anything(),
+			originalCall,
+			{ secure_api: tool },
+			new Set(["tool-trailing"]),
+		);
+		warn.mockRestore();
+	});
+});

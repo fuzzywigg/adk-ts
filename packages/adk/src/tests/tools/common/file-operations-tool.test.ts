@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { FileOperationsTool } from "../../../tools/common/file-operations-tool";
 import type { ToolContext } from "../../../tools/tool-context";
 
@@ -472,5 +472,104 @@ describe("FileOperationsTool", () => {
 			makeContext(),
 		);
 		expect(readResult.data).toBe("new");
+	});
+
+	it("appends an empty string when content is omitted", async () => {
+		await tool.runAsync(
+			{ operation: "write", filepath: "append-empty.txt", content: "base" },
+			makeContext(),
+		);
+		await expect(
+			tool.runAsync(
+				{ operation: "append", filepath: "append-empty.txt" },
+				makeContext(),
+			),
+		).resolves.toEqual({ success: true });
+		const readResult = await tool.runAsync(
+			{ operation: "read", filepath: "append-empty.txt" },
+			makeContext(),
+		);
+		expect(readResult.data).toBe("base");
+	});
+
+	it("stringifies non-Error failures from private fs catches", async () => {
+		const readSpy = vi
+			.spyOn(fs, "readFile")
+			.mockRejectedValueOnce("disk-read-boom");
+		await expect(
+			tool.runAsync({ operation: "read", filepath: "x.txt" }, makeContext()),
+		).resolves.toEqual({
+			success: false,
+			error: "Failed to read file: disk-read-boom",
+		});
+		readSpy.mockRestore();
+
+		const writeSpy = vi
+			.spyOn(fs, "writeFile")
+			.mockRejectedValueOnce("disk-write-boom");
+		await expect(
+			tool.runAsync(
+				{ operation: "write", filepath: "w.txt", content: "x" },
+				makeContext(),
+			),
+		).resolves.toEqual({
+			success: false,
+			error: "Failed to write to file: disk-write-boom",
+		});
+		writeSpy.mockRestore();
+
+		await tool.runAsync(
+			{ operation: "write", filepath: "a.txt", content: "seed" },
+			makeContext(),
+		);
+		const appendSpy = vi
+			.spyOn(fs, "appendFile")
+			.mockRejectedValueOnce("disk-append-boom");
+		await expect(
+			tool.runAsync(
+				{ operation: "append", filepath: "a.txt", content: "!" },
+				makeContext(),
+			),
+		).resolves.toEqual({
+			success: false,
+			error: "Failed to append to file: disk-append-boom",
+		});
+		appendSpy.mockRestore();
+
+		const unlinkSpy = vi
+			.spyOn(fs, "unlink")
+			.mockRejectedValueOnce("disk-delete-boom");
+		await expect(
+			tool.runAsync({ operation: "delete", filepath: "a.txt" }, makeContext()),
+		).resolves.toEqual({
+			success: false,
+			error: "Failed to delete file: disk-delete-boom",
+		});
+		unlinkSpy.mockRestore();
+
+		const readdirSpy = vi
+			.spyOn(fs, "readdir")
+			.mockRejectedValueOnce("disk-list-boom");
+		await expect(
+			tool.runAsync({ operation: "list", filepath: "." }, makeContext()),
+		).resolves.toEqual({
+			success: false,
+			error: "Failed to list directory: disk-list-boom",
+		});
+		readdirSpy.mockRestore();
+
+		const mkdirSpy = vi
+			.spyOn(fs, "mkdir")
+			.mockRejectedValueOnce("disk-mkdir-boom");
+		await expect(
+			tool.runAsync(
+				{ operation: "mkdir", filepath: "boom-dir" },
+				makeContext(),
+			),
+		).resolves.toEqual({
+			success: false,
+			error: "Failed to create directory: disk-mkdir-boom",
+		});
+		mkdirSpy.mockRestore();
 	});
 });

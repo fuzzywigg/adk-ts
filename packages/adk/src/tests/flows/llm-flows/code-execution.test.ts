@@ -2456,4 +2456,54 @@ describe("requestProcessor and responseProcessor additional edges", () => {
 		expect(event.actions.stateDelta).toEqual(ctx.getStateDelta());
 		expect(Object.keys(event.actions.stateDelta).length).toBeGreaterThan(0);
 	});
+
+	it("initializes undefined contents when preprocessing a pre-seeded csv file", async () => {
+		const executor = new StubExecutor({
+			optimizeDataFile: true,
+			codeBlockDelimiters: [["```python\n", "\n```"]],
+			executionResultDelimiters: ["```tool_outputs\n", "\n```"],
+		});
+		executor.executeCode = vi.fn(async () => ({
+			stdout: "ok",
+			stderr: "",
+			outputFiles: [],
+		}));
+		const agent = new LlmAgent({
+			name: "coder",
+			model: "gpt-4o",
+			codeExecutor: executor,
+		});
+		const state = State.create({}, {});
+		const ctx = new CodeExecutorContext(state);
+		ctx.addInputFiles([
+			{
+				name: "data_1_1.csv",
+				content: btoa("a,b\n1,2"),
+				mimeType: "text/csv",
+			},
+		]);
+
+		const llmRequest = new LlmRequest({ model: "gpt-4o" });
+		(llmRequest as any).contents = undefined;
+
+		const events = await collect(
+			requestProcessor.runAsync(
+				makeInvocation(agent, {
+					session: {
+						id: "s1",
+						appName: "app",
+						userId: "u",
+						state,
+						events: [],
+					},
+				}),
+				llmRequest,
+			),
+		);
+
+		expect(executor.executeCode).toHaveBeenCalled();
+		expect(Array.isArray(llmRequest.contents)).toBe(true);
+		expect(llmRequest.contents!.length).toBeGreaterThan(0);
+		expect(events.length).toBeGreaterThan(0);
+	});
 });

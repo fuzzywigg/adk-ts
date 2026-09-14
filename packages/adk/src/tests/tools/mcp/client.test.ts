@@ -437,4 +437,78 @@ describe("McpClientService.reinitialize / close / sampling handlers", () => {
 		});
 		errorSpy.mockRestore();
 	});
+
+	it("cleanupResources logs when transport.close throws after client cleanup", async () => {
+		const service = new McpClientService(stdioConfig());
+		await service.initialize();
+		transportClose.mockRejectedValueOnce(new Error("transport close boom"));
+		const errorSpy = vi
+			.spyOn((service as any).logger, "error")
+			.mockImplementation(() => {});
+
+		await expect(service.close()).resolves.toBeUndefined();
+		expect(errorSpy).toHaveBeenCalledWith(
+			"Error cleaning up MCP resources:",
+			expect.any(Error),
+		);
+		expect((service as any).client).toBeNull();
+		expect((service as any).transport).toBeNull();
+		errorSpy.mockRestore();
+	});
+
+	it("sampling callback wraps non-Error throws with String(error)", async () => {
+		const handler = vi.fn().mockRejectedValue("string-sampling-fail");
+		const service = new McpClientService(
+			stdioConfig({ samplingHandler: handler }),
+		);
+		await service.initialize();
+
+		const registered = setRequestHandler.mock.calls[0][1];
+		const validRequest = {
+			method: "sampling/createMessage",
+			params: {
+				messages: [{ role: "user", content: { type: "text", text: "ping" } }],
+				maxTokens: 8,
+			},
+		};
+
+		await expect(registered(validRequest)).rejects.toMatchObject({
+			type: McpErrorType.SAMPLING_ERROR,
+			message: expect.stringContaining("string-sampling-fail"),
+			originalError: undefined,
+		});
+	});
+
+	it("callTool wraps non-Error rejections with String(error)", async () => {
+		callTool.mockRejectedValue("plain-string-tool-fail");
+		const service = new McpClientService(
+			stdioConfig({ retryOptions: { maxRetries: 0 } }),
+		);
+
+		await expect(service.callTool("echo", { q: 1 })).rejects.toMatchObject({
+			type: McpErrorType.TOOL_EXECUTION_ERROR,
+			message: expect.stringContaining("plain-string-tool-fail"),
+			originalError: undefined,
+		});
+	});
+
+	it("removeSamplingHandler logs when removeRequestHandler throws", async () => {
+		const service = new McpClientService(stdioConfig());
+		await service.initialize();
+		service.setSamplingHandler(vi.fn().mockResolvedValue("x"));
+		removeRequestHandler.mockImplementation(() => {
+			throw new Error("remove fail");
+		});
+		const errorSpy = vi
+			.spyOn((service as any).logger, "error")
+			.mockImplementation(() => {});
+
+		service.removeSamplingHandler();
+		expect((service as any).mcpSamplingHandler).toBeNull();
+		expect(errorSpy).toHaveBeenCalledWith(
+			"Failed to remove sampling handler:",
+			expect.any(Error),
+		);
+		errorSpy.mockRestore();
+	});
 });

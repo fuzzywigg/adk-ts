@@ -261,4 +261,27 @@ describe("instructions requestProcessor", () => {
 		expect(text).toContain("local");
 		expect(text).not.toContain("should-not-apply");
 	});
+
+	it("appends both instruction and outputSchema guidance together", async () => {
+		const agent = {
+			name: "combo-agent",
+			canonicalModel: "gpt-4o",
+			rootAgent: { name: "root" },
+			instruction: "Stay concise",
+			canonicalInstruction: async () =>
+				["Stay concise", true] as [string, boolean],
+			outputSchema: z.object({ answer: z.string() }),
+		};
+		const llmRequest = new LlmRequest();
+		await drain(
+			requestProcessor.runAsync(
+				{ agent } as unknown as InvocationContext,
+				llmRequest,
+			),
+		);
+		const text = llmRequest.getSystemInstructionText() ?? "";
+		expect(text).toContain("Stay concise");
+		expect(text).toContain("application/json");
+		expect(text).toContain("answer");
+	});
 });

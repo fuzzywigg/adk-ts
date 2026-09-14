@@ -1297,4 +1297,98 @@ describe("BaseLlmFlow leftover edges (post #98 llm-flows deepen)", () => {
 		expect(events).toEqual([preprocessEvent]);
 		expect(agent.canonicalModel.generateContentAsync).not.toHaveBeenCalled();
 	});
+
+	it("_postprocessHandleFunctionCallsAsync passes {} when toolsDict is undefined", async () => {
+		const flow = new InspectableFlow();
+		handleFunctionCallsAsyncMock.mockResolvedValue(null);
+		const llmRequest = new LlmRequest();
+		delete (llmRequest as any).toolsDict;
+
+		await collect(
+			flow._postprocessHandleFunctionCallsAsync(
+				mockContext,
+				new Event({ author: "agent" }),
+				llmRequest,
+			),
+		);
+
+		expect(handleFunctionCallsAsyncMock).toHaveBeenCalledWith(
+			mockContext,
+			expect.any(Event),
+			{},
+		);
+	});
+
+	it("_callLlmAsync logs safely when model yields a response without content parts", async () => {
+		const flow = new InspectableFlow();
+		const generateContentAsync = vi.fn(async function* () {
+			yield { finishReason: "STOP" };
+		});
+		const agent = {
+			name: "empty-content-agent",
+			canonicalModel: {
+				model: "m",
+				generateContentAsync,
+			},
+		};
+		const responses = await collect(
+			flow._callLlmAsync(
+				makeCtx({ agent }),
+				new LlmRequest(),
+				new Event({ author: "empty-content-agent" }),
+			),
+		);
+		expect(responses).toHaveLength(1);
+		expect((responses[0] as LlmResponse).content).toBeUndefined();
+		expect(generateContentAsync).toHaveBeenCalled();
+	});
+
+	it("_callLlmAsync continues to the model when every before-model callback is nullish", async () => {
+		const flow = new InspectableFlow();
+		const generateContentAsync = vi.fn(async function* () {
+			yield { content: { parts: [{ text: "from-model" }] } };
+		});
+		const agent = {
+			name: "noop-before-agent",
+			canonicalBeforeModelCallbacks: [() => null, async () => undefined],
+			canonicalModel: {
+				model: "m",
+				generateContentAsync,
+			},
+		};
+		const responses = await collect(
+			flow._callLlmAsync(
+				makeCtx({ agent }),
+				new LlmRequest(),
+				new Event({ author: "noop-before-agent" }),
+			),
+		);
+		expect(generateContentAsync).toHaveBeenCalled();
+		expect((responses[0] as LlmResponse).content?.parts?.[0]).toEqual({
+			text: "from-model",
+		});
+	});
+
+	it("_callLlmAsync yields original response when every after-model callback is nullish", async () => {
+		const flow = new InspectableFlow();
+		const llmResponse = { content: { parts: [{ text: "original" }] } };
+		const agent = {
+			name: "noop-after-agent",
+			canonicalAfterModelCallbacks: [() => null, async () => undefined],
+			canonicalModel: {
+				model: "m",
+				generateContentAsync: vi.fn(async function* () {
+					yield llmResponse;
+				}),
+			},
+		};
+		const responses = await collect(
+			flow._callLlmAsync(
+				makeCtx({ agent }),
+				new LlmRequest(),
+				new Event({ author: "noop-after-agent" }),
+			),
+		);
+		expect(responses).toEqual([llmResponse]);
+	});
 });

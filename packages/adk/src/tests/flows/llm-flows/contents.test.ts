@@ -1533,4 +1533,45 @@ describe("contents requestProcessor", () => {
 			expect.arrayContaining(["hello", "after-auth"]),
 		);
 	});
+
+	it("formats foreign functionCall args that are omitted as undefined JSON", async () => {
+		const llmRequest = new LlmRequest();
+		const foreign = new Event({
+			author: "other-agent",
+			content: {
+				role: "model",
+				parts: [
+					{
+						functionCall: {
+							id: "fc-1",
+							name: "lookup",
+						} as any,
+					},
+					{
+						functionResponse: {
+							id: "fc-1",
+							name: "lookup",
+						} as any,
+					},
+				],
+			},
+		});
+
+		await drain(
+			requestProcessor.runAsync(
+				ctx(duckAgent("assistant", "default"), [
+					foreign,
+					userEvent("continue"),
+				]),
+				llmRequest,
+			),
+		);
+
+		expect(llmRequest.contents[0].parts?.[1]?.text).toContain(
+			"[other-agent] called tool `lookup` with parameters: undefined",
+		);
+		expect(llmRequest.contents[0].parts?.[2]?.text).toContain(
+			"[other-agent] `lookup` tool returned result: undefined",
+		);
+	});
 });

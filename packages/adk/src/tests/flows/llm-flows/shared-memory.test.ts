@@ -397,4 +397,67 @@ describe("sharedMemoryRequestProcessor", () => {
 			expect.objectContaining({ query: "latest query" }),
 		);
 	});
+
+	it("treats session contents missing parts as empty when building sessionTexts", async () => {
+		const searchMemory = vi.fn(async () => ({
+			memories: [
+				{
+					author: "past",
+					content: { role: "user", parts: [{ text: "fact" }] },
+				},
+			],
+		}));
+		const { context, llmRequest } = makeContext({
+			memoryService: { searchMemory } as any,
+			events: [
+				new Event({
+					author: "user",
+					content: { role: "user", parts: [{ text: "q" }] },
+				}),
+			],
+			contents: [{ role: "user" } as any],
+		});
+
+		await drain(sharedMemoryRequestProcessor.runAsync(context, llmRequest));
+		expect(
+			llmRequest.contents?.some((c) =>
+				c.parts?.[0]?.text?.includes("[past] said: fact"),
+			),
+		).toBe(true);
+	});
+
+	it("coerces non-text session parts to empty strings in sessionTexts", async () => {
+		const searchMemory = vi.fn(async () => ({
+			memories: [
+				{
+					author: "past",
+					content: {
+						role: "user",
+						parts: [{ text: undefined as any }, { inlineData: { data: "x" } }],
+					},
+				},
+			],
+		}));
+		const { context, llmRequest } = makeContext({
+			memoryService: { searchMemory } as any,
+			events: [
+				new Event({
+					author: "user",
+					content: { role: "user", parts: [{ text: "q" }] },
+				}),
+			],
+			contents: [
+				{
+					role: "user",
+					parts: [{ inlineData: { mimeType: "text/plain", data: "y" } }],
+				},
+			],
+		});
+
+		await drain(sharedMemoryRequestProcessor.runAsync(context, llmRequest));
+		expect(llmRequest.contents?.map((c) => c.parts?.[0]?.text)).toEqual([
+			undefined,
+			"[past] said:  ",
+		]);
+	});
 });

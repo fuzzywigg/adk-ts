@@ -136,6 +136,36 @@ describe("schema-conversion", () => {
 		});
 	});
 
+	it("defaults empty description when ADK tool description is falsy", () => {
+		const tool = {
+			name: "blank_desc",
+			description: "",
+			getDeclaration: () => ({
+				name: "blank_desc",
+				description: "",
+				parameters: { type: Type.OBJECT, properties: {} },
+			}),
+		} as BaseTool;
+
+		expect(adkToMcpToolType(tool).description).toBe("");
+	});
+
+	it("normalizes number schemas with optional enum/title/description", () => {
+		expect(
+			normalizeJsonSchema({
+				type: "number",
+				enum: [1, 2],
+				title: "nums",
+				description: "number choices",
+			}),
+		).toEqual({
+			type: "number",
+			enum: [1, 2],
+			title: "nums",
+			description: "number choices",
+		});
+	});
+
 	it("normalizes boolean/null/number schemas and enum inference", () => {
 		expect(normalizeJsonSchema({ type: "boolean" })).toEqual({
 			type: Type.BOOLEAN,

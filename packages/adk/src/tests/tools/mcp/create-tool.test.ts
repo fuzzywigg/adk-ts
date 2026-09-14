@@ -273,4 +273,96 @@ describe("convertMcpToolToBaseTool", () => {
 			spy.mockRestore();
 		}
 	});
+
+	it("wraps BaseTool constructor validation failures as INVALID_SCHEMA_ERROR", async () => {
+		await expect(
+			convertMcpToolToBaseTool({
+				mcpTool: {
+					name: "bad-name!",
+					description: "Valid description length for BaseTool",
+					inputSchema: { type: "object", properties: {} },
+				} as any,
+				toolHandler: async () => ({ content: [] }),
+			}),
+		).rejects.toMatchObject({
+			type: McpErrorType.INVALID_SCHEMA_ERROR,
+			message: expect.stringContaining("Failed to create tool from MCP tool"),
+			originalError: expect.any(Error),
+		});
+	});
+
+	it("getDeclaration stringifies non-Error schema conversion throws", async () => {
+		const schemaConversion = await import(
+			"../../../tools/mcp/schema-conversion"
+		);
+		const spy = vi
+			.spyOn(schemaConversion, "mcpSchemaToParameters")
+			.mockImplementation(() => {
+				throw "schema-string-fail";
+			});
+
+		try {
+			const tool = await convertMcpToolToBaseTool({
+				mcpTool: {
+					name: "schema_string_tool",
+					description: "fails declaration with non-Error",
+					inputSchema: { type: "object", properties: {} },
+				} as any,
+				toolHandler: async () => ({ content: [] }),
+			});
+
+			expect(() => tool.getDeclaration()).toThrow(
+				expect.objectContaining({
+					type: McpErrorType.INVALID_SCHEMA_ERROR,
+					message: expect.stringContaining("schema-string-fail"),
+					originalError: undefined,
+				}),
+			);
+		} finally {
+			spy.mockRestore();
+		}
+	});
+
+	it("runAsync wraps non-Error execute throws as TOOL_EXECUTION_ERROR", async () => {
+		const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+		const tool = await convertMcpToolToBaseTool({
+			mcpTool: {
+				name: "exec_string",
+				description: "throws a string from execute",
+				inputSchema: { type: "object", properties: {} },
+				execute: async () => {
+					throw "exec-string-boom";
+				},
+			} as any,
+		});
+
+		await expect(tool.runAsync({}, makeContext())).rejects.toMatchObject({
+			type: McpErrorType.TOOL_EXECUTION_ERROR,
+			message: expect.stringContaining("exec-string-boom"),
+			originalError: undefined,
+		});
+		expect(errorSpy).toHaveBeenCalled();
+		errorSpy.mockRestore();
+	});
+
+	it("runAsync uses clientService.callTool when client has reinitialize", async () => {
+		const callTool = vi.fn().mockResolvedValue({
+			content: [{ type: "text", text: "via-service" }],
+		});
+		const reinitialize = vi.fn();
+		const tool = await convertMcpToolToBaseTool({
+			mcpTool: {
+				name: "service_tool",
+				description: "Uses McpClientService-shaped client",
+				inputSchema: { type: "object", properties: {} },
+			} as any,
+			client: { callTool, reinitialize } as any,
+		});
+
+		await expect(tool.runAsync({ a: 1 }, makeContext())).resolves.toEqual({
+			content: [{ type: "text", text: "via-service" }],
+		});
+		expect(callTool).toHaveBeenCalledWith("service_tool", { a: 1 });
+		expect(reinitialize).not.toHaveBeenCalled();
+	});
 });

@@ -458,4 +458,22 @@ describe("nl-planning responseProcessor more edges", () => {
 		expect(llmRequest.contents).toEqual([]);
 		expect(llmRequest.config?.systemInstruction).toBeTruthy();
 	});
+
+	it("skips thought stripping when contents is explicitly null", async () => {
+		const llmRequest = new LlmRequest();
+		(llmRequest as any).contents = null;
+		await drain(
+			requestProcessor.runAsync(
+				makeContext({
+					agent: {
+						name: "planner-agent",
+						planner: new PlanReActPlanner(),
+					},
+				}),
+				llmRequest,
+			),
+		);
+		expect(llmRequest.contents).toBeNull();
+		expect(llmRequest.config?.systemInstruction).toBeTruthy();
+	});
 });
