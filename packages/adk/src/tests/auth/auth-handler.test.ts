@@ -3,6 +3,7 @@ import { AuthConfig } from "../../auth/auth-config";
 import {
 	ApiKeyCredential,
 	type AuthCredential,
+	BasicAuthCredential,
 	BearerTokenCredential,
 	OAuth2Credential,
 } from "../../auth/auth-credential";
@@ -166,5 +167,68 @@ describe("AuthHandler real credential integration", () => {
 		expect(handler.getHeaders()).toEqual({
 			Authorization: "Bearer jwt-token",
 		});
+	});
+});
+
+describe("AuthHandler leftover edges", () => {
+	it("exposes the same authConfig instance passed to the constructor", () => {
+		const authConfig = new AuthConfig({
+			authScheme: new HttpScheme({ scheme: "bearer" }),
+		});
+		const handler = new AuthHandler({ authConfig });
+		expect(handler.authConfig).toBe(authConfig);
+	});
+
+	it("getHeaders works with BasicAuthCredential through the handler", () => {
+		const credential = new BasicAuthCredential("user", "pass");
+		const handler = new AuthHandler({
+			authConfig: new AuthConfig({
+				authScheme: new HttpScheme({ scheme: "basic" }),
+			}),
+			credential,
+		});
+		const expected = Buffer.from("user:pass").toString("base64");
+		expect(handler.getToken()).toBe(expected);
+		expect(handler.getHeaders()).toEqual({
+			Authorization: `Basic ${expected}`,
+		});
+	});
+
+	it("refreshToken is a no-op when credential.canRefresh returns false", async () => {
+		const credential = new OAuth2Credential({ accessToken: "static" });
+		const refresh = vi.spyOn(credential, "refresh");
+		const handler = new AuthHandler({
+			authConfig: new AuthConfig({
+				authScheme: new HttpScheme({ scheme: "bearer" }),
+			}),
+			credential,
+		});
+		await handler.refreshToken();
+		expect(refresh).not.toHaveBeenCalled();
+	});
+
+	it("getToken returns undefined when credential.getToken returns undefined", () => {
+		const credential = {
+			getToken: vi.fn().mockReturnValue(undefined),
+			getHeaders: vi.fn().mockReturnValue({}),
+			canRefresh: vi.fn().mockReturnValue(false),
+			refresh: vi.fn(),
+		} as unknown as AuthCredential;
+		const handler = new AuthHandler({
+			authConfig: new AuthConfig({
+				authScheme: new HttpScheme({ scheme: "bearer" }),
+			}),
+			credential,
+		});
+		expect(handler.getToken()).toBeUndefined();
+	});
+
+	it("getHeaders passes authConfig through to credential.getHeaders", () => {
+		const authConfig = new AuthConfig({
+			authScheme: new ApiKeyScheme({ in: "header", name: "X-Key" }),
+		});
+		const credential = new ApiKeyCredential("secret");
+		const handler = new AuthHandler({ authConfig, credential });
+		expect(handler.getHeaders()).toEqual({ "X-Key": "secret" });
 	});
 });

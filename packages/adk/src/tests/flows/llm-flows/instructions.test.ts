@@ -262,3 +262,132 @@ describe("instructions requestProcessor", () => {
 		expect(text).not.toContain("should-not-apply");
 	});
 });
+
+describe("instructions requestProcessor leftover edges", () => {
+	it("appends only schema guidance when instruction strings are empty", async () => {
+		const schema = z.object({ value: z.number() });
+		const agent = {
+			name: "schema-only",
+			canonicalModel: "gpt-4o",
+			rootAgent: { name: "root" },
+			outputSchema: schema,
+			canonicalInstruction: async () => ["", false] as [string, boolean],
+		};
+		const llmRequest = new LlmRequest();
+		await drain(
+			requestProcessor.runAsync(
+				{ agent } as unknown as InvocationContext,
+				llmRequest,
+			),
+		);
+		const text = llmRequest.getSystemInstructionText() ?? "";
+		expect(text).toContain("application/json");
+		expect(text).toContain("value");
+		expect(injectSessionState).not.toHaveBeenCalled();
+	});
+
+	it("combines injected global and agent instructions in order", async () => {
+		const rootAgent = {
+			canonicalModel: "gpt-4o",
+			globalInstruction: "global rule",
+			canonicalGlobalInstruction: async () =>
+				["global rule", false] as [string, boolean],
+		};
+		const agent = {
+			name: "child",
+			canonicalModel: "gpt-4o",
+			instruction: "local rule",
+			rootAgent,
+			canonicalInstruction: async () =>
+				["local rule", false] as [string, boolean],
+		};
+		const llmRequest = new LlmRequest();
+		await drain(
+			requestProcessor.runAsync(
+				{ agent } as unknown as InvocationContext,
+				llmRequest,
+			),
+		);
+		const text = llmRequest.getSystemInstructionText() ?? "";
+		const globalIdx = text.indexOf("injected:global rule");
+		const localIdx = text.indexOf("injected:local rule");
+		expect(globalIdx).toBeGreaterThanOrEqual(0);
+		expect(localIdx).toBeGreaterThan(globalIdx);
+	});
+
+	it("skips global instruction when canonicalGlobalInstruction returns empty", async () => {
+		const rootAgent = {
+			canonicalModel: "gpt-4o",
+			globalInstruction: "unused",
+			canonicalGlobalInstruction: async () => ["", true] as [string, boolean],
+		};
+		const agent = {
+			name: "child",
+			canonicalModel: "gpt-4o",
+			instruction: "only-local",
+			rootAgent,
+			canonicalInstruction: async () =>
+				["only-local", true] as [string, boolean],
+		};
+		const llmRequest = new LlmRequest();
+		await drain(
+			requestProcessor.runAsync(
+				{ agent } as unknown as InvocationContext,
+				llmRequest,
+			),
+		);
+		const text = llmRequest.getSystemInstructionText() ?? "";
+		expect(text).toContain("only-local");
+		expect(text).not.toContain("unused");
+	});
+
+	it("does not inject session state when both instructions bypass injection", async () => {
+		const rootAgent = {
+			canonicalModel: "gpt-4o",
+			globalInstruction: "raw-global",
+			canonicalGlobalInstruction: async () =>
+				["raw-global", true] as [string, boolean],
+		};
+		const agent = {
+			name: "child",
+			canonicalModel: "gpt-4o",
+			instruction: "raw-local",
+			rootAgent,
+			canonicalInstruction: async () =>
+				["raw-local", true] as [string, boolean],
+		};
+		const llmRequest = new LlmRequest();
+		await drain(
+			requestProcessor.runAsync(
+				{ agent } as unknown as InvocationContext,
+				llmRequest,
+			),
+		);
+		expect(injectSessionState).not.toHaveBeenCalled();
+		expect(llmRequest.getSystemInstructionText()).toContain("raw-global");
+		expect(llmRequest.getSystemInstructionText()).toContain("raw-local");
+	});
+
+	it("includes IMPORTANT tool-call JSON note when schema and instruction coexist", async () => {
+		const schema = z.object({ ok: z.boolean() });
+		const agent = {
+			name: "both",
+			canonicalModel: "gpt-4o",
+			instruction: "Answer briefly",
+			rootAgent: { name: "root" },
+			outputSchema: schema,
+			canonicalInstruction: async () =>
+				["Answer briefly", true] as [string, boolean],
+		};
+		const llmRequest = new LlmRequest();
+		await drain(
+			requestProcessor.runAsync(
+				{ agent } as unknown as InvocationContext,
+				llmRequest,
+			),
+		);
+		const text = llmRequest.getSystemInstructionText() ?? "";
+		expect(text).toContain("Answer briefly");
+		expect(text).toContain("IMPORTANT: After any tool calls");
+	});
+});

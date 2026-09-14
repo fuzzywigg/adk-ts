@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 import type { InvocationContext } from "../../../agents/invocation-context";
+import { Event } from "../../../events/event";
 import { responseProcessor } from "../../../flows/llm-flows/output-schema";
 import { LlmResponse } from "../../../models/llm-response";
 
@@ -447,5 +448,114 @@ describe("output-schema responseProcessor", () => {
 		expect(JSON.parse(response.content?.parts?.[0]?.text ?? "{}")).toEqual({
 			answer: "partial",
 		});
+	});
+});
+
+describe("output-schema responseProcessor leftover edges", () => {
+	it("validates nested object schemas and pretty-prints the result", async () => {
+		const schema = z.object({
+			user: z.object({ id: z.number(), name: z.string() }),
+		});
+		const response = new LlmResponse({
+			content: {
+				role: "model",
+				parts: [{ text: '{"user":{"id":1,"name":"Ada"}}' }],
+			},
+		});
+		await collect(
+			responseProcessor.runAsync(
+				makeContext({ name: "nested", outputSchema: schema }),
+				response,
+			),
+		);
+		expect(JSON.parse(response.content?.parts?.[0]?.text ?? "{}")).toEqual({
+			user: { id: 1, name: "Ada" },
+		});
+	});
+
+	it("yields validation error for array schema type mismatches", async () => {
+		const schema = z.array(z.number());
+		const response = new LlmResponse({
+			content: {
+				role: "model",
+				parts: [{ text: '[1,"two",3]' }],
+			},
+		});
+		const events = await collect(
+			responseProcessor.runAsync(
+				makeContext({ name: "arr-agent", outputSchema: schema }),
+				response,
+			),
+		);
+		expect(events).toHaveLength(1);
+		expect(response.errorCode).toBe("OUTPUT_SCHEMA_VALIDATION_FAILED");
+	});
+
+	it("error events include invocationId and branch from context", async () => {
+		const schema = z.object({ ok: z.boolean() });
+		const response = new LlmResponse({
+			content: { role: "model", parts: [{ text: '{"ok":"nope"}' }] },
+		});
+		const events = await collect(
+			responseProcessor.runAsync(
+				{
+					invocationId: "inv-edge",
+					branch: "feature/x",
+					agent: { name: "edge-agent", outputSchema: schema },
+				} as InvocationContext,
+				response,
+			),
+		);
+		const event = events[0] as Event;
+		expect(event.invocationId).toBe("inv-edge");
+		expect(event.branch).toBe("feature/x");
+		expect(event.author).toBe("edge-agent");
+	});
+
+	it("returns early when joined text is only whitespace and newlines", async () => {
+		const schema = z.object({ a: z.number() });
+		const response = new LlmResponse({
+			content: {
+				role: "model",
+				parts: [{ text: "  \n\t  " }, { text: "   " }],
+			},
+		});
+		const events = await collect(
+			responseProcessor.runAsync(
+				makeContext({ name: "ws-agent", outputSchema: schema }),
+				response,
+			),
+		);
+		expect(events).toEqual([]);
+		expect(response.errorCode).toBeUndefined();
+	});
+
+	it("strips ```JSON fenced blocks case-insensitively", async () => {
+		const schema = z.object({ n: z.number() });
+		const response = new LlmResponse({
+			content: {
+				role: "model",
+				parts: [{ text: '```JSON\n{"n":9}\n```' }],
+			},
+		});
+		await collect(
+			responseProcessor.runAsync(
+				makeContext({ name: "fence-agent", outputSchema: schema }),
+				response,
+			),
+		);
+		expect(JSON.parse(response.content?.parts?.[0]?.text ?? "{}")).toEqual({
+			n: 9,
+		});
+	});
+
+	it("returns early when llmResponse is nullish", async () => {
+		const events = await collect(
+			responseProcessor.runAsync(
+				makeContext({ name: "a", outputSchema: z.object({}) }),
+				null as any,
+			),
+		);
+		expect(events).toEqual([]);
 	});
 });

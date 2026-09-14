@@ -96,3 +96,48 @@ describe("BuiltInPlanner", () => {
 		expect((afterNull.config as any).thinkingConfig).toBeUndefined();
 	});
 });
+
+describe("BuiltInPlanner leftover edges", () => {
+	it("overwrites an existing thinkingConfig on the llm request", () => {
+		const planner = new BuiltInPlanner({
+			thinkingConfig: { includeThoughts: true, thinkingBudget: 256 },
+		});
+		const request = new LlmRequest();
+		request.config = {
+			thinkingConfig: { includeThoughts: false, thinkingBudget: 8 },
+		} as any;
+		planner.applyThinkingConfig(request);
+		expect((request.config as any).thinkingConfig).toEqual({
+			includeThoughts: true,
+			thinkingBudget: 256,
+		});
+	});
+
+	it("applies empty-object thinkingConfig because it is truthy", () => {
+		const planner = new BuiltInPlanner({ thinkingConfig: {} as any });
+		const request = new LlmRequest();
+		planner.applyThinkingConfig(request);
+		expect(request.config).toEqual({ thinkingConfig: {} });
+	});
+
+	it("applyThinkingConfig is idempotent when called twice", () => {
+		const thinkingConfig = { includeThoughts: true, thinkingBudget: 16 };
+		const planner = new BuiltInPlanner({ thinkingConfig });
+		const request = new LlmRequest();
+		planner.applyThinkingConfig(request);
+		planner.applyThinkingConfig(request);
+		expect(request.config).toEqual({ thinkingConfig });
+	});
+
+	it("buildPlanningInstruction and processPlanningResponse always return undefined", () => {
+		const planner = new BuiltInPlanner({
+			thinkingConfig: { includeThoughts: false },
+		});
+		expect(
+			planner.buildPlanningInstruction({} as any, new LlmRequest()),
+		).toBeUndefined();
+		expect(
+			planner.processPlanningResponse({} as any, [{ text: "x" }]),
+		).toBeUndefined();
+	});
+});

@@ -1298,3 +1298,143 @@ describe("BaseLlmFlow leftover edges (post #98 llm-flows deepen)", () => {
 		expect(agent.canonicalModel.generateContentAsync).not.toHaveBeenCalled();
 	});
 });
+
+describe("BaseLlmFlow leftover edges", () => {
+	it("__getLlm returns the agent canonicalModel reference", () => {
+		const flow = new InspectableFlow();
+		const model = { model: "gemini-2.5-flash" };
+		const ctx = makeCtx({ agent: { name: "m-agent", canonicalModel: model } });
+		expect(flow.__getLlm(ctx)).toBe(model);
+	});
+
+	it("_finalizeModelResponseEvent skips function-call helpers when content is absent", () => {
+		const flow = new InspectableFlow();
+		const finalized = flow._finalizeModelResponseEvent(
+			new LlmRequest(),
+			{ partial: true } as LlmResponse,
+			new Event({ id: "me", author: "agent" }),
+		);
+		expect(populateClientFunctionCallIdMock).not.toHaveBeenCalled();
+		expect(getLongRunningFunctionCallsMock).not.toHaveBeenCalled();
+		expect(finalized.partial).toBe(true);
+		expect(finalized.content).toBeUndefined();
+	});
+
+	it("_postprocessLive yields a finalized event for interrupted-only responses", async () => {
+		const flow = new InspectableFlow();
+		flow.responseProcessors = [];
+		const events = await collect(
+			flow._postprocessLive(
+				mockContext,
+				new LlmRequest(),
+				{ interrupted: true } as LlmResponse,
+				new Event({ id: "live-int", author: "agent" }),
+			),
+		);
+		expect(events).toHaveLength(1);
+		expect(events[0].author).toBe("agent");
+	});
+
+	it("_postprocessLive yields a finalized event for errorCode-only responses", async () => {
+		const flow = new InspectableFlow();
+		flow.responseProcessors = [];
+		const events = await collect(
+			flow._postprocessLive(
+				mockContext,
+				new LlmRequest(),
+				{ errorCode: "RATE_LIMIT" } as LlmResponse,
+				new Event({ id: "live-err", author: "agent" }),
+			),
+		);
+		expect(events).toHaveLength(1);
+		expect(events[0].author).toBe("agent");
+	});
+
+	it("_postprocessRunProcessorsAsync yields events from multiple processors in order", async () => {
+		const flow = new InspectableFlow();
+		const first = new Event({ author: "rp-1" });
+		const second = new Event({ author: "rp-2" });
+		flow.responseProcessors = [
+			{
+				runAsync: async function* () {
+					yield first;
+				},
+			},
+			{
+				runAsync: async function* () {
+					yield second;
+				},
+			},
+		];
+		const events = await collect(
+			flow._postprocessRunProcessorsAsync(mockContext, {
+				content: { parts: [{ text: "x" }] },
+			} as LlmResponse),
+		);
+		expect(events).toEqual([first, second]);
+	});
+
+	it("_preprocessAsync processes a single named tool without entering dedup filtering", async () => {
+		const flow = new InspectableFlow();
+		const processOnly = vi.fn(async () => undefined);
+		const agent = {
+			name: "solo-tool",
+			canonicalTools: async () => [
+				{
+					name: "only",
+					description: "single tool",
+					processLlmRequest: processOnly,
+				},
+			],
+		};
+		await collect(flow._preprocessAsync(makeCtx({ agent }), new LlmRequest()));
+		expect(processOnly).toHaveBeenCalledTimes(1);
+	});
+
+	it("_postprocessHandleFunctionCallsAsync passes llmRequest.toolsDict to handleFunctionCallsAsync", async () => {
+		const flow = new InspectableFlow();
+		const toolsDict = { echo: { name: "echo" } };
+		const llmRequest = new LlmRequest();
+		llmRequest.toolsDict = toolsDict as any;
+		handleFunctionCallsAsyncMock.mockResolvedValue(null);
+
+		await collect(
+			flow._postprocessHandleFunctionCallsAsync(
+				mockContext,
+				new Event({ author: "agent" }),
+				llmRequest,
+			),
+		);
+
+		expect(handleFunctionCallsAsyncMock).toHaveBeenCalledWith(
+			mockContext,
+			expect.any(Event),
+			toolsDict,
+		);
+	});
+
+	it("_runOneStepAsync assigns a new model event id for each streamed postprocess yield", async () => {
+		const flow = new InspectableFlow();
+		flow.requestProcessors = [];
+		flow.responseProcessors = [];
+		const ids: string[] = [];
+		const agent = {
+			name: "stream-agent",
+			canonicalTools: async () => [],
+			canonicalModel: {
+				model: "fake",
+				generateContentAsync: vi.fn(async function* () {
+					yield { content: { role: "model", parts: [{ text: "a" }] } };
+					yield { content: { role: "model", parts: [{ text: "b" }] } };
+				}),
+			},
+		};
+
+		const events = await collect(flow._runOneStepAsync(makeCtx({ agent })));
+		for (const event of events) {
+			ids.push(event.id);
+		}
+		expect(ids).toHaveLength(2);
+		expect(new Set(ids).size).toBe(2);
+	});
+});

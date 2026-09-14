@@ -331,3 +331,100 @@ describe("basic requestProcessor", () => {
 		expect(llmRequest.liveConnectConfig.enableAffectiveDialog).toBe(false);
 	});
 });
+
+describe("basic requestProcessor leftover edges", () => {
+	it("leaves config undefined when generateContentConfig is absent", async () => {
+		const llmRequest = new LlmRequest();
+		await drain(
+			requestProcessor.runAsync(
+				{
+					agent: { name: "bare", canonicalModel: "gpt-4o" },
+					runConfig: {},
+				} as InvocationContext,
+				llmRequest,
+			),
+		);
+		expect(llmRequest.model).toBe("gpt-4o");
+		expect(llmRequest.config).toEqual({});
+	});
+
+	it("sets output schema when only parent transfer is disallowed", async () => {
+		const schema = { type: "object" };
+		const llmRequest = new LlmRequest();
+		await drain(
+			requestProcessor.runAsync(
+				{
+					agent: {
+						name: "peer-locked",
+						canonicalModel: "gpt-4o",
+						outputSchema: schema,
+						canonicalTools: async () => [],
+						subAgents: [{ name: "child" }],
+						disallowTransferToParent: true,
+						disallowTransferToPeers: false,
+					},
+					runConfig: {},
+				} as unknown as InvocationContext,
+				llmRequest,
+			),
+		);
+		expect(llmRequest.config?.responseSchema).toBeUndefined();
+	});
+
+	it("applies output schema when subAgents is an empty array", async () => {
+		const schema = { type: "object", properties: { n: { type: "number" } } };
+		const llmRequest = new LlmRequest();
+		await drain(
+			requestProcessor.runAsync(
+				{
+					agent: {
+						name: "solo-schema",
+						canonicalModel: "gpt-4o",
+						outputSchema: schema,
+						canonicalTools: async () => [],
+						subAgents: [],
+					},
+					runConfig: {},
+				} as unknown as InvocationContext,
+				llmRequest,
+			),
+		);
+		expect(llmRequest.config?.responseSchema).toBe(schema);
+		expect(llmRequest.config?.responseMimeType).toBe("application/json");
+	});
+
+	it("does not copy live fields when runConfig is empty", async () => {
+		const llmRequest = new LlmRequest();
+		await drain(
+			requestProcessor.runAsync(
+				{
+					agent: { name: "live-bare", canonicalModel: "gpt-4o" },
+					runConfig: {},
+				} as InvocationContext,
+				llmRequest,
+			),
+		);
+		expect(llmRequest.liveConnectConfig.responseModalities).toBeUndefined();
+		expect(llmRequest.liveConnectConfig.speechConfig).toBeUndefined();
+		expect(llmRequest.liveConnectConfig.enableAffectiveDialog).toBeUndefined();
+	});
+
+	it("reads model string from object canonicalModel.model property", async () => {
+		const llmRequest = new LlmRequest();
+		await drain(
+			requestProcessor.runAsync(
+				{
+					agent: {
+						name: "obj-model",
+						canonicalModel: { model: "claude-3" },
+						generateContentConfig: { topK: 40 },
+					},
+					runConfig: {},
+				} as InvocationContext,
+				llmRequest,
+			),
+		);
+		expect(llmRequest.model).toBe("claude-3");
+		expect(llmRequest.config).toEqual({ topK: 40 });
+	});
+});
