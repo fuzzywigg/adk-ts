@@ -504,3 +504,91 @@ function untyped(a, b) { return {}; }`,
 		});
 	});
 });
+
+describe("buildFunctionDeclaration leftover JSDoc and ignore edges", () => {
+	it("strips leading asterisks from multi-line JSDoc descriptions", () => {
+		const documented = withSource(
+			() => 1,
+			`/**
+ * Line one
+ * Line two
+ */
+function documented() { return 1; }`,
+		);
+		Object.defineProperty(documented, "name", { value: "documented" });
+		const declaration = buildFunctionDeclaration(documented);
+		expect(declaration.description).toContain("Line one");
+		expect(declaration.description).toContain("Line two");
+		expect(declaration.description).not.toMatch(/^\s*\*/);
+	});
+
+	it("maps unknown typescript annotations to string", () => {
+		const custom = withSource(
+			(_v: unknown) => _v,
+			"function custom(v: CustomType) { return v; }",
+		);
+		Object.defineProperty(custom, "name", { value: "custom" });
+		expect(
+			buildFunctionDeclaration(custom).parameters?.properties?.v?.type,
+		).toBe("string");
+	});
+
+	it("returns empty properties when ignoreParams covers every parameter", () => {
+		const onlyCtx = withSource(
+			(_toolContext: unknown, _context: unknown) => ({}),
+			"function onlyCtx(toolContext, context) { return {}; }",
+		);
+		Object.defineProperty(onlyCtx, "name", { value: "onlyCtx" });
+		expect(
+			buildFunctionDeclaration(onlyCtx, {
+				ignoreParams: ["toolContext", "context"],
+			}).parameters,
+		).toEqual({
+			type: Type.OBJECT,
+			properties: {},
+		});
+	});
+
+	it("keeps JSDoc descriptions when @param omits an explicit type", () => {
+		const described = withSource(
+			(_name: unknown) => _name,
+			`/**
+ * Named
+ * @param name The person's name
+ */
+function described(name) { return name; }`,
+		);
+		Object.defineProperty(described, "name", { value: "described" });
+		const declaration = buildFunctionDeclaration(described);
+		expect(declaration.parameters?.properties?.name?.type).toBe("string");
+		expect(declaration.parameters?.properties?.name?.description).toContain(
+			"person's name",
+		);
+	});
+
+	it("prefers options.description over JSDoc text", () => {
+		const documented = withSource(
+			() => 1,
+			`/**
+ * From JSDoc
+ */
+function documented() { return 1; }`,
+		);
+		Object.defineProperty(documented, "name", { value: "documented" });
+		expect(
+			buildFunctionDeclaration(documented, { description: "From options" })
+				.description,
+		).toBe("From options");
+	});
+
+	it("maps typescript Array annotation via the : type matcher", () => {
+		const listed = withSource(
+			(_items: unknown) => _items,
+			"function listed(items: Array) { return items; }",
+		);
+		Object.defineProperty(listed, "name", { value: "listed" });
+		expect(
+			buildFunctionDeclaration(listed).parameters?.properties?.items?.type,
+		).toBe("array");
+	});
+});

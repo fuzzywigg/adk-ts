@@ -453,3 +453,105 @@ describe("schema-conversion", () => {
 		});
 	});
 });
+
+describe("schema-conversion leftover inference and fallback edges", () => {
+	it("infers STRING for empty enum lists", () => {
+		expect(normalizeJsonSchema({ enum: [] })).toEqual({
+			type: Type.STRING,
+			enum: [],
+		});
+	});
+
+	it("infers BOOLEAN from enum whose first item is boolean", () => {
+		expect(normalizeJsonSchema({ enum: [true, false] })).toEqual({
+			type: Type.BOOLEAN,
+			enum: [true, false],
+		});
+	});
+
+	it("infers INTEGER when multipleOf is an integer with numeric bounds", () => {
+		expect(
+			normalizeJsonSchema({ minimum: 0, maximum: 10, multipleOf: 2 }),
+		).toEqual({
+			type: Type.INTEGER,
+			minimum: 0,
+			maximum: 10,
+			multipleOf: 2,
+		});
+	});
+
+	it("falls back to parameters when inputSchema is absent on mcp tools", () => {
+		expect(
+			mcpSchemaToParameters({
+				name: "legacy",
+				parameters: {
+					type: "object",
+					properties: {
+						q: { type: "string", minLength: 1 },
+					},
+					required: ["q"],
+				},
+			} as any),
+		).toEqual({
+			type: Type.OBJECT,
+			properties: {
+				q: { type: Type.STRING, minLength: 1 },
+			},
+			required: ["q"],
+		});
+	});
+
+	it("mcpSchemaToParameters returns empty object schema when neither schema exists", () => {
+		expect(mcpSchemaToParameters({ name: "empty" } as any)).toEqual({
+			type: Type.OBJECT,
+			properties: {},
+		});
+	});
+
+	it("normalizes array schemas with title, description, and maxItems", () => {
+		expect(
+			normalizeJsonSchema({
+				type: "array",
+				items: { type: "string" },
+				minItems: 0,
+				maxItems: 3,
+				title: "Tags",
+				description: "Up to three tags",
+			}),
+		).toEqual({
+			type: Type.ARRAY,
+			items: { type: Type.STRING },
+			minItems: 0,
+			maxItems: 3,
+			title: "Tags",
+			description: "Up to three tags",
+		});
+	});
+
+	it("declarationToJsonSchema returns the whole parameters object without properties", () => {
+		expect(
+			declarationToJsonSchema({
+				name: "bare",
+				description: "d",
+				parameters: { type: Type.STRING },
+			} as any),
+		).toEqual({ type: Type.STRING });
+	});
+
+	it("jsonSchemaToDeclaration wraps bare property maps as OBJECT properties", () => {
+		expect(
+			jsonSchemaToDeclaration("wrap", "desc", {
+				a: { type: "string" },
+			}),
+		).toEqual({
+			name: "wrap",
+			description: "desc",
+			parameters: {
+				type: Type.OBJECT,
+				properties: {
+					a: { type: "string" },
+				},
+			},
+		});
+	});
+});

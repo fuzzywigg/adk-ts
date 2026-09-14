@@ -483,3 +483,97 @@ describe("CodeExecutionUtils leftover edges", () => {
 		expect(CodeExecutionUtils.getEncodedFileContent("abc")).toBe(btoa("abc"));
 	});
 });
+
+describe("CodeExecutionUtils leftover fence and result edges", () => {
+	it("extractCodeAndTruncateContent returns null for empty fenced code bodies", () => {
+		const content: Content = {
+			parts: [{ text: "before <<<>>> after" }],
+		};
+		expect(
+			CodeExecutionUtils.extractCodeAndTruncateContent(content, [
+				["<<<", ">>>"],
+			]),
+		).toBeNull();
+	});
+
+	it("extractCodeAndTruncateContent keeps a prefix part when present", () => {
+		const content: Content = {
+			parts: [{ text: "intro\n```print(1)```" }],
+		};
+		const code = CodeExecutionUtils.extractCodeAndTruncateContent(content, [
+			["```", "```"],
+		]);
+		expect(code).toBe("print(1)");
+		expect(content.parts?.[0]).toEqual({ text: "intro\n" });
+		expect(content.parts?.[1].executableCode?.code).toBe("print(1)");
+	});
+
+	it("buildCodeExecutionResultPart lists artifacts without stdout when stdout is empty", () => {
+		const part = CodeExecutionUtils.buildCodeExecutionResultPart({
+			stdout: "",
+			stderr: "",
+			outputFiles: [
+				{ name: "a.csv", content: "x", mimeType: "text/csv" },
+				{ name: "b.png", content: "y", mimeType: "image/png" },
+			],
+		});
+		expect(part.codeExecutionResult?.outcome).toBe(Outcome.OUTCOME_OK);
+		expect(part.codeExecutionResult?.output).toContain("Saved artifacts");
+		expect(part.codeExecutionResult?.output).toContain("`a.csv`");
+		expect(part.codeExecutionResult?.output).toContain("`b.png`");
+		expect(part.codeExecutionResult?.output).not.toContain(
+			"Code execution result",
+		);
+	});
+
+	it("convertCodeExecutionParts converts a trailing executableCode part", () => {
+		const content: Content = {
+			role: "model",
+			parts: [{ executableCode: { code: "x=1", language: Language.PYTHON } }],
+		};
+		CodeExecutionUtils.convertCodeExecutionParts(
+			content,
+			["```python\n", "\n```"],
+			["<<<", ">>>"],
+		);
+		expect(content.parts?.[0].text).toBe("```python\nx=1\n```");
+	});
+
+	it("convertCodeExecutionParts skips multi-part trailing codeExecutionResult", () => {
+		const content: Content = {
+			role: "model",
+			parts: [
+				{ text: "note" },
+				{
+					codeExecutionResult: {
+						outcome: Outcome.OUTCOME_OK,
+						output: "done",
+					},
+				},
+			],
+		};
+		CodeExecutionUtils.convertCodeExecutionParts(
+			content,
+			["```", "```"],
+			["<<<", ">>>"],
+		);
+		expect(content.parts?.[1].codeExecutionResult?.output).toBe("done");
+		expect(content.role).toBe("model");
+	});
+
+	it("getEncodedFileContent returns already-base64 strings unchanged", () => {
+		const encoded = btoa("already");
+		expect(CodeExecutionUtils.getEncodedFileContent(encoded)).toBe(encoded);
+	});
+
+	it("extractCodeAndTruncateContent returns null when parts lack text and executableCode", () => {
+		const content: Content = {
+			parts: [{ inlineData: { data: "x", mimeType: "text/plain" } }],
+		};
+		expect(
+			CodeExecutionUtils.extractCodeAndTruncateContent(content, [
+				["```", "```"],
+			]),
+		).toBeNull();
+	});
+});

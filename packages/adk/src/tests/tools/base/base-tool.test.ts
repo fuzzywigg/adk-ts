@@ -1105,3 +1105,147 @@ describe("BaseTool leftover declaration and validate edges", () => {
 		error.mockRestore();
 	});
 });
+
+describe("BaseTool leftover retry backoff and validation edges", () => {
+	it("safeExecute returns Invalid arguments without calling runAsync", async () => {
+		const impl = vi.fn(async () => ({ ok: true }));
+		const tool = new StubTool(
+			{ name: "bad_args", description: "Requires query" },
+			impl,
+		);
+		const error = vi.spyOn(console, "error").mockImplementation(() => {});
+		const result = await tool.safeExecute({}, makeContext());
+		expect(result).toEqual({
+			error: "Invalid arguments",
+			message: "The provided arguments do not match the tool's requirements.",
+		});
+		expect(impl).not.toHaveBeenCalled();
+		error.mockRestore();
+	});
+
+	it("retries with exponential backoff capped by maxRetryDelay", async () => {
+		vi.useFakeTimers();
+		const random = vi.spyOn(Math, "random").mockReturnValue(0);
+		let attempts = 0;
+		const tool = new StubTool(
+			{
+				name: "retry_cap",
+				description: "Retries until success",
+				shouldRetryOnFailure: true,
+				maxRetryAttempts: 2,
+			},
+			async () => {
+				attempts++;
+				if (attempts < 3) {
+					throw new Error(`fail-${attempts}`);
+				}
+				return { attempts };
+			},
+		);
+		tool.baseRetryDelay = 1000;
+		tool.maxRetryDelay = 1500;
+
+		const error = vi.spyOn(console, "error").mockImplementation(() => {});
+		const debug = vi
+			.spyOn((tool as any).logger, "debug")
+			.mockImplementation(() => {});
+
+		const pending = tool.safeExecute({ query: "x" }, makeContext());
+		await vi.runAllTimersAsync();
+		const result = await pending;
+
+		expect(result).toEqual({ result: { attempts: 3 } });
+		expect(debug).toHaveBeenCalled();
+		expect(attempts).toBe(3);
+		error.mockRestore();
+		debug.mockRestore();
+		random.mockRestore();
+		vi.useRealTimers();
+	});
+
+	it("default runAsync throws not implemented for bare subclasses", async () => {
+		class BareTool extends BaseTool {
+			getDeclaration() {
+				return {
+					name: this.name,
+					description: this.description,
+					parameters: { type: Type.OBJECT, properties: {} },
+				};
+			}
+		}
+		const tool = new BareTool({
+			name: "bare_tool",
+			description: "Bare subclass",
+		});
+		await expect(tool.runAsync({}, makeContext())).rejects.toThrow(
+			/BareTool runAsync is not implemented/,
+		);
+	});
+
+	it("processLlmRequest creates a new tools entry when only non-declaration tools exist", async () => {
+		const tool = new StubTool({
+			name: "new_slot",
+			description: "Needs a fresh tools slot",
+		});
+		const request = new LlmRequest({
+			config: {
+				tools: [{ googleSearch: {} } as any],
+			},
+		});
+		await tool.processLlmRequest(makeContext(), request);
+		expect(request.config?.tools).toHaveLength(2);
+		expect(
+			(request.config?.tools?.[1] as any).functionDeclarations?.[0].name,
+		).toBe("new_slot");
+	});
+
+	it("validateArguments succeeds when required is an empty array", () => {
+		class OptionalTool extends BaseTool {
+			getDeclaration() {
+				return {
+					name: this.name,
+					description: this.description,
+					parameters: {
+						type: Type.OBJECT,
+						properties: { q: { type: Type.STRING } },
+						required: [],
+					},
+				};
+			}
+			async runAsync() {
+				return {};
+			}
+		}
+		const tool = new OptionalTool({
+			name: "optional_tool",
+			description: "No required params",
+		});
+		expect(tool.validateArguments({})).toBe(true);
+	});
+
+	it("safeExecute reports the last Error message after exhausting retries", async () => {
+		const tool = new StubTool(
+			{
+				name: "always_fail",
+				description: "Always fails",
+				shouldRetryOnFailure: true,
+				maxRetryAttempts: 1,
+			},
+			async () => {
+				throw new Error("persistent failure");
+			},
+		);
+		tool.baseRetryDelay = 1;
+		tool.maxRetryDelay = 1;
+		const random = vi.spyOn(Math, "random").mockReturnValue(0);
+		const error = vi.spyOn(console, "error").mockImplementation(() => {});
+		const result = await tool.safeExecute({ query: "x" }, makeContext());
+		expect(result).toEqual({
+			error: "Execution failed",
+			message: "persistent failure",
+			tool: "always_fail",
+		});
+		error.mockRestore();
+		random.mockRestore();
+	});
+});

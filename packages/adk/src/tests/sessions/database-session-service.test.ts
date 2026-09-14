@@ -1378,3 +1378,253 @@ describe("DatabaseSessionService leftover stale ISO and nullish FC bags", () => 
 		).rejects.toThrow(/SQLite3 can only bind/);
 	});
 });
+
+describe("DatabaseSessionService leftover storageEvent helpers and id edges", () => {
+	let service: DatabaseSessionService;
+
+	beforeEach(() => {
+		vi.spyOn(console, "error").mockImplementation(() => {});
+		service = createSqliteSessionService(":memory:");
+	});
+
+	afterEach(async () => {
+		vi.restoreAllMocks();
+	});
+
+	it("trims whitespace-only sessionId to a generated session- id", async () => {
+		const session = await service.createSession("app", "user", {}, "   ");
+		expect(session.id).toMatch(/^session-/);
+	});
+
+	it("extractStateDelta with undefined state yields empty deltas", () => {
+		expect((service as any).extractStateDelta(undefined)).toEqual({
+			appStateDelta: {},
+			userStateDelta: {},
+			sessionStateDelta: {},
+		});
+	});
+
+	it("storageEventToEvent exposes isFinalResponse from turn_complete", () => {
+		const done = (service as any).storageEventToEvent({
+			id: "e-final",
+			app_name: "app",
+			user_id: "user",
+			session_id: "s1",
+			invocation_id: "inv",
+			author: "agent",
+			branch: null,
+			timestamp: new Date(),
+			content: null,
+			actions: null,
+			long_running_tool_ids_json: null,
+			grounding_metadata: null,
+			partial: null,
+			turn_complete: true,
+			error_code: null,
+			error_message: null,
+			interrupted: null,
+		});
+		expect(done.isFinalResponse()).toBe(true);
+
+		const open = (service as any).storageEventToEvent({
+			id: "e-open",
+			app_name: "app",
+			user_id: "user",
+			session_id: "s1",
+			invocation_id: "inv",
+			author: "agent",
+			branch: null,
+			timestamp: new Date(),
+			content: null,
+			actions: null,
+			long_running_tool_ids_json: null,
+			grounding_metadata: null,
+			partial: null,
+			turn_complete: false,
+			error_code: null,
+			error_message: null,
+			interrupted: null,
+		});
+		expect(open.isFinalResponse()).toBe(false);
+	});
+
+	it("storageEventToEvent reads hasTrailingCodeExecutionResult from actions", () => {
+		const withFlag = (service as any).storageEventToEvent({
+			id: "e-trail",
+			app_name: "app",
+			user_id: "user",
+			session_id: "s1",
+			invocation_id: "inv",
+			author: "agent",
+			branch: null,
+			timestamp: new Date(),
+			content: null,
+			actions: JSON.stringify({
+				hasTrailingCodeExecutionResult: true,
+				functionCalls: [{ name: "f" }],
+				functionResponses: [{ name: "f", response: {} }],
+			}),
+			long_running_tool_ids_json: null,
+			grounding_metadata: null,
+			partial: null,
+			turn_complete: null,
+			error_code: null,
+			error_message: null,
+			interrupted: null,
+		});
+		expect(withFlag.hasTrailingCodeExecutionResult()).toBe(true);
+		expect(withFlag.getFunctionCalls()).toEqual([{ name: "f" }]);
+		expect(withFlag.getFunctionResponses()).toEqual([
+			{ name: "f", response: {} },
+		]);
+
+		const without = (service as any).storageEventToEvent({
+			id: "e-no-trail",
+			app_name: "app",
+			user_id: "user",
+			session_id: "s1",
+			invocation_id: "inv",
+			author: "agent",
+			branch: null,
+			timestamp: new Date(),
+			content: null,
+			actions: JSON.stringify({ stateDelta: {} }),
+			long_running_tool_ids_json: null,
+			grounding_metadata: null,
+			partial: null,
+			turn_complete: null,
+			error_code: null,
+			error_message: null,
+			interrupted: null,
+		});
+		expect(without.hasTrailingCodeExecutionResult()).toBe(false);
+	});
+
+	it("storageEventToEvent coalesces corrupt JSON fields via parseJsonSafely defaults", () => {
+		const event = (service as any).storageEventToEvent({
+			id: "e-corrupt",
+			app_name: "app",
+			user_id: "user",
+			session_id: "s1",
+			invocation_id: "inv",
+			author: "agent",
+			branch: null,
+			timestamp: new Date("2024-06-01T12:00:00.000Z"),
+			content: "{not-json",
+			actions: "{also-bad",
+			long_running_tool_ids_json: "[bad",
+			grounding_metadata: "{nope",
+			partial: null,
+			turn_complete: null,
+			error_code: null,
+			error_message: null,
+			interrupted: null,
+		});
+		expect(event.content).toBeNull();
+		expect(event.actions).toBeNull();
+		expect(event.longRunningToolIds).toEqual(new Set());
+		expect(event.groundingMetadata).toBeNull();
+		expect(event.timestamp).toBe(
+			new Date("2024-06-01T12:00:00.000Z").getTime() / 1000,
+		);
+	});
+
+	it("eventToStorageEvent serializes an empty longRunningToolIds set as []", () => {
+		const session = {
+			id: "s1",
+			appName: "app",
+			userId: "user",
+		};
+		const stored = (service as any).eventToStorageEvent(
+			session,
+			new Event({
+				author: "agent",
+				longRunningToolIds: new Set(),
+			}),
+		);
+		expect(JSON.parse(stored.long_running_tool_ids_json)).toEqual([]);
+	});
+
+	it("updateSessionState skips TEMP_PREFIX keys on the in-memory session object", async () => {
+		const session = await service.createSession("app", "user", {}, "s-temp");
+		await service.appendEvent(
+			session,
+			new Event({
+				author: "agent",
+				actions: new EventActions({
+					stateDelta: {
+						keep: 1,
+						[`${State.TEMP_PREFIX}gone`]: "nope",
+					},
+				}),
+			}),
+		);
+		expect(session.state.keep).toBe(1);
+		expect(session.state[`${State.TEMP_PREFIX}gone`]).toBeUndefined();
+	});
+
+	it("deleteSession is a silent no-op for unknown ids", async () => {
+		await expect(
+			service.deleteSession("app", "user", "does-not-exist"),
+		).resolves.toBeUndefined();
+	});
+
+	it("appendEvent with empty stateDelta still persists the event row", async () => {
+		const session = await service.createSession("app", "user", {}, "s-empty-d");
+		await service.appendEvent(
+			session,
+			new Event({
+				author: "agent",
+				content: { role: "model", parts: [{ text: "hi" }] },
+				actions: new EventActions({ stateDelta: {} }),
+			}),
+		);
+		const fetched = await service.getSession("app", "user", "s-empty-d");
+		expect(fetched?.events).toHaveLength(1);
+		expect(fetched?.events[0].content?.parts?.[0]?.text).toBe("hi");
+	});
+
+	it("createSession merges pre-existing app and user state rows", async () => {
+		await service.createSession(
+			"shared",
+			"u1",
+			{
+				[`${State.APP_PREFIX}flag`]: "on",
+				[`${State.USER_PREFIX}pref`]: "a",
+			},
+			"s1",
+		);
+		const second = await service.createSession(
+			"shared",
+			"u1",
+			{ local: 1 },
+			"s2",
+		);
+		expect(second.state[`${State.APP_PREFIX}flag`]).toBe("on");
+		expect(second.state[`${State.USER_PREFIX}pref`]).toBe("a");
+		expect(second.state.local).toBe(1);
+	});
+
+	it("hasTrailingCodeExecutionResult treats explicit false as false", () => {
+		const event = (service as any).storageEventToEvent({
+			id: "e-false-trail",
+			app_name: "app",
+			user_id: "user",
+			session_id: "s1",
+			invocation_id: "inv",
+			author: "agent",
+			branch: null,
+			timestamp: new Date(),
+			content: null,
+			actions: JSON.stringify({ hasTrailingCodeExecutionResult: false }),
+			long_running_tool_ids_json: null,
+			grounding_metadata: null,
+			partial: null,
+			turn_complete: null,
+			error_code: null,
+			error_message: null,
+			interrupted: null,
+		});
+		expect(event.hasTrailingCodeExecutionResult()).toBe(false);
+	});
+});

@@ -630,3 +630,203 @@ describe("AgentTool leftover instruction and description edges", () => {
 		expect(tool.getDeclaration().description).toBe("From agent");
 	});
 });
+
+describe("AgentTool leftover runAsync failure and content edges", () => {
+	it("wraps non-Error throws from the agent as Agent tool execution failed", async () => {
+		const shouldThrow = "agent-string-boom";
+		const agent = makeStubAgent({
+			runAsync: async function* () {
+				if (shouldThrow) {
+					throw shouldThrow;
+				}
+				yield new Event({ author: "stub_agent" });
+			},
+		});
+		const tool = new AgentTool({ name: "boom_tool", agent });
+		const { context } = makeToolContext(agent);
+		const error = vi
+			.spyOn((tool as any).logger, "error")
+			.mockImplementation(() => {});
+
+		await expect(tool.runAsync({ input: "x" }, context)).rejects.toThrow(
+			/Agent tool execution failed: agent-string-boom/,
+		);
+		expect(error).toHaveBeenCalled();
+		error.mockRestore();
+	});
+
+	it("returns empty string when the last matching event has empty parts", async () => {
+		const agent = makeStubAgent({
+			runAsync: async function* () {
+				yield new Event({
+					author: "stub_agent",
+					content: { role: "model", parts: [] },
+				});
+			},
+		});
+		const tool = new AgentTool({ name: "empty_parts", agent });
+		const { context } = makeToolContext(agent);
+		await expect(tool.runAsync({ input: "x" }, context)).resolves.toBe("");
+	});
+
+	it("returns empty string when parts only contain nullish text", async () => {
+		const agent = makeStubAgent({
+			runAsync: async function* () {
+				yield new Event({
+					author: "stub_agent",
+					content: {
+						role: "model",
+						parts: [{ text: null as any }, { text: undefined as any }],
+					},
+				});
+			},
+		});
+		const tool = new AgentTool({ name: "nullish_text", agent });
+		const { context } = makeToolContext(agent);
+		await expect(tool.runAsync({ input: "x" }, context)).resolves.toBe("");
+	});
+
+	it("parses JSON object text and stores it under outputKey", async () => {
+		const agent = makeStubAgent({
+			runAsync: async function* () {
+				yield new Event({
+					author: "stub_agent",
+					content: {
+						role: "model",
+						parts: [{ text: '{"answer":42}' }],
+					},
+				});
+			},
+		});
+		const tool = new AgentTool({
+			name: "json_tool",
+			agent,
+			outputKey: "parsed",
+		});
+		const { context } = makeToolContext(agent);
+		const result = await tool.runAsync({ input: "x" }, context);
+		expect(result).toEqual({ answer: 42 });
+		expect(context.state.parsed).toEqual({ answer: 42 });
+	});
+
+	it("joins multiple text parts with newlines before JSON parse", async () => {
+		const agent = makeStubAgent({
+			runAsync: async function* () {
+				yield new Event({
+					author: "stub_agent",
+					content: {
+						role: "model",
+						parts: [{ text: "line1" }, { text: "line2" }],
+					},
+				});
+			},
+		});
+		const tool = new AgentTool({ name: "join_tool", agent });
+		const { context } = makeToolContext(agent);
+		await expect(tool.runAsync({ input: "x" }, context)).resolves.toBe(
+			"line1\nline2",
+		);
+	});
+
+	it("uses agent.name alone as branch when parent branch is absent", async () => {
+		const runAsync = vi.fn(async function* () {
+			yield new Event({
+				author: "stub_agent",
+				content: { role: "model", parts: [{ text: "ok" }] },
+			});
+		});
+		const agent = makeStubAgent({ runAsync });
+		const tool = new AgentTool({ name: "branch_tool", agent });
+		const appendEvent = vi.fn().mockResolvedValue(undefined);
+		const invocationContext = new InvocationContext({
+			sessionService: { appendEvent } as unknown as BaseSessionService,
+			pluginManager: new PluginManager(),
+			agent,
+			session: makeSession(),
+			runConfig: {} as any,
+		});
+		const context = new ToolContext(invocationContext);
+
+		await tool.runAsync({ input: "x" }, context);
+		expect(runAsync.mock.calls[0][0].branch).toBe("stub_agent");
+	});
+
+	it("does not append partial events to the session", async () => {
+		const appendEvent = vi.fn().mockResolvedValue(undefined);
+		const agent = makeStubAgent({
+			runAsync: async function* () {
+				yield new Event({
+					author: "stub_agent",
+					partial: true,
+					content: { role: "model", parts: [{ text: "chunk" }] },
+				});
+				yield new Event({
+					author: "stub_agent",
+					content: { role: "model", parts: [{ text: "final" }] },
+				});
+			},
+		});
+		const tool = new AgentTool({ name: "partial_tool", agent });
+		const invocationContext = new InvocationContext({
+			sessionService: { appendEvent } as unknown as BaseSessionService,
+			pluginManager: new PluginManager(),
+			agent,
+			session: makeSession(),
+			runConfig: {} as any,
+			branch: "root",
+		});
+		const context = new ToolContext(invocationContext);
+
+		await expect(tool.runAsync({ input: "x" }, context)).resolves.toBe("final");
+		expect(appendEvent).toHaveBeenCalledTimes(1);
+		expect(appendEvent.mock.calls[0][1].partial).toBeFalsy();
+	});
+
+	it("honors an explicit functionDeclaration override", () => {
+		const agent = makeStubAgent();
+		const declaration = {
+			name: "custom_decl",
+			description: "Custom schema",
+			parameters: {
+				type: Type.OBJECT,
+				properties: {
+					topic: { type: Type.STRING },
+				},
+				required: ["topic"],
+			},
+		};
+		const tool = new AgentTool({
+			name: "custom_tool",
+			agent,
+			functionDeclaration: declaration as any,
+		});
+		expect(tool.getDeclaration()).toEqual(declaration);
+	});
+
+	it("wraps Error from sessionService.appendEvent", async () => {
+		const agent = makeStubAgent({
+			runAsync: async function* () {
+				yield new Event({
+					author: "stub_agent",
+					content: { role: "model", parts: [{ text: "x" }] },
+				});
+			},
+		});
+		const tool = new AgentTool({ name: "append_fail", agent });
+		const appendEvent = vi.fn().mockRejectedValue(new Error("append boom"));
+		const invocationContext = new InvocationContext({
+			sessionService: { appendEvent } as unknown as BaseSessionService,
+			pluginManager: new PluginManager(),
+			agent,
+			session: makeSession(),
+			runConfig: {} as any,
+			branch: "root",
+		});
+		const context = new ToolContext(invocationContext);
+		vi.spyOn((tool as any).logger, "error").mockImplementation(() => {});
+
+		await expect(tool.runAsync({ input: "x" }, context)).rejects.toThrow(
+			/Agent tool execution failed: append boom/,
+		);
+	});
+});

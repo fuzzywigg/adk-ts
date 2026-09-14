@@ -856,3 +856,134 @@ describe("FunctionTool leftover toString and default type edges", () => {
 		).resolves.toEqual({ value: null, isNull: true, isUndef: false });
 	});
 });
+
+describe("FunctionTool leftover declaration and coercion edges", () => {
+	it("pulls description from JSDoc when options omit description", () => {
+		/**
+		 * Greets someone warmly
+		 */
+		function greet(name: string) {
+			return name;
+		}
+		Object.defineProperty(greet, "toString", {
+			value: () =>
+				`/**
+ * Greets someone warmly
+ */
+function greet(name) { return name; }`,
+		});
+		const tool = new FunctionTool(greet);
+		expect(tool.description).toContain("Greets someone warmly");
+		expect(tool.name).toBe("greet");
+	});
+
+	it("honors an explicit name override over func.name", async () => {
+		function add(a: number, b: number) {
+			return a + b;
+		}
+		const tool = new FunctionTool(add, {
+			name: "sum_numbers",
+			description: "Adds two numbers",
+			parameterTypes: { a: "number" as any, b: "number" as any },
+		});
+		expect(tool.name).toBe("sum_numbers");
+		expect(tool.getDeclaration().name).toBe("sum_numbers");
+		await expect(tool.runAsync({ a: 1, b: 2 }, makeContext())).resolves.toEqual(
+			3,
+		);
+	});
+
+	it("leaves values unchanged for unknown parameterTypes", async () => {
+		function wrap(value: unknown) {
+			return { value, type: typeof value };
+		}
+		Object.defineProperty(wrap, "toString", {
+			value: () =>
+				"function wrap(value) { return { value, type: typeof value }; }",
+		});
+		const tool = new FunctionTool(wrap, {
+			description: "unknown type",
+			parameterTypes: { value: "object" as any },
+		});
+		await expect(
+			tool.runAsync({ value: { a: 1 } } as any, makeContext()),
+		).resolves.toEqual({ value: { a: 1 }, type: "object" });
+	});
+
+	it("treats present-but-undefined keys as provided for mandatory checks", async () => {
+		function greet(name: string) {
+			return { name, type: typeof name };
+		}
+		Object.defineProperty(greet, "toString", {
+			value: () =>
+				"function greet(name) { return { name, type: typeof name }; }",
+		});
+		const tool = new FunctionTool(greet, { description: "greet" });
+		await expect(
+			tool.runAsync({ name: undefined } as any, makeContext()),
+		).resolves.toEqual({ name: undefined, type: "undefined" });
+	});
+
+	it("does not coerce non-numeric strings when parameter type is number", async () => {
+		function wrap(n: number) {
+			return { n, type: typeof n };
+		}
+		Object.defineProperty(wrap, "toString", {
+			value: () => "function wrap(n) { return { n, type: typeof n }; }",
+		});
+		const tool = new FunctionTool(wrap, {
+			description: "number coerce",
+			parameterTypes: { n: "number" as any },
+		});
+		await expect(
+			tool.runAsync({ n: "abc" } as any, makeContext()),
+		).resolves.toEqual({ n: "abc", type: "string" });
+	});
+
+	it("does not auto-inject a parameter named context (only toolContext)", async () => {
+		function useContext(message: string, context: ToolContext) {
+			return { message, hasActions: Boolean(context?.actions) };
+		}
+		Object.defineProperty(useContext, "toString", {
+			value: () =>
+				"function useContext(message, context) { return { message, hasActions: Boolean(context?.actions) }; }",
+		});
+		const tool = new FunctionTool(useContext, {
+			description: "uses context param name",
+		});
+		await expect(
+			tool.runAsync({ message: "hi" } as any, makeContext()),
+		).resolves.toEqual({ message: "hi", hasActions: false });
+	});
+
+	it("returns structured error objects when the wrapped function throws", async () => {
+		function boom(_x: string) {
+			throw new Error("inner boom");
+		}
+		Object.defineProperty(boom, "toString", {
+			value: () => 'function boom(x) { throw new Error("inner boom"); }',
+		});
+		const tool = new FunctionTool(boom, { description: "throws" });
+		await expect(
+			tool.runAsync({ x: "a" } as any, makeContext()),
+		).resolves.toEqual({
+			error: "Error executing function boom: inner boom",
+		});
+	});
+
+	it("overrides declaration parameter types from parameterTypes options", () => {
+		function typed(count: unknown) {
+			return count;
+		}
+		Object.defineProperty(typed, "toString", {
+			value: () => "function typed(count) { return count; }",
+		});
+		const tool = new FunctionTool(typed, {
+			description: "typed override",
+			parameterTypes: { count: "INTEGER" as any },
+		});
+		expect(tool.getDeclaration().parameters?.properties?.count?.type).toBe(
+			"INTEGER",
+		);
+	});
+});

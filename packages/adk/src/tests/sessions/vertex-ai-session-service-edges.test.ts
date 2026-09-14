@@ -411,4 +411,184 @@ describe("VertexAiSessionService leftover LRO/GET and name edges", () => {
 		expect(session.id).toBe("sessX");
 		expect(asyncRequest.mock.calls[2][0].path).toContain("/sessions/sessX");
 	});
+
+	it("createSession times out when the LRO never reports done", async () => {
+		vi.useFakeTimers();
+		const { service, asyncRequest } = createService();
+		asyncRequest
+			.mockResolvedValueOnce({
+				name: "projects/p/locations/l/reasoningEngines/9/sessions/s-to/operations/op-to",
+			})
+			.mockResolvedValue({ done: false });
+
+		const pending = service.createSession("app", "u");
+		await vi.runAllTimersAsync();
+		await expect(pending).rejects.toThrow(
+			/Timeout waiting for operation op-to to complete/,
+		);
+	});
+
+	it("getSession returns undefined and logs when the session GET fails", async () => {
+		const { service, asyncRequest } = createService();
+		asyncRequest.mockRejectedValueOnce(new Error("not found"));
+		await expect(
+			service.getSession("app", "u", "missing"),
+		).resolves.toBeUndefined();
+		expect(console.error).toHaveBeenCalled();
+	});
+
+	it("deleteSession logs and rethrows API failures", async () => {
+		const { service, asyncRequest } = createService();
+		asyncRequest.mockRejectedValueOnce(new Error("delete denied"));
+		await expect(service.deleteSession("app", "u", "s1")).rejects.toThrow(
+			/delete denied/,
+		);
+		expect(console.error).toHaveBeenCalled();
+	});
+
+	it("paginated getSession tolerates a page without sessionEvents", async () => {
+		const { service, asyncRequest } = createService();
+		asyncRequest
+			.mockResolvedValueOnce({
+				name: "projects/p/locations/l/reasoningEngines/9/sessions/sess-page",
+				updateTime: "2024-01-01T00:00:30.000Z",
+				sessionState: {},
+			})
+			.mockResolvedValueOnce({
+				sessionEvents: [
+					{
+						name: ".../events/e0",
+						invocationId: "i0",
+						author: "user",
+						timestamp: "2024-01-01T00:00:01.000Z",
+						content: { parts: [{ text: "first" }] },
+					},
+				],
+				nextPageToken: "next",
+			})
+			.mockResolvedValueOnce({ nextPageToken: undefined });
+
+		const session = await service.getSession("app", "u", "sess-page");
+		expect(session?.events.map((e) => e.content?.parts?.[0]?.text)).toEqual([
+			"first",
+		]);
+	});
+
+	it("treats numRecentEvents: 0 as falsy so afterTimestamp still applies", async () => {
+		const { service, asyncRequest } = createService();
+		asyncRequest
+			.mockResolvedValueOnce({
+				name: "projects/p/locations/l/reasoningEngines/9/sessions/sess-nre0",
+				updateTime: "2024-01-01T00:00:30.000Z",
+				sessionState: {},
+			})
+			.mockResolvedValueOnce({
+				sessionEvents: [
+					{
+						name: ".../events/e0",
+						invocationId: "i0",
+						author: "user",
+						timestamp: "2024-01-01T00:00:01.000Z",
+						content: { parts: [{ text: "old" }] },
+					},
+					{
+						name: ".../events/e1",
+						invocationId: "i1",
+						author: "agent",
+						timestamp: "2024-01-01T00:00:20.000Z",
+						content: { parts: [{ text: "new" }] },
+					},
+				],
+			});
+
+		const session = await service.getSession("app", "u", "sess-nre0", {
+			numRecentEvents: 0,
+			afterTimestamp: Date.parse("2024-01-01T00:00:10.000Z") / 1000,
+		});
+		expect(session?.events.map((e) => e.content?.parts?.[0]?.text)).toEqual([
+			"old",
+			"new",
+		]);
+	});
+
+	it("fromApiEvent maps metadata without longRunningToolIds as undefined", () => {
+		const { service } = createService();
+		const event = (service as any).fromApiEvent({
+			name: ".../events/e-meta",
+			invocationId: "inv",
+			author: "agent",
+			timestamp: "2024-01-01T00:00:00.000Z",
+			eventMetadata: {
+				partial: false,
+				turnComplete: true,
+				interrupted: false,
+				branch: "root",
+			},
+		});
+		expect(event.partial).toBe(false);
+		expect(event.turnComplete).toBe(true);
+		expect(event.branch).toBe("root");
+		expect(event.longRunningToolIds).toBeUndefined();
+	});
+
+	it("fromApiEvent without actions still builds a default EventActions", () => {
+		const { service } = createService();
+		const event = (service as any).fromApiEvent({
+			name: ".../events/e-no-act",
+			invocationId: "inv",
+			author: "agent",
+			timestamp: "2024-01-01T00:00:00.000Z",
+			content: { parts: [{ text: "plain" }] },
+		});
+		expect(event.actions).toBeInstanceOf(EventActions);
+		expect(event.content?.parts?.[0]?.text).toBe("plain");
+	});
+
+	it("convertEventToJson omits content when absent and nulls empty longRunningToolIds", () => {
+		const { service } = createService();
+		const event = new Event({
+			author: "agent",
+			invocationId: "inv",
+			timestamp: 10.25,
+		});
+		const payload = (service as any).convertEventToJson(event);
+		expect(payload.content).toBeUndefined();
+		expect(payload.timestamp).toEqual({
+			seconds: 10,
+			nanos: 250_000_000,
+		});
+		expect(payload.event_metadata.long_running_tool_ids).toBeNull();
+	});
+
+	it("createSession defaults missing sessionState to {}", async () => {
+		const { service, asyncRequest } = createService();
+		asyncRequest
+			.mockResolvedValueOnce({
+				name: "projects/p/locations/l/reasoningEngines/9/sessions/s-empty/operations/op",
+			})
+			.mockResolvedValueOnce({ done: true })
+			.mockResolvedValueOnce({
+				name: "projects/p/locations/l/reasoningEngines/9/sessions/s-empty",
+				updateTime: "2024-01-01T00:00:00.000Z",
+			});
+
+		const session = await service.createSession("app", "u");
+		expect(session.state).toEqual({});
+		expect(session.id).toBe("s-empty");
+	});
+
+	it("listSessions returns [] when response has neither sessions nor httpHeaders", async () => {
+		const { service, asyncRequest } = createService();
+		asyncRequest.mockResolvedValueOnce({});
+		await expect(service.listSessions("app", "u")).resolves.toEqual({
+			sessions: [],
+		});
+	});
+
+	it("rejects createSession when a user-provided sessionId is supplied", async () => {
+		const { service } = createService();
+		await expect(
+			service.createSession("app", "u", {}, "client-id"),
+		).rejects.toThrow(/User-provided Session id is not supported/);
+	});
 });

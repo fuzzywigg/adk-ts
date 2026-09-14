@@ -212,4 +212,57 @@ describe("InMemoryArtifactService leftover edges (post #113)", () => {
 			service.loadArtifact({ ...base, filename: "broken-ref.txt" }),
 		).rejects.toThrow(/Invalid artifact reference URI/);
 	});
+
+	it("negative versions past -length return null", async () => {
+		const service = new InMemoryArtifactService();
+		await service.saveArtifact({
+			...base,
+			filename: "n.txt",
+			artifact: { text: "only" },
+		});
+		await expect(
+			service.loadArtifact({ ...base, filename: "n.txt", version: -2 }),
+		).resolves.toBeNull();
+	});
+
+	it("listVersions returns dense indices after multiple saves", async () => {
+		const service = new InMemoryArtifactService();
+		await service.saveArtifact({
+			...base,
+			filename: "v.txt",
+			artifact: { text: "0" },
+		});
+		await service.saveArtifact({
+			...base,
+			filename: "v.txt",
+			artifact: { text: "1" },
+		});
+		await expect(
+			service.listVersions({ ...base, filename: "v.txt" }),
+		).resolves.toEqual([0, 1]);
+	});
+
+	it("deleteArtifact removes user-namespaced keys without touching session files", async () => {
+		const service = new InMemoryArtifactService();
+		await service.saveArtifact({
+			...base,
+			filename: "session.txt",
+			artifact: { text: "s" },
+		});
+		await service.saveArtifact({
+			...base,
+			filename: "user:prefs.json",
+			artifact: { text: "u" },
+		});
+		await service.deleteArtifact({
+			...base,
+			filename: "user:prefs.json",
+		});
+		await expect(
+			service.loadArtifact({ ...base, filename: "user:prefs.json" }),
+		).resolves.toBeNull();
+		await expect(
+			service.loadArtifact({ ...base, filename: "session.txt" }),
+		).resolves.toEqual({ text: "s" });
+	});
 });

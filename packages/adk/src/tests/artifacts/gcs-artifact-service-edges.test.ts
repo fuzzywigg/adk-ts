@@ -159,4 +159,42 @@ describe("GcsArtifactService leftover edges (post #113)", () => {
 		]);
 		expect(getFilesMock).toHaveBeenCalledTimes(2);
 	});
+
+	it("listVersions skips non-numeric trailing segments", async () => {
+		getFilesMock.mockResolvedValueOnce([
+			[
+				{ name: "app/user-1/session-1/notes.txt/0" },
+				{ name: "app/user-1/session-1/notes.txt/latest" },
+				{ name: "app/user-1/session-1/notes.txt/2" },
+			],
+		]);
+		const service = new GcsArtifactService("b");
+		await expect(
+			service.listVersions({ ...base, filename: "notes.txt" }),
+		).resolves.toEqual([0, 2]);
+	});
+
+	it("deleteArtifact is a no-op when listVersions is empty", async () => {
+		getFilesMock.mockResolvedValueOnce([[]]);
+		const service = new GcsArtifactService("b");
+		await expect(
+			service.deleteArtifact({ ...base, filename: "gone.txt" }),
+		).resolves.toBeUndefined();
+		expect(deleteMock).not.toHaveBeenCalled();
+	});
+
+	it("saveArtifact uses user-namespace blob paths for user: filenames", async () => {
+		getFilesMock.mockResolvedValueOnce([[]]);
+		const service = new GcsArtifactService("b");
+		await expect(
+			service.saveArtifact({
+				...base,
+				filename: "user:prefs.json",
+				artifact: {
+					inlineData: { data: "{}", mimeType: "application/json" },
+				},
+			}),
+		).resolves.toBe(0);
+		expect(fileMock).toHaveBeenCalledWith("app/user-1/user/user:prefs.json/0");
+	});
 });
