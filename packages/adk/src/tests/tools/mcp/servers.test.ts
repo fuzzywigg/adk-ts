@@ -70,6 +70,24 @@ describe("MCP package server factories", () => {
 		});
 	});
 
+	it("defaults PATH to empty string when process.env.PATH is unset", () => {
+		const originalPath = process.env.PATH;
+		delete process.env.PATH;
+		try {
+			const config = getConfig(McpMemory());
+			if (config.transport.mode !== "stdio") {
+				throw new Error("expected stdio transport");
+			}
+			expect(config.transport.env?.PATH).toBe("");
+		} finally {
+			if (originalPath === undefined) {
+				delete process.env.PATH;
+			} else {
+				process.env.PATH = originalPath;
+			}
+		}
+	});
+
 	it("honors debug, description, retryOptions, and samplingHandler", () => {
 		const samplingHandler: SamplingHandler = vi.fn();
 		const config = getConfig(

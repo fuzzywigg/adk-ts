@@ -356,4 +356,71 @@ describe("McpClientService.reinitialize / close / sampling handlers", () => {
 		await expect(service.initialize()).resolves.toBeTruthy();
 		expect(service.isConnected()).toBe(true);
 	});
+
+	it("rethrows McpError from sampling callback unchanged", async () => {
+		const handler = vi
+			.fn()
+			.mockRejectedValue(
+				new McpError("typed sampling", McpErrorType.INVALID_REQUEST_ERROR),
+			);
+		const service = new McpClientService(
+			stdioConfig({ samplingHandler: handler }),
+		);
+		await service.initialize();
+
+		const registered = setRequestHandler.mock.calls[0][1];
+		const validRequest = {
+			method: "sampling/createMessage",
+			params: {
+				messages: [{ role: "user", content: { type: "text", text: "ping" } }],
+				maxTokens: 8,
+			},
+		};
+
+		await expect(registered(validRequest)).rejects.toMatchObject({
+			type: McpErrorType.INVALID_REQUEST_ERROR,
+			message: "typed sampling",
+		});
+	});
+
+	it("isConnected is false while closing even if client is set", async () => {
+		const service = new McpClientService(stdioConfig());
+		await service.initialize();
+		expect(service.isConnected()).toBe(true);
+		(service as any).isClosing = true;
+		expect(service.isConnected()).toBe(false);
+	});
+
+	it("cleanupResources tolerates missing close methods", async () => {
+		const service = new McpClientService(stdioConfig());
+		await service.initialize();
+		(service as any).client = { connected: true };
+		(service as any).transport = { kind: "noop" };
+
+		await expect(service.close()).resolves.toBeUndefined();
+		expect(service.isConnected()).toBe(false);
+		expect((service as any).client).toBeNull();
+		expect((service as any).transport).toBeNull();
+	});
+
+	it("setSamplingHandler logs when setupSamplingHandler fails after connect", async () => {
+		const service = new McpClientService(stdioConfig());
+		await service.initialize();
+
+		setRequestHandler.mockImplementation(() => {
+			throw new Error("late register fail");
+		});
+		const errorSpy = vi
+			.spyOn((service as any).logger, "error")
+			.mockImplementation(() => {});
+
+		service.setSamplingHandler(vi.fn().mockResolvedValue("late"));
+		await vi.waitFor(() => {
+			expect(errorSpy).toHaveBeenCalledWith(
+				"Failed to setup sampling handler:",
+				expect.any(Error),
+			);
+		});
+		errorSpy.mockRestore();
+	});
 });
