@@ -191,6 +191,32 @@ describe("McpToolset offline helpers", () => {
 		warn.mockRestore();
 	});
 
+	it.each([
+		{ tools: { not: "an-array" } },
+		{ tools: "nope" },
+		{ tools: 42 },
+		{ tools: true },
+		{},
+	])("getTools returns empty when tools is truthy but not an array (%j)", async (payload) => {
+		listTools.mockResolvedValue(payload);
+		const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+		const toolset = new McpToolset(baseConfig);
+		await expect(toolset.getTools()).resolves.toEqual([]);
+		expect(warn).toHaveBeenCalledWith(
+			"MCP server returned no tools or invalid tools array",
+		);
+		warn.mockRestore();
+	});
+
+	it("getTools returns empty when tools is undefined", async () => {
+		listTools.mockResolvedValue({ tools: undefined });
+		const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+		const toolset = new McpToolset(baseConfig);
+		await expect(toolset.getTools()).resolves.toEqual([]);
+		expect(warn).toHaveBeenCalled();
+		warn.mockRestore();
+	});
+
 	it("getTools wraps non-Mcp errors as CONNECTION_ERROR", async () => {
 		listTools.mockRejectedValue(new Error("list failed"));
 		const toolset = new McpToolset(baseConfig);

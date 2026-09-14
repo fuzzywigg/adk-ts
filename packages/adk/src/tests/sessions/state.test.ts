@@ -149,4 +149,16 @@ describe("State", () => {
 		const state = State.create({ a: 1, b: 2 }, { b: 9, c: 3 });
 		expect(state.toDict()).toEqual({ a: 1, b: 9, c: 3 });
 	});
+
+	it("get returns explicit undefined from delta over value fallback", () => {
+		const state = State.create({ a: 1 }, { a: undefined });
+		expect(state.get("a", "fallback")).toBeUndefined();
+		expect(state.has("a")).toBe(true);
+	});
+
+	it("has is false for missing keys even when default would apply on get", () => {
+		const state = State.create({ present: true }, {});
+		expect(state.has("missing")).toBe(false);
+		expect(state.get("missing", 42)).toBe(42);
+	});
 });

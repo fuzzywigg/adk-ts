@@ -463,4 +463,36 @@ describe("sharedMemoryRequestProcessor leftover coalescing edges", () => {
 			"[past] said: fresh",
 		);
 	});
+
+	it("coalesces vanishing parts via ?? [] after findLast matches", async () => {
+		const searchMemory = vi.fn(async () => ({ memories: [] }));
+		const realParts = [{ text: "vanish-query" }];
+		let reads = 0;
+		const content: { role: string; parts?: unknown } = { role: "user" };
+		Object.defineProperty(content, "parts", {
+			configurable: true,
+			enumerable: true,
+			get() {
+				reads++;
+				// findLast reads parts once for `.length`; later query map hits ?? [].
+				if (reads <= 1) return realParts;
+				return undefined;
+			},
+		});
+		const { context, llmRequest } = makeContext({
+			memoryService: { searchMemory } as any,
+			events: [
+				new Event({
+					author: "user",
+					content: content as any,
+				}),
+			],
+		});
+
+		await drain(sharedMemoryRequestProcessor.runAsync(context, llmRequest));
+		expect(searchMemory).toHaveBeenCalledWith(
+			expect.objectContaining({ query: "" }),
+		);
+		expect(reads).toBeGreaterThanOrEqual(2);
+	});
 });

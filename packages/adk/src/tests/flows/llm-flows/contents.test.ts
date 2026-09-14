@@ -1818,4 +1818,118 @@ describe("contents requestProcessor leftover edges", () => {
 		).toBe(true);
 		expect(llmRequest.contents.map((c) => c.parts?.[0]?.text)).toContain("go");
 	});
+
+	it("throws when merged async functionResponse omits enumerable parts", async () => {
+		const llmRequest = new LlmRequest();
+		const call = new Event({
+			author: "assistant",
+			content: {
+				role: "model",
+				parts: [
+					{ functionCall: { id: "m1", name: "a", args: {} } },
+					{ functionCall: { id: "m2", name: "b", args: {} } },
+				],
+			},
+		});
+		const fr1 = new Event({
+			author: "user",
+			content: {
+				role: "user",
+				parts: [
+					{
+						functionResponse: { id: "m1", name: "a", response: { a: 1 } },
+					},
+				],
+			},
+		});
+		const fr2 = new Event({
+			author: "user",
+			content: {
+				role: "user",
+				parts: [
+					{
+						functionResponse: { id: "m2", name: "b", response: { b: 2 } },
+					},
+				],
+			},
+		});
+		// Non-enumerable parts survive filter/getFunctionResponses but are
+		// dropped by JSON.stringify inside mergeFunctionResponseEvents.
+		const parts = fr1.content!.parts;
+		Object.defineProperty(fr1.content, "parts", {
+			enumerable: false,
+			configurable: true,
+			writable: true,
+			value: parts,
+		});
+
+		await expect(
+			drain(
+				requestProcessor.runAsync(
+					ctx(duckAgent("assistant", "default"), [
+						call,
+						fr1,
+						fr2,
+						userEvent("after"),
+					]),
+					llmRequest,
+				),
+			),
+		).rejects.toThrow("There should be at least one function_response part.");
+	});
+
+	it("throws when a later async functionResponse loses parts during merge", async () => {
+		const llmRequest = new LlmRequest();
+		const call = new Event({
+			author: "assistant",
+			content: {
+				role: "model",
+				parts: [
+					{ functionCall: { id: "n1", name: "a", args: {} } },
+					{ functionCall: { id: "n2", name: "b", args: {} } },
+				],
+			},
+		});
+		const fr1 = new Event({
+			author: "user",
+			content: {
+				role: "user",
+				parts: [
+					{
+						functionResponse: { id: "n1", name: "a", response: { a: 1 } },
+					},
+				],
+			},
+		});
+		const fr2 = new Event({
+			author: "user",
+			content: {
+				role: "user",
+				parts: [
+					{
+						functionResponse: { id: "n2", name: "b", response: { b: 2 } },
+					},
+				],
+			},
+		});
+		const originalGetCalls = call.getFunctionCalls.bind(call);
+		call.getFunctionCalls = () => {
+			(fr2.content as { parts?: unknown }).parts = undefined;
+			return originalGetCalls();
+		};
+
+		await expect(
+			drain(
+				requestProcessor.runAsync(
+					ctx(duckAgent("assistant", "default"), [
+						call,
+						fr1,
+						fr2,
+						userEvent("after"),
+					]),
+					llmRequest,
+				),
+			),
+		).rejects.toThrow("There should be at least one function_response part.");
+	});
 });
