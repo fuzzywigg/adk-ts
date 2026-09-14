@@ -330,4 +330,311 @@ describe("LoadArtifactsTool", () => {
 			),
 		).toBe(false);
 	});
+
+	it("only inspects the last content turn when multiple turns exist", async () => {
+		const tool = new LoadArtifactsTool();
+		const loadArtifact = vi.fn().mockResolvedValue({ text: "payload" });
+		const context = {
+			actions: {},
+			listArtifacts: vi.fn().mockResolvedValue(["a.txt"]),
+			loadArtifact,
+		} as unknown as ToolContext;
+		const llmRequest = new LlmRequest();
+		llmRequest.contents = [
+			{
+				role: "user",
+				parts: [
+					{
+						functionResponse: {
+							name: "load_artifacts",
+							response: { artifact_names: ["a.txt"] },
+						},
+					} as any,
+				],
+			},
+			{
+				role: "model",
+				parts: [{ text: "thinking" } as any],
+			},
+		];
+
+		await tool.processLlmRequest(context, llmRequest);
+		expect(loadArtifact).not.toHaveBeenCalled();
+	});
+
+	it("loads from the last turn when it is a load_artifacts response", async () => {
+		const tool = new LoadArtifactsTool();
+		const loadArtifact = vi.fn().mockResolvedValue({ text: "payload" });
+		const context = {
+			actions: {},
+			listArtifacts: vi.fn().mockResolvedValue(["z.txt"]),
+			loadArtifact,
+		} as unknown as ToolContext;
+		const llmRequest = new LlmRequest();
+		llmRequest.contents = [
+			{ role: "user", parts: [{ text: "earlier" } as any] },
+			{
+				role: "user",
+				parts: [
+					{
+						functionResponse: {
+							name: "load_artifacts",
+							response: { artifact_names: ["z.txt"] },
+						},
+					} as any,
+				],
+			},
+		];
+
+		await tool.processLlmRequest(context, llmRequest);
+		expect(loadArtifact).toHaveBeenCalledWith("z.txt");
+		expect(
+			llmRequest.contents.some((c) =>
+				c.parts?.some((p) => (p as any).text === "Artifact z.txt is:"),
+			),
+		).toBe(true);
+	});
+
+	it("treats null artifact_names on the function response as empty", async () => {
+		const tool = new LoadArtifactsTool();
+		const loadArtifact = vi.fn();
+		const context = {
+			actions: {},
+			listArtifacts: vi.fn().mockResolvedValue(["a.txt"]),
+			loadArtifact,
+		} as unknown as ToolContext;
+		const llmRequest = new LlmRequest();
+		llmRequest.contents = [
+			{
+				role: "user",
+				parts: [
+					{
+						functionResponse: {
+							name: "load_artifacts",
+							response: { artifact_names: null },
+						},
+					} as any,
+				],
+			},
+		];
+
+		await tool.processLlmRequest(context, llmRequest);
+		expect(loadArtifact).not.toHaveBeenCalled();
+		expect(llmRequest.contents).toHaveLength(1);
+	});
+
+	it("skips loading when listArtifacts returns undefined", async () => {
+		const tool = new LoadArtifactsTool();
+		const llmRequest = new LlmRequest();
+		await tool.processLlmRequest(
+			{
+				actions: {},
+				listArtifacts: vi.fn().mockResolvedValue(undefined),
+			} as unknown as ToolContext,
+			llmRequest,
+		);
+		expect(llmRequest.config?.systemInstruction).toBeUndefined();
+	});
+
+	it("ignores a falsy functionResponse on the first part", async () => {
+		const tool = new LoadArtifactsTool();
+		const loadArtifact = vi.fn();
+		const context = {
+			actions: {},
+			listArtifacts: vi.fn().mockResolvedValue(["a.txt"]),
+			loadArtifact,
+		} as unknown as ToolContext;
+		const llmRequest = new LlmRequest();
+		llmRequest.contents = [
+			{
+				role: "user",
+				parts: [{ functionResponse: undefined } as any],
+			},
+		];
+
+		await tool.processLlmRequest(context, llmRequest);
+		expect(loadArtifact).not.toHaveBeenCalled();
+	});
+
+	it("runAsync does not call listArtifacts or loadArtifact", async () => {
+		const tool = new LoadArtifactsTool();
+		const listArtifacts = vi.fn();
+		const loadArtifact = vi.fn();
+		const context = {
+			actions: {},
+			listArtifacts,
+			loadArtifact,
+		} as unknown as ToolContext;
+
+		await expect(
+			tool.runAsync({ artifact_names: ["x"] }, context),
+		).resolves.toEqual({ artifact_names: ["x"] });
+		expect(listArtifacts).not.toHaveBeenCalled();
+		expect(loadArtifact).not.toHaveBeenCalled();
+	});
+
+	it("runAsync treats explicit undefined artifact_names as empty", async () => {
+		const tool = new LoadArtifactsTool();
+		await expect(
+			tool.runAsync({ artifact_names: undefined }, {
+				actions: {},
+			} as ToolContext),
+		).resolves.toEqual({ artifact_names: [] });
+	});
+
+	it("appends instructions with JSON.stringify of artifact names", async () => {
+		const tool = new LoadArtifactsTool();
+		const names = ["a.pdf", "b with space.txt"];
+		const context = {
+			actions: {},
+			listArtifacts: vi.fn().mockResolvedValue(names),
+		} as unknown as ToolContext;
+		const llmRequest = new LlmRequest();
+
+		await tool.processLlmRequest(context, llmRequest);
+
+		expect(llmRequest.config?.systemInstruction).toContain(
+			JSON.stringify(names),
+		);
+	});
+
+	it("does not match functionResponse names that differ only by case", async () => {
+		const tool = new LoadArtifactsTool();
+		const loadArtifact = vi.fn();
+		const context = {
+			actions: {},
+			listArtifacts: vi.fn().mockResolvedValue(["a.txt"]),
+			loadArtifact,
+		} as unknown as ToolContext;
+		const llmRequest = new LlmRequest();
+		llmRequest.contents = [
+			{
+				role: "user",
+				parts: [
+					{
+						functionResponse: {
+							name: "Load_Artifacts",
+							response: { artifact_names: ["a.txt"] },
+						},
+					} as any,
+				],
+			},
+		];
+
+		await tool.processLlmRequest(context, llmRequest);
+		expect(loadArtifact).not.toHaveBeenCalled();
+	});
+
+	it("appends multiple loaded artifacts in request order", async () => {
+		const tool = new LoadArtifactsTool();
+		const loadArtifact = vi
+			.fn()
+			.mockResolvedValueOnce({ text: "one" })
+			.mockResolvedValueOnce({ text: "two" })
+			.mockResolvedValueOnce({ text: "three" });
+		const context = {
+			actions: {},
+			listArtifacts: vi.fn().mockResolvedValue(["a", "b", "c"]),
+			loadArtifact,
+		} as unknown as ToolContext;
+		const llmRequest = new LlmRequest();
+		llmRequest.contents = [
+			{
+				role: "user",
+				parts: [
+					{
+						functionResponse: {
+							name: "load_artifacts",
+							response: { artifact_names: ["a", "b", "c"] },
+						},
+					} as any,
+				],
+			},
+		];
+
+		await tool.processLlmRequest(context, llmRequest);
+
+		const labels = llmRequest.contents
+			.flatMap((c) => c.parts || [])
+			.map((p) => (p as any).text)
+			.filter((t) => typeof t === "string" && t.startsWith("Artifact "));
+		expect(labels).toEqual([
+			"Artifact a is:",
+			"Artifact b is:",
+			"Artifact c is:",
+		]);
+		expect(loadArtifact.mock.calls.map((c) => c[0])).toEqual(["a", "b", "c"]);
+	});
+
+	it("continues after a per-artifact throw and still loads later names", async () => {
+		const tool = new LoadArtifactsTool();
+		const errorSpy = vi
+			.spyOn(console, "error")
+			.mockImplementation(() => undefined);
+		const loadArtifact = vi
+			.fn()
+			.mockRejectedValueOnce(new Error("first boom"))
+			.mockResolvedValueOnce({ text: "ok-second" });
+		const context = {
+			actions: {},
+			listArtifacts: vi.fn().mockResolvedValue(["bad", "good"]),
+			loadArtifact,
+		} as unknown as ToolContext;
+		const llmRequest = new LlmRequest();
+		llmRequest.contents = [
+			{
+				role: "user",
+				parts: [
+					{
+						functionResponse: {
+							name: "load_artifacts",
+							response: { artifact_names: ["bad", "good"] },
+						},
+					} as any,
+				],
+			},
+		];
+
+		await tool.processLlmRequest(context, llmRequest);
+		expect(errorSpy).toHaveBeenCalled();
+		expect(
+			llmRequest.contents.some((c) =>
+				c.parts?.some((p) => (p as any).text === "Artifact good is:"),
+			),
+		).toBe(true);
+		expect(
+			llmRequest.contents.some((c) =>
+				c.parts?.some((p) => (p as any).text === "Artifact bad is:"),
+			),
+		).toBe(false);
+		errorSpy.mockRestore();
+	});
+
+	it("skips loading when contents is undefined", async () => {
+		const tool = new LoadArtifactsTool();
+		const loadArtifact = vi.fn();
+		const context = {
+			actions: {},
+			listArtifacts: vi.fn().mockResolvedValue(["a.txt"]),
+			loadArtifact,
+		} as unknown as ToolContext;
+		const llmRequest = new LlmRequest();
+		llmRequest.contents = undefined as any;
+
+		await tool.processLlmRequest(context, llmRequest);
+		expect(loadArtifact).not.toHaveBeenCalled();
+		expect(llmRequest.config?.systemInstruction).toContain("a.txt");
+	});
+
+	it("declares artifact_names as an array of strings with no required fields", () => {
+		const tool = new LoadArtifactsTool();
+		const declaration = tool.getDeclaration();
+		expect(declaration.parameters?.required).toEqual([]);
+		expect(declaration.parameters?.properties?.artifact_names).toEqual(
+			expect.objectContaining({
+				type: expect.anything(),
+				items: expect.objectContaining({ type: expect.anything() }),
+			}),
+		);
+	});
 });

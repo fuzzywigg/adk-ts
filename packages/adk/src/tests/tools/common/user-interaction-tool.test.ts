@@ -196,4 +196,124 @@ describe("UserInteractionTool", () => {
 			userInput: "",
 		});
 	});
+
+	it("returns an error when promptUser is null", async () => {
+		const tool = new UserInteractionTool();
+		const context = {
+			actions: { promptUser: null, skipSummarization: vi.fn() },
+		} as unknown as ToolContext;
+
+		await expect(tool.runAsync({ prompt: "Hi" }, context)).resolves.toEqual({
+			success: false,
+			error: "User interaction is not supported in the current environment",
+		});
+	});
+
+	it("preserves choice order when forwarding options", async () => {
+		const tool = new UserInteractionTool();
+		const promptUser = vi.fn().mockResolvedValue("c");
+		const context = {
+			actions: { promptUser, skipSummarization: vi.fn() },
+		} as unknown as ToolContext;
+
+		await tool.runAsync(
+			{ prompt: "Pick", options: ["c", "a", "b", "a"] },
+			context,
+		);
+
+		expect(promptUser).toHaveBeenCalledWith({
+			prompt: "Pick",
+			defaultValue: undefined,
+			options: { choices: ["c", "a", "b", "a"] },
+		});
+	});
+
+	it("calls skipSummarization before promptUser", async () => {
+		const tool = new UserInteractionTool();
+		const order: string[] = [];
+		const skipSummarization = vi.fn().mockImplementation(() => {
+			order.push("skip");
+		});
+		const promptUser = vi.fn().mockImplementation(async () => {
+			order.push("prompt");
+			return "ok";
+		});
+		const context = {
+			actions: { promptUser, skipSummarization },
+		} as unknown as ToolContext;
+
+		await tool.runAsync({ prompt: "Go" }, context);
+		expect(order).toEqual(["skip", "prompt"]);
+	});
+
+	it("stringifies object and number throws from promptUser", async () => {
+		const tool = new UserInteractionTool();
+
+		await expect(
+			tool.runAsync({ prompt: "o" }, {
+				actions: { promptUser: vi.fn().mockRejectedValue({ code: 1 }) },
+			} as unknown as ToolContext),
+		).resolves.toEqual({ success: false, error: "[object Object]" });
+
+		await expect(
+			tool.runAsync({ prompt: "n" }, {
+				actions: { promptUser: vi.fn().mockRejectedValue(7) },
+			} as unknown as ToolContext),
+		).resolves.toEqual({ success: false, error: "7" });
+	});
+
+	it("forwards empty-string defaultValue and empty prompt", async () => {
+		const tool = new UserInteractionTool();
+		const promptUser = vi.fn().mockResolvedValue("filled");
+		const context = {
+			actions: { promptUser },
+		} as unknown as ToolContext;
+
+		await tool.runAsync({ prompt: "", defaultValue: "" }, context);
+
+		expect(promptUser).toHaveBeenCalledWith({
+			prompt: "",
+			defaultValue: "",
+			options: undefined,
+		});
+	});
+
+	it("does not call skipSummarization when promptUser is unavailable", async () => {
+		const tool = new UserInteractionTool();
+		const skipSummarization = vi.fn();
+		const context = {
+			actions: { skipSummarization },
+		} as unknown as ToolContext;
+
+		await tool.runAsync({ prompt: "x" }, context);
+		expect(skipSummarization).not.toHaveBeenCalled();
+	});
+
+	it("returns success with whitespace-only userInput", async () => {
+		const tool = new UserInteractionTool();
+		const promptUser = vi.fn().mockResolvedValue("   ");
+		const context = {
+			actions: { promptUser },
+		} as unknown as ToolContext;
+
+		await expect(tool.runAsync({ prompt: "?" }, context)).resolves.toEqual({
+			success: true,
+			userInput: "   ",
+		});
+	});
+
+	it("does not set escalate or transferToAgent on success", async () => {
+		const tool = new UserInteractionTool();
+		const context = {
+			actions: {
+				promptUser: vi.fn().mockResolvedValue("yes"),
+				skipSummarization: vi.fn(),
+			},
+		} as unknown as ToolContext;
+
+		await tool.runAsync({ prompt: "Confirm?" }, context);
+
+		expect((context.actions as any).escalate).toBeUndefined();
+		expect((context.actions as any).transferToAgent).toBeUndefined();
+	});
 });
