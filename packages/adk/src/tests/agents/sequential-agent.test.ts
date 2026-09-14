@@ -350,4 +350,35 @@ describe("SequentialAgent", () => {
 			expect(yieldedEvents).toEqual([e2]);
 		});
 	});
+
+	describe("taskCompleted invocation", () => {
+		it("invokes the injected taskCompleted tool body", async () => {
+			const llmAgent = new LlmAgent({
+				name: "llmSub",
+				description: "llm sub agent",
+				instruction: "",
+				tools: [],
+			});
+			llmAgent.runLive = vi.fn().mockImplementation(async function* () {
+				yield new Event({ author: "llmSub" });
+			});
+
+			const agent = new SequentialAgent({
+				name: "seq",
+				description: "desc",
+				subAgents: [llmAgent],
+			});
+
+			for await (const _ of agent["runLiveImpl"](mockContext)) {
+				/* drain */
+			}
+
+			const injected = llmAgent.tools.find(
+				(tool) => typeof tool === "function" && tool.name === "taskCompleted",
+			) as (() => string) | undefined;
+
+			expect(injected).toBeTypeOf("function");
+			expect(injected?.()).toBe("Task completion signaled.");
+		});
+	});
 });

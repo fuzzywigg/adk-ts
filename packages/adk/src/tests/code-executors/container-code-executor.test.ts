@@ -683,4 +683,51 @@ describe("ContainerCodeExecutor", () => {
 			() => new ContainerCodeExecutor({ image: "python:3", stateful: true }),
 		).toThrow(/stateful/);
 	});
+
+	it("maps thrown timeout Errors from exec into timeout stderr", async () => {
+		const container = makeContainer();
+		createContainer.mockResolvedValue(container);
+		container.exec
+			.mockResolvedValueOnce({
+				start: vi.fn().mockResolvedValue(makeStream([])),
+				inspect: vi.fn().mockResolvedValue({ ExitCode: 0 }),
+			})
+			.mockResolvedValueOnce({
+				start: vi.fn().mockRejectedValue(new Error("connection timeout")),
+				inspect: vi.fn(),
+			});
+
+		const executor = new ContainerCodeExecutor({
+			image: "python:3",
+			executionTimeout: 1000,
+		});
+		const result = await executor.executeCode({} as any, {
+			code: "print(1)",
+			inputFiles: [],
+		});
+		expect(result.stderr).toMatch(/timed out after 1000ms/);
+		expect(result.stdout).toBe("");
+	});
+
+	it("logs cleanupContainer rejections from process exit handlers", async () => {
+		const executor = new ContainerCodeExecutor({ image: "python:3" });
+		const errorSpy = vi
+			.spyOn((executor as any).logger, "error")
+			.mockImplementation(() => {});
+		vi.spyOn(executor as any, "cleanupContainer").mockRejectedValue(
+			new Error("cleanup failed"),
+		);
+
+		const exitHandler = listeners.find(([event]) => event === "exit")?.[1];
+		expect(exitHandler).toBeTypeOf("function");
+		exitHandler?.();
+
+		await vi.waitFor(() => {
+			expect(errorSpy).toHaveBeenCalledWith(
+				"Error during cleanup",
+				expect.any(Error),
+			);
+		});
+		errorSpy.mockRestore();
+	});
 });

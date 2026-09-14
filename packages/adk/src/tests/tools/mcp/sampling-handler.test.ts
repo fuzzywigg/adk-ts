@@ -379,4 +379,48 @@ describe("McpSamplingHandler", () => {
 			message: expect.stringContaining("Invalid response generated"),
 		});
 	});
+
+	it("rejects missing messages after schema validation is bypassed", async () => {
+		const schema = await import("@modelcontextprotocol/sdk/types.js");
+		const spy = vi
+			.spyOn(schema.CreateMessageRequestSchema, "safeParse")
+			.mockReturnValue({ success: true, data: {} } as any);
+
+		const handler = new McpSamplingHandler(async () => "ok");
+		try {
+			await expect(
+				handler.handleSamplingRequest({
+					method: "sampling/createMessage",
+					params: { maxTokens: 10 },
+				} as any),
+			).rejects.toMatchObject({
+				type: McpErrorType.INVALID_REQUEST_ERROR,
+				message: expect.stringContaining("messages array is required"),
+			});
+		} finally {
+			spy.mockRestore();
+		}
+	});
+
+	it("rejects non-array messages after schema validation is bypassed", async () => {
+		const schema = await import("@modelcontextprotocol/sdk/types.js");
+		const spy = vi
+			.spyOn(schema.CreateMessageRequestSchema, "safeParse")
+			.mockReturnValue({ success: true, data: {} } as any);
+
+		const handler = new McpSamplingHandler(async () => "ok");
+		try {
+			await expect(
+				handler.handleSamplingRequest({
+					method: "sampling/createMessage",
+					params: { messages: { role: "user" }, maxTokens: 10 },
+				} as any),
+			).rejects.toMatchObject({
+				type: McpErrorType.INVALID_REQUEST_ERROR,
+				message: expect.stringContaining("messages array is required"),
+			});
+		} finally {
+			spy.mockRestore();
+		}
+	});
 });

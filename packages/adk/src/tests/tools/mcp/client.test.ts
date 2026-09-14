@@ -437,4 +437,45 @@ describe("McpClientService.reinitialize / close / sampling handlers", () => {
 		});
 		errorSpy.mockRestore();
 	});
+
+	it("cleanupResources logs errors from transport.close and still clears state", async () => {
+		const service = new McpClientService(stdioConfig());
+		await service.initialize();
+		transportClose.mockRejectedValueOnce(new Error("transport close boom"));
+		const errorSpy = vi
+			.spyOn((service as any).logger, "error")
+			.mockImplementation(() => {});
+
+		await expect(service.close()).resolves.toBeUndefined();
+		expect(errorSpy).toHaveBeenCalledWith(
+			"Error cleaning up MCP resources:",
+			expect.any(Error),
+		);
+		expect((service as any).client).toBeNull();
+		expect((service as any).transport).toBeNull();
+		errorSpy.mockRestore();
+	});
+
+	it("sampling handler wraps non-Error throws as SAMPLING_ERROR", async () => {
+		const handler = vi.fn().mockRejectedValue("string-fail");
+		const service = new McpClientService(
+			stdioConfig({ samplingHandler: handler }),
+		);
+		await service.initialize();
+
+		const registered = setRequestHandler.mock.calls[0][1];
+		await expect(
+			registered({
+				method: "sampling/createMessage",
+				params: {
+					messages: [{ role: "user", content: { type: "text", text: "x" } }],
+					maxTokens: 8,
+				},
+			}),
+		).rejects.toMatchObject({
+			name: "McpError",
+			type: McpErrorType.SAMPLING_ERROR,
+			message: expect.stringContaining("string-fail"),
+		});
+	});
 });

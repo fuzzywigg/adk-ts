@@ -320,4 +320,29 @@ describe("LlmAsJudgeEvaluator", () => {
 		expect(result.overallScore).toBe(0.5);
 		expect(evaluator.formatAutoRaterPrompt).toHaveBeenCalledTimes(2);
 	});
+
+	it("aggregates empty results when every invocation yields no labels", async () => {
+		vi.spyOn(console, "error").mockImplementation(() => {});
+		LLMRegistry.registerModel("judge-model", {
+			generateContent: vi.fn().mockRejectedValue(new Error("down")),
+		} as any);
+
+		const evaluator = new StubJudgeEvaluator({
+			metricName: "judge",
+			threshold: 0.5,
+			judgeModelOptions: {
+				judgeModel: "judge-model",
+				numSamples: 2,
+			},
+		});
+
+		const result = await evaluator.evaluateInvocations(
+			[invocation("a1"), invocation("a2")],
+			[invocation("b1"), invocation("b2")],
+		);
+
+		expect(result.perInvocationResults).toEqual([]);
+		expect(result.overallEvalStatus).toBe(EvalStatus.NOT_EVALUATED);
+		expect(evaluator.formatAutoRaterPrompt).toHaveBeenCalledTimes(2);
+	});
 });

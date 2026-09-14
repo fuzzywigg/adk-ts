@@ -234,4 +234,73 @@ describe("ResponseEvaluator", () => {
 			expect(result.overallEvalStatus).toBe(EvalStatus.NOT_EVALUATED);
 		});
 	});
+
+	describe("Rouge empty-unigram and extractText leftovers", () => {
+		const evaluator = new ResponseEvaluator({
+			metricName: PrebuiltMetrics.RESPONSE_MATCH_SCORE,
+			threshold: 0.5,
+		});
+
+		it("scores punctuation-only expected text as zero via empty expected unigrams", async () => {
+			const result = await evaluator.evaluateInvocations(
+				[invocation("hello world")],
+				[invocation("!!! ???")],
+			);
+			expect(result.overallScore).toBe(0);
+			expect(result.overallEvalStatus).toBe(EvalStatus.FAILED);
+		});
+
+		it("scores punctuation-only actual text as zero via empty actual unigrams", async () => {
+			const result = await evaluator.evaluateInvocations(
+				[invocation("--- ***")],
+				[invocation("hello")],
+			);
+			expect(result.overallScore).toBe(0);
+			expect(result.overallEvalStatus).toBe(EvalStatus.FAILED);
+		});
+
+		it("treats finalResponse without parts as empty extractText", async () => {
+			const bare: Invocation = {
+				userContent: { parts: [{ text: "hi" }] },
+				creationTimestamp: 1,
+				finalResponse: { role: "model" } as any,
+			};
+			const result = await evaluator.evaluateInvocations(
+				[bare],
+				[invocation("hello")],
+			);
+			expect(result.overallScore).toBe(0);
+			expect(result.overallEvalStatus).toBe(EvalStatus.FAILED);
+		});
+
+		it("ignores empty-string parts when joining extractText", async () => {
+			const sparse: Invocation = {
+				userContent: { parts: [{ text: "hi" }] },
+				creationTimestamp: 1,
+				finalResponse: {
+					role: "model",
+					parts: [{ text: "" }, { text: "keep" }, { text: "" }],
+				},
+			};
+			const result = await evaluator.evaluateInvocations(
+				[sparse],
+				[invocation("keep")],
+			);
+			expect(result.overallScore).toBe(1);
+			expect(result.overallEvalStatus).toBe(EvalStatus.PASSED);
+		});
+
+		it("fails when score is below the configured threshold", async () => {
+			const strict = new ResponseEvaluator({
+				metricName: PrebuiltMetrics.RESPONSE_MATCH_SCORE,
+				threshold: 0.99,
+			});
+			const result = await strict.evaluateInvocations(
+				[invocation("a b c")],
+				[invocation("a b")],
+			);
+			expect(result.perInvocationResults[0].score).toBeCloseTo(0.8);
+			expect(result.overallEvalStatus).toBe(EvalStatus.FAILED);
+		});
+	});
 });

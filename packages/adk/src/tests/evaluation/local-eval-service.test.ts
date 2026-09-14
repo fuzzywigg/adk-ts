@@ -1,4 +1,5 @@
-import { describe, expect, it, vi } from "vitest";
+import { AgentBuilder } from "@adk/agents";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { EvalCase } from "../../evaluation/eval-case";
 import type { EvalSet } from "../../evaluation/eval-set";
 import { PrebuiltMetrics } from "../../evaluation/eval-metrics";
@@ -850,5 +851,280 @@ describe("LocalEvalService", () => {
 		};
 		expect(evaluator).toBeDefined();
 		spy.mockRestore();
+	});
+
+	describe("initializeRunner AgentBuilder paths", () => {
+		afterEach(() => {
+			vi.restoreAllMocks();
+		});
+
+		it("wraps AgentBuilder runner.ask when the agent lacks ask", async () => {
+			const builtAsk = vi.fn(async (message: string) => `built:${message}`);
+			const createSpy = vi.spyOn(AgentBuilder, "create").mockReturnValue({
+				withModel: vi.fn().mockReturnThis(),
+				withDescription: vi.fn().mockReturnThis(),
+				build: vi.fn().mockResolvedValue({
+					runner: { ask: builtAsk },
+				}),
+			} as any);
+
+			const service = new LocalEvalService({
+				name: "plain-base-agent",
+			} as any);
+
+			await vi.waitFor(() => {
+				expect((service as any).runner?.ask).toBeTypeOf("function");
+			});
+
+			const evalCase: EvalCase = {
+				evalId: "builder-ok",
+				conversation: [
+					{
+						userContent: { role: "user", parts: [{ text: "ping" }] },
+						creationTimestamp: 1,
+					},
+				],
+			};
+
+			let text = "";
+			for await (const batch of service.performInference({
+				evalSetId: "set-1",
+				evalCases: [makeEvalSet(evalCase)],
+			})) {
+				text = batch[0].finalResponse?.parts?.[0]?.text ?? "";
+			}
+
+			expect(createSpy).toHaveBeenCalledWith("eval_agent");
+			expect(builtAsk).toHaveBeenCalled();
+			expect(text).toBe("built:[object Object]");
+		});
+
+		it("falls back to mock ask when AgentBuilder.build rejects", async () => {
+			const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+			vi.spyOn(AgentBuilder, "create").mockReturnValue({
+				withModel: vi.fn().mockReturnThis(),
+				withDescription: vi.fn().mockReturnThis(),
+				build: vi.fn().mockRejectedValue(new Error("no model creds")),
+			} as any);
+
+			const service = new LocalEvalService({
+				name: "plain-base-agent",
+			} as any);
+
+			await vi.waitFor(() => {
+				expect((service as any).runner?.ask).toBeTypeOf("function");
+			});
+
+			expect(warn).toHaveBeenCalledWith(
+				expect.stringContaining("Failed to create AgentBuilder runner"),
+				expect.any(Error),
+			);
+
+			const evalCase: EvalCase = {
+				evalId: "builder-fallback",
+				conversation: [
+					{
+						userContent: "plain-string-query",
+						creationTimestamp: 1,
+					} as any,
+				],
+			};
+
+			let text = "";
+			for await (const batch of service.performInference({
+				evalSetId: "set-1",
+				evalCases: [makeEvalSet(evalCase)],
+			})) {
+				text = batch[0].finalResponse?.parts?.[0]?.text ?? "";
+			}
+
+			expect(text).toBe("Mock response to: plain-string-query");
+			warn.mockRestore();
+		});
+
+		it("reinitializes via AgentBuilder mock fallback when runner was cleared", async () => {
+			const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+			vi.spyOn(AgentBuilder, "create").mockReturnValue({
+				withModel: vi.fn().mockReturnThis(),
+				withDescription: vi.fn().mockReturnThis(),
+				build: vi.fn().mockRejectedValue("string-fail"),
+			} as any);
+
+			const service = new LocalEvalService({
+				name: "no-ask-agent",
+			} as any);
+			(service as any).runner = undefined;
+
+			const evalCase: EvalCase = {
+				evalId: "rebuild-mock",
+				conversation: [
+					{
+						userContent: { role: "user", parts: [{ text: "again" }] },
+						creationTimestamp: 1,
+					},
+				],
+			};
+
+			let text = "";
+			for await (const batch of service.performInference({
+				evalSetId: "set-1",
+				evalCases: [makeEvalSet(evalCase)],
+			})) {
+				text = batch[0].finalResponse?.parts?.[0]?.text ?? "";
+			}
+
+			expect(text).toContain("Mock response to:");
+			warn.mockRestore();
+		});
+
+		it("honors custom parallelism without changing inference results", async () => {
+			const ask = vi.fn(async () => "parallel-ok");
+			const service = new LocalEvalService({ name: "stub", ask } as any, 8);
+
+			const evalCase: EvalCase = {
+				evalId: "par",
+				conversation: [
+					{
+						userContent: { role: "user", parts: [{ text: "x" }] },
+						creationTimestamp: 1,
+					},
+				],
+			};
+
+			const batches: unknown[][] = [];
+			for await (const batch of service.performInference({
+				evalSetId: "set-1",
+				evalCases: [makeEvalSet(evalCase)],
+			})) {
+				batches.push(batch);
+			}
+
+			expect((service as any).parallelism).toBe(8);
+			expect(batches[0][0]).toMatchObject({
+				invocationId: "par-0",
+				finalResponse: {
+					parts: [{ text: "parallel-ok" }],
+				},
+			});
+		});
+
+		it("evaluate maps metric threshold onto per-invocation results for mixed ids", async () => {
+			const service = new LocalEvalService({
+				name: "unused",
+				ask: async () => "unused",
+			} as any);
+
+			const spy = vi
+				.spyOn(DEFAULT_METRIC_EVALUATOR_REGISTRY, "getEvaluator")
+				.mockReturnValue({
+					evaluateInvocations: async (
+						actual: unknown[],
+						expected: unknown[],
+					) => ({
+						overallScore: 0.9,
+						overallEvalStatus: EvalStatus.PASSED,
+						perInvocationResults: actual.map((a, i) => ({
+							actualInvocation: a,
+							expectedInvocation: expected[i],
+							score: 0.9,
+							evalStatus: EvalStatus.PASSED,
+						})),
+					}),
+				} as any);
+
+			const results: {
+				evalCaseResults: {
+					evalMetricResultPerInvocation: {
+						evalMetricResults: {
+							metricName: string;
+							threshold: number;
+							score?: number;
+						}[];
+					}[];
+				}[];
+			}[] = [];
+
+			for await (const evalResult of service.evaluate({
+				inferenceResults: [
+					[
+						{
+							invocationId: "mix-expected",
+							userContent: { role: "user", parts: [{ text: "q" }] },
+							finalResponse: {
+								role: "model",
+								parts: [{ text: "e" }],
+							},
+							creationTimestamp: 1,
+						},
+						{
+							invocationId: "mix-0",
+							userContent: { role: "user", parts: [{ text: "q" }] },
+							finalResponse: {
+								role: "model",
+								parts: [{ text: "a" }],
+							},
+							creationTimestamp: 2,
+						},
+					],
+				],
+				evaluateConfig: {
+					evalMetrics: [
+						{
+							metricName: PrebuiltMetrics.RESPONSE_MATCH_SCORE,
+							threshold: 0.42,
+						},
+					],
+				},
+			})) {
+				results.push(evalResult);
+			}
+
+			const metric =
+				results[0].evalCaseResults[0].evalMetricResultPerInvocation[0]
+					.evalMetricResults[0];
+			expect(metric.metricName).toBe(PrebuiltMetrics.RESPONSE_MATCH_SCORE);
+			expect(metric.threshold).toBe(0.42);
+			expect(metric.score).toBe(0.9);
+			spy.mockRestore();
+		});
+
+		it("performInference preserves intermediateData on expected turns", async () => {
+			const ask = vi.fn(async () => "live");
+			const service = new LocalEvalService({
+				name: "stub",
+				ask,
+			} as any);
+
+			const evalCase: EvalCase = {
+				evalId: "with-intermediate",
+				conversation: [
+					{
+						userContent: { role: "user", parts: [{ text: "q" }] },
+						finalResponse: {
+							role: "model",
+							parts: [{ text: "expected" }],
+						},
+						intermediateData: {
+							toolUses: [{ name: "search", args: { q: "x" } }],
+							intermediateResponses: [{ text: "thinking" }],
+						},
+						creationTimestamp: 1,
+					} as any,
+				],
+			};
+
+			let expected: any;
+			for await (const batch of service.performInference({
+				evalSetId: "set-1",
+				evalCases: [makeEvalSet(evalCase)],
+			})) {
+				expected = batch[0];
+			}
+
+			expect(expected.invocationId).toContain("expected");
+			expect(expected.intermediateData.toolUses).toEqual([
+				{ name: "search", args: { q: "x" } },
+			]);
+		});
 	});
 });
