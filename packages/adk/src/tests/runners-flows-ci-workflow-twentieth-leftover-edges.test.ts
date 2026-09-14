@@ -3,12 +3,12 @@ import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 
 /**
- * Nineteenth leftover: reversible workflow assertions for the tools residual
- * Vitest slice after tip. Softened after twentieth leftover gate retarget —
- * pins lint/build/test only; twentieth owns the focused filter pin.
+ * Twentieth leftover: reversible workflow assertions for the runners/flows
+ * residual Vitest slice. Pins the focused twentieth leftover gate on push
+ * checks plus existing ci.yml `pnpm test` / ADK coverage steps.
  */
-describe("tools residual ci workflow nineteenth leftover edges", () => {
-	const root = resolve(__dirname, "../../../../..");
+describe("runners/flows residual ci workflow twentieth leftover edges", () => {
+	const root = resolve(__dirname, "../../../..");
 
 	it("ci.yml build-and-test still runs pnpm test and ADK coverage", () => {
 		const ci = readFileSync(resolve(root, ".github/workflows/ci.yml"), "utf8");
@@ -19,7 +19,7 @@ describe("tools residual ci workflow nineteenth leftover edges", () => {
 		expect(ci).toContain("continue-on-error: true");
 	});
 
-	it("push.yml still runs Biome lint, ADK build, and pnpm test", () => {
+	it("push.yml runs focused twentieth leftover slice then pnpm test", () => {
 		const push = readFileSync(
 			resolve(root, ".github/workflows/push.yml"),
 			"utf8",
@@ -28,6 +28,7 @@ describe("tools residual ci workflow nineteenth leftover edges", () => {
 		expect(push).toContain("- main");
 		expect(push).toMatch(/run:\s*pnpm lint\b/);
 		expect(push).toContain("pnpm --filter @iqai/adk build");
+		expect(push).toContain("twentieth-leftover-edges");
 		expect(push).toMatch(/run:\s*pnpm test\b/);
 	});
 
