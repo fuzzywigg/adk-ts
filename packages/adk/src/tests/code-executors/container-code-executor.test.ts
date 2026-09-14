@@ -500,4 +500,187 @@ describe("ContainerCodeExecutor", () => {
 		const executor = new ContainerCodeExecutor({ image: "python:3" });
 		expect((executor as any).executionTimeout).toBe(30000);
 	});
+
+	it("honors custom executionTimeout and baseUrl host wiring", () => {
+		const executor = new ContainerCodeExecutor({
+			image: "python:3.12",
+			baseUrl: "http://docker.local:2375",
+			executionTimeout: 12_000,
+		});
+		expect((executor as any).executionTimeout).toBe(12_000);
+		expect((executor as any).baseUrl).toBe("http://docker.local:2375");
+		expect((executor as any).image).toBe("python:3.12");
+		expect(DockerMock).toHaveBeenCalledWith({
+			host: "http://docker.local:2375",
+		});
+	});
+
+	it("forces stateful and optimizeDataFile off even if omitted", () => {
+		const executor = new ContainerCodeExecutor({ image: "python:3" });
+		expect(executor.stateful).toBe(false);
+		expect(executor.optimizeDataFile).toBe(false);
+	});
+
+	it("executeCode returns stdout/stderr from container streams", async () => {
+		const container = makeContainer();
+		createContainer.mockResolvedValue(container);
+		container._execStart.mockResolvedValue(
+			makeStream([Buffer.from("hello-out"), Buffer.from("")]),
+		);
+		container._inspect.mockResolvedValue({ ExitCode: 0 });
+
+		const executor = new ContainerCodeExecutor({ image: "python:3" });
+		const result = await executor.executeCode({} as any, {
+			code: "print('hello-out')",
+			inputFiles: [],
+		});
+		expect(result.stdout.length).toBeGreaterThanOrEqual(0);
+		expect(result.stderr).toBeDefined();
+		expect(result.outputFiles).toEqual([]);
+	});
+
+	it("ensureInitialized is idempotent after first success", async () => {
+		const container = makeContainer();
+		createContainer.mockResolvedValue(container);
+		container.exec.mockResolvedValue({
+			start: vi.fn().mockResolvedValue(makeStream([])),
+			inspect: vi.fn().mockResolvedValue({ ExitCode: 0 }),
+		});
+		const executor = new ContainerCodeExecutor({ image: "python:3" });
+		await (executor as any).ensureInitialized();
+		await (executor as any).ensureInitialized();
+		expect(createContainer).toHaveBeenCalledTimes(1);
+	});
+
+	it("buildDockerImage rejects missing dockerPath and missing client", async () => {
+		const executor = new ContainerCodeExecutor({ image: "python:3" });
+		await expect((executor as any).buildDockerImage()).rejects.toThrow(
+			/Docker path is not set/,
+		);
+
+		const withPath = new ContainerCodeExecutor({ dockerPath: "." });
+		(withPath as any).client = undefined;
+		existsSync.mockReturnValue(true);
+		await expect((withPath as any).buildDockerImage()).rejects.toThrow(
+			/Docker client is not initialized/,
+		);
+	});
+
+	it("buildDockerImage rejects invalid docker path", async () => {
+		existsSync.mockReturnValue(false);
+		const executor = new ContainerCodeExecutor({ dockerPath: "./missing" });
+		await expect((executor as any).buildDockerImage()).rejects.toThrow(
+			/Invalid Docker path/,
+		);
+	});
+
+	it("collectOutput demuxes docker headers and returns exit code", async () => {
+		const executor = new ContainerCodeExecutor({ image: "python:3" });
+		const stdoutChunk = Buffer.concat([
+			Buffer.from([1, 0, 0, 0, 0, 0, 0, 3]),
+			Buffer.from("abc"),
+		]);
+		const stderrChunk = Buffer.concat([
+			Buffer.from([2, 0, 0, 0, 0, 0, 0, 3]),
+			Buffer.from("err"),
+		]);
+		const stream = makeStream([stdoutChunk, stderrChunk]);
+		const exec = {
+			inspect: vi.fn().mockResolvedValue({ ExitCode: 7 }),
+		};
+		const output = await (executor as any).collectOutput(stream, exec);
+		expect(output).toEqual({
+			stdout: "abc",
+			stderr: "err",
+			exitCode: 7,
+		});
+	});
+
+	it("collectOutput rejects on stream error events", async () => {
+		const executor = new ContainerCodeExecutor({ image: "python:3" });
+		const stream = {
+			on(event: string, cb: (...args: any[]) => void) {
+				if (event === "error") {
+					queueMicrotask(() => cb(new Error("stream broke")));
+				}
+				return this;
+			},
+		};
+		await expect(
+			(executor as any).collectOutput(stream, {
+				inspect: vi.fn(),
+			}),
+		).rejects.toThrow(/stream broke/);
+	});
+
+	it("collectOutput rejects when exec.inspect fails after end", async () => {
+		const executor = new ContainerCodeExecutor({ image: "python:3" });
+		const stream = makeStream([]);
+		await expect(
+			(executor as any).collectOutput(stream, {
+				inspect: vi.fn().mockRejectedValue(new Error("inspect failed")),
+			}),
+		).rejects.toThrow(/inspect failed/);
+	});
+
+	it("collectOutput treats missing ExitCode as 0", async () => {
+		const executor = new ContainerCodeExecutor({ image: "python:3" });
+		const stream = makeStream([]);
+		const output = await (executor as any).collectOutput(stream, {
+			inspect: vi.fn().mockResolvedValue({}),
+		});
+		expect(output.exitCode).toBe(0);
+	});
+
+	it("createTimeoutPromise rejects with timeout message", async () => {
+		vi.useFakeTimers();
+		const executor = new ContainerCodeExecutor({
+			image: "python:3",
+			executionTimeout: 25,
+		});
+		const pending = (executor as any).createTimeoutPromise();
+		const expectation = expect(pending).rejects.toThrow(
+			/Code execution timed out after 25ms/,
+		);
+		await vi.advanceTimersByTimeAsync(25);
+		await expectation;
+		vi.useRealTimers();
+	});
+
+	it("resolves dockerPath to an absolute path", () => {
+		const executor = new ContainerCodeExecutor({ dockerPath: "." });
+		expect((executor as any).dockerPath).toMatch(/^\//);
+	});
+
+	it("defaults image tag when only dockerPath is provided", () => {
+		const executor = new ContainerCodeExecutor({ dockerPath: "." });
+		expect((executor as any).image).toBe("adk-code-executor:latest");
+	});
+
+	it("dispose is safe to call multiple times", async () => {
+		const container = makeContainer();
+		const executor = new ContainerCodeExecutor({ image: "python:3" });
+		(executor as any).container = container;
+		(executor as any).isInitialized = true;
+		await executor.dispose();
+		await executor.dispose();
+		expect(container.stop).toHaveBeenCalled();
+		expect(container.remove).toHaveBeenCalled();
+	});
+
+	it("rejects optimizeDataFile=true at construction", () => {
+		expect(
+			() =>
+				new ContainerCodeExecutor({
+					image: "python:3",
+					optimizeDataFile: true,
+				}),
+		).toThrow(/optimizeDataFile/);
+	});
+
+	it("rejects stateful=true at construction", () => {
+		expect(
+			() => new ContainerCodeExecutor({ image: "python:3", stateful: true }),
+		).toThrow(/stateful/);
+	});
 });
