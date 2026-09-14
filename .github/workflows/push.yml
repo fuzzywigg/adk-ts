@@ -34,7 +34,7 @@ jobs:
         run: pnpm lint
       - name: Build ADK package
         run: pnpm --filter @iqai/adk build
-      - name: ADK agents true-asymmetry twentieth leftover slice
+      - name: ADK tools/mcp true/negzero twentieth leftover slice
         # Reversible focused gate for TOKENMAXX leftover deepen on this module slice.
         run: pnpm --filter @iqai/adk exec vitest run twentieth-leftover-edges
       - name: ADK + CLI tests
