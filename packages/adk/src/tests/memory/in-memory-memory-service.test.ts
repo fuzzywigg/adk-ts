@@ -459,4 +459,73 @@ describe("InMemoryMemoryService", () => {
 			}),
 		).toEqual({ memories: [] });
 	});
+
+	it("addSessionToMemory with empty events still indexes the session key", async () => {
+		const service = new InMemoryMemoryService();
+		await service.addSessionToMemory(
+			makeSession({
+				id: "empty-events",
+				events: [],
+			}),
+		);
+		expect(
+			await service.searchMemory({
+				appName: "app",
+				userId: "user",
+				query: "anything",
+			}),
+		).toEqual({ memories: [] });
+	});
+
+	it("searchMemory with empty or whitespace-only query yields no matches", async () => {
+		const service = new InMemoryMemoryService();
+		await service.addSessionToMemory(
+			makeSession({
+				events: [
+					{
+						author: "user",
+						timestamp: 1,
+						content: { parts: [{ text: "hello world" }] },
+					} as any,
+				],
+			}),
+		);
+
+		expect(
+			await service.searchMemory({
+				appName: "app",
+				userId: "user",
+				query: "",
+			}),
+		).toEqual({ memories: [] });
+		expect(
+			await service.searchMemory({
+				appName: "app",
+				userId: "user",
+				query: "   ",
+			}),
+		).toEqual({ memories: [] });
+	});
+
+	it("punctuation-only queries do not match alphabetic event text", async () => {
+		const service = new InMemoryMemoryService();
+		await service.addSessionToMemory(
+			makeSession({
+				events: [
+					{
+						author: "user",
+						timestamp: 1,
+						content: { parts: [{ text: "hello" }] },
+					} as any,
+				],
+			}),
+		);
+		expect(
+			await service.searchMemory({
+				appName: "app",
+				userId: "user",
+				query: "!!!",
+			}),
+		).toEqual({ memories: [] });
+	});
 });

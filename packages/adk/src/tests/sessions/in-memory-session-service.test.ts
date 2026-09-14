@@ -509,4 +509,311 @@ describe("InMemorySessionService", () => {
 		expect(fetched?.state.version).toBe(2);
 		expect(fetched?.events).toEqual([]);
 	});
+
+	it("createSession keeps app:/user:/temp: keys in session state unlike DatabaseSessionService", async () => {
+		const service = new InMemorySessionService();
+		const created = await service.createSession(
+			"app",
+			"user",
+			{
+				[`${State.APP_PREFIX}theme`]: "dark",
+				[`${State.USER_PREFIX}locale`]: "en",
+				[`${State.TEMP_PREFIX}scratch`]: "keep",
+				local: 1,
+			},
+			"s-prefix-create",
+		);
+
+		expect(created.state[`${State.APP_PREFIX}theme`]).toBe("dark");
+		expect(created.state[`${State.USER_PREFIX}locale`]).toBe("en");
+		expect(created.state[`${State.TEMP_PREFIX}scratch`]).toBe("keep");
+		expect(created.state.local).toBe(1);
+
+		const sibling = await service.createSession("app", "user", {}, "s-sib");
+		expect(sibling.state[`${State.APP_PREFIX}theme`]).toBeUndefined();
+		expect(sibling.state[`${State.USER_PREFIX}locale`]).toBeUndefined();
+	});
+
+	it("appendEvent retains temp: keys on caller session via BaseSessionService", async () => {
+		const service = new InMemorySessionService();
+		const session = await service.createSession("app", "user", {}, "s-temp");
+		await service.appendEvent(session, {
+			author: "agent",
+			timestamp: 10,
+			actions: {
+				stateDelta: {
+					[`${State.TEMP_PREFIX}scratch`]: "ephemeral",
+					local: 2,
+				},
+			},
+		} as any);
+
+		expect(session.state[`${State.TEMP_PREFIX}scratch`]).toBe("ephemeral");
+		expect(session.state.local).toBe(2);
+
+		const fetched = await service.getSession("app", "user", "s-temp");
+		expect(fetched?.state[`${State.TEMP_PREFIX}scratch`]).toBe("ephemeral");
+		expect(fetched?.state.local).toBe(2);
+	});
+
+	it("partial events still update caller lastUpdateTime and app/user maps", async () => {
+		const service = new InMemorySessionService();
+		const session = await service.createSession(
+			"app",
+			"user",
+			{},
+			"s-partial-ts",
+		);
+		await service.appendEvent(session, {
+			author: "agent",
+			partial: true,
+			timestamp: 42.5,
+			actions: {
+				stateDelta: {
+					[`${State.APP_PREFIX}x`]: 1,
+					[`${State.USER_PREFIX}y`]: 2,
+				},
+			},
+		} as any);
+
+		expect(session.lastUpdateTime).toBe(42.5);
+		expect(session.events).toHaveLength(0);
+
+		const sibling = await service.createSession(
+			"app",
+			"user",
+			{},
+			"s-after-partial",
+		);
+		expect(sibling.state[`${State.APP_PREFIX}x`]).toBe(1);
+		expect(sibling.state[`${State.USER_PREFIX}y`]).toBe(2);
+		expect(
+			(await service.getSession("app", "user", "s-partial-ts"))?.lastUpdateTime,
+		).toBe(42.5);
+	});
+
+	it("getSession applies afterTimestamp after numRecentEvents trimming", async () => {
+		const service = new InMemorySessionService();
+		const session = await service.createSession("app", "user", {}, "s-filters");
+		for (let i = 1; i <= 5; i++) {
+			await service.appendEvent(session, {
+				author: "user",
+				timestamp: i,
+				content: { parts: [{ text: String(i) }] },
+			} as any);
+		}
+
+		const filtered = await service.getSession("app", "user", "s-filters", {
+			numRecentEvents: 3,
+			afterTimestamp: 3.5,
+		});
+		expect(filtered?.events.map((e) => e.content?.parts?.[0]?.text)).toEqual([
+			"4",
+			"5",
+		]);
+	});
+
+	it("getSession afterTimestamp alone keeps only events at or after the cutoff", async () => {
+		const service = new InMemorySessionService();
+		const session = await service.createSession("app", "user", {}, "s-after");
+		await service.appendEvent(session, {
+			author: "user",
+			timestamp: 1,
+			content: { parts: [{ text: "old" }] },
+		} as any);
+		await service.appendEvent(session, {
+			author: "user",
+			timestamp: 5,
+			content: { parts: [{ text: "new" }] },
+		} as any);
+
+		const filtered = await service.getSession("app", "user", "s-after", {
+			afterTimestamp: 5,
+		});
+		expect(filtered?.events.map((e) => e.content?.parts?.[0]?.text)).toEqual([
+			"new",
+		]);
+	});
+
+	it("appendEvent on a stale caller clone still mutates storage via session id", async () => {
+		const service = new InMemorySessionService();
+		const session = await service.createSession("app", "user", {}, "s-clone");
+		const clone = (await service.getSession("app", "user", "s-clone"))!;
+		await service.appendEvent(clone, {
+			author: "agent",
+			timestamp: 7,
+			content: { parts: [{ text: "via-clone" }] },
+			actions: {
+				stateDelta: { fromClone: true },
+			},
+		} as any);
+
+		expect(clone.events).toHaveLength(1);
+		expect(session.events).toHaveLength(0);
+
+		const fetched = await service.getSession("app", "user", "s-clone");
+		expect(fetched?.events).toHaveLength(1);
+		expect(fetched?.state.fromClone).toBe(true);
+		expect(fetched?.lastUpdateTime).toBe(7);
+	});
+
+	it("trims whitespace-only session ids to a generated uuid", async () => {
+		const service = new InMemorySessionService();
+		const created = await service.createSession("app", "user", {}, "   ");
+		expect(created.id).not.toMatch(/^\s*$/);
+		expect(created.id.length).toBeGreaterThan(8);
+	});
+
+	it("deleteSessionSync warns and removes an existing session", () => {
+		const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+		const service = new InMemorySessionService();
+		service.createSessionSync("app", "user", {}, "sync-del");
+		service.deleteSessionSync("app", "user", "sync-del");
+		expect(service.getSessionSync("app", "user", "sync-del")).toBeUndefined();
+		expect(warn).toHaveBeenCalled();
+		warn.mockRestore();
+	});
+
+	it("createSessionSync and listSessionsSync cover the deprecated path", () => {
+		const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+		const service = new InMemorySessionService();
+		const created = service.createSessionSync(
+			"app",
+			"user",
+			{ a: 1 },
+			"sync-1",
+		);
+		expect(created.state.a).toBe(1);
+		expect(
+			service.listSessionsSync("app", "user").sessions.map((s) => s.id),
+		).toEqual(["sync-1"]);
+		expect(warn.mock.calls.length).toBeGreaterThanOrEqual(2);
+		warn.mockRestore();
+	});
+
+	it("appendEvent with only session keys does not touch app/user maps", async () => {
+		const service = new InMemorySessionService();
+		const session = await service.createSession("app", "user", {}, "s-local");
+		await service.appendEvent(session, {
+			author: "agent",
+			timestamp: 1,
+			actions: { stateDelta: { onlyLocal: true } },
+		} as any);
+
+		const sibling = await service.createSession("app", "user", {}, "s-sib2");
+		expect(sibling.state.onlyLocal).toBeUndefined();
+		expect(
+			(await service.getSession("app", "user", "s-local"))?.state.onlyLocal,
+		).toBe(true);
+	});
+
+	it("warns and returns when appending to an unknown app/user/session path", async () => {
+		const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+		const service = new InMemorySessionService();
+		const ghost = {
+			id: "missing",
+			appName: "no-app",
+			userId: "no-user",
+			state: {},
+			events: [],
+			lastUpdateTime: 0,
+		};
+		await service.appendEvent(
+			ghost as any,
+			{
+				author: "agent",
+				timestamp: 1,
+				content: { parts: [{ text: "x" }] },
+			} as any,
+		);
+		expect(warn).toHaveBeenCalledWith(
+			expect.stringContaining("appName no-app not in sessions"),
+		);
+
+		await service.createSession("known-app", "user", {}, "s1");
+		await service.appendEvent(
+			{
+				id: "s1",
+				appName: "known-app",
+				userId: "missing-user",
+				state: {},
+				events: [],
+				lastUpdateTime: 0,
+			} as any,
+			{ author: "agent", timestamp: 1 } as any,
+		);
+		expect(warn).toHaveBeenCalledWith(
+			expect.stringContaining("userId missing-user not in sessions[appName]"),
+		);
+
+		await service.appendEvent(
+			{
+				id: "ghost",
+				appName: "known-app",
+				userId: "user",
+				state: {},
+				events: [],
+				lastUpdateTime: 0,
+			} as any,
+			{ author: "agent", timestamp: 1 } as any,
+		);
+		expect(warn).toHaveBeenCalledWith(
+			expect.stringContaining(
+				"sessionId ghost not in sessions[appName][userId]",
+			),
+		);
+		warn.mockRestore();
+	});
+
+	it("getSession returns undefined for missing app or user maps", async () => {
+		const service = new InMemorySessionService();
+		await service.createSession("app", "user", {}, "s1");
+		expect(await service.getSession("other", "user", "s1")).toBeUndefined();
+		expect(await service.getSession("app", "other", "s1")).toBeUndefined();
+	});
+
+	it("listSessions returns empty for unknown app or user", async () => {
+		const service = new InMemorySessionService();
+		await service.createSession("app", "user", {}, "s1");
+		expect((await service.listSessions("other", "user")).sessions).toEqual([]);
+		expect((await service.listSessions("app", "other")).sessions).toEqual([]);
+	});
+
+	it("deleteSession is a no-op for missing sessions", async () => {
+		const service = new InMemorySessionService();
+		await expect(
+			service.deleteSession("app", "user", "ghost"),
+		).resolves.toBeUndefined();
+	});
+
+	it("appends events without actions and still updates lastUpdateTime", async () => {
+		const service = new InMemorySessionService();
+		const session = await service.createSession("app", "user", {}, "s-no-act");
+		await service.appendEvent(session, {
+			author: "user",
+			timestamp: 99,
+			content: { parts: [{ text: "hi" }] },
+		} as any);
+		expect(session.lastUpdateTime).toBe(99);
+		expect(session.events).toHaveLength(1);
+		expect(
+			(await service.getSession("app", "user", "s-no-act"))?.events,
+		).toHaveLength(1);
+	});
+
+	it("merges app state even when userState map is absent", async () => {
+		const service = new InMemorySessionService();
+		const session = await service.createSession("app", "alice", {}, "s1");
+		await service.appendEvent(session, {
+			author: "agent",
+			timestamp: 1,
+			actions: {
+				stateDelta: { [`${State.APP_PREFIX}shared`]: true },
+			},
+		} as any);
+
+		const bob = await service.createSession("app", "bob", {}, "s2");
+		expect(bob.state[`${State.APP_PREFIX}shared`]).toBe(true);
+		expect(bob.state[`${State.USER_PREFIX}x`]).toBeUndefined();
+	});
 });

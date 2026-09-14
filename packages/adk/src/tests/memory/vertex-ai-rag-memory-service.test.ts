@@ -791,4 +791,153 @@ describe("VertexAiRagMemoryService.searchMemory retrieval edges", () => {
 			"late",
 		]);
 	});
+
+	it("still deletes the temp file when upload_file rejects on a later corpus", async () => {
+		vi.spyOn(rag, "upload_file")
+			.mockResolvedValueOnce(undefined as any)
+			.mockRejectedValueOnce(new Error("quota"));
+
+		const service = new VertexAiRagMemoryService("corpus-1");
+		(service as any)._vertexRagStore.rag_resources = [
+			{ rag_corpus: "corpus-1" },
+			{ rag_corpus: "corpus-2" },
+		];
+
+		const session: Session = {
+			id: "sess-quota",
+			appName: "demo",
+			userId: "alice",
+			state: {},
+			events: [event("user", 1, "hello")],
+			lastUpdateTime: 0,
+		};
+
+		await expect(service.addSessionToMemory(session)).rejects.toThrow("quota");
+		expect(unlinkSync).toHaveBeenCalled();
+		expect(writeFileSync).toHaveBeenCalled();
+	});
+
+	it("searchMemory throws when retrieval_query returns contexts without contexts array", async () => {
+		vi.spyOn(rag, "retrieval_query").mockResolvedValue({
+			contexts: {},
+		} as any);
+
+		const service = new VertexAiRagMemoryService("corpus-1");
+		await expect(
+			service.searchMemory({
+				appName: "demo",
+				userId: "alice",
+				query: "x",
+			}),
+		).rejects.toThrow();
+	});
+
+	it("searchMemory throws when retrieval_query rejects", async () => {
+		vi.spyOn(rag, "retrieval_query").mockRejectedValue(
+			new Error("retrieval down"),
+		);
+		const service = new VertexAiRagMemoryService("corpus-1");
+		await expect(
+			service.searchMemory({
+				appName: "demo",
+				userId: "alice",
+				query: "x",
+			}),
+		).rejects.toThrow("retrieval down");
+	});
+
+	it("derives sessionId from the last dotted segment of source_display_name", async () => {
+		vi.spyOn(rag, "retrieval_query").mockResolvedValue({
+			contexts: {
+				contexts: [
+					{
+						source_display_name: "demo.alice.sess.extra.tail",
+						text: jsonLine("user", 1, "dotted"),
+					},
+				],
+			},
+		});
+
+		const service = new VertexAiRagMemoryService("corpus-1");
+		const result = await service.searchMemory({
+			appName: "demo",
+			userId: "alice",
+			query: "dotted",
+		});
+		expect(result.memories).toHaveLength(1);
+		expect(result.memories[0].content.parts?.[0]?.text).toBe("dotted");
+	});
+
+	it("addSessionToMemory throws when rag_resources is empty", async () => {
+		const service = new VertexAiRagMemoryService();
+		const session: Session = {
+			id: "s1",
+			appName: "demo",
+			userId: "alice",
+			state: {},
+			events: [event("user", 1, "x")],
+			lastUpdateTime: 0,
+		};
+		await expect(service.addSessionToMemory(session)).rejects.toThrow(
+			/Rag resources must be set/,
+		);
+		expect(unlinkSync).toHaveBeenCalled();
+	});
+
+	it("skips events without content or text parts when building upload payload", async () => {
+		vi.spyOn(rag, "upload_file").mockResolvedValue(undefined as any);
+		const service = new VertexAiRagMemoryService("corpus-1");
+		const session: Session = {
+			id: "s-skip",
+			appName: "demo",
+			userId: "alice",
+			state: {},
+			events: [
+				event("user", 1),
+				{ author: "agent", timestamp: 2, content: { parts: [] } } as Event,
+				event("user", 3, "keep\nme"),
+			],
+			lastUpdateTime: 0,
+		};
+
+		await service.addSessionToMemory(session);
+		expect(writeFileSync).toHaveBeenCalled();
+		const payload = writeFileSync.mock.calls[0][1] as string;
+		expect(payload).toContain("keep me");
+		expect(payload.split("\n")).toHaveLength(1);
+	});
+
+	it("warns when unlinkSync fails in finally", async () => {
+		const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+		vi.spyOn(rag, "upload_file").mockResolvedValue(undefined as any);
+		unlinkSync.mockImplementationOnce(() => {
+			throw new Error("busy");
+		});
+
+		const service = new VertexAiRagMemoryService("corpus-1");
+		await service.addSessionToMemory({
+			id: "s-unlink",
+			appName: "demo",
+			userId: "alice",
+			state: {},
+			events: [event("user", 1, "x")],
+			lastUpdateTime: 0,
+		});
+
+		expect(warn).toHaveBeenCalledWith(
+			"Failed to delete temporary file:",
+			expect.any(String),
+			expect.any(Error),
+		);
+		warn.mockRestore();
+	});
+
+	it("constructs with undefined ragCorpus as empty rag_resources", () => {
+		const service = new VertexAiRagMemoryService(undefined, 5, 2);
+		expect((service as any)._vertexRagStore).toEqual({
+			rag_resources: [],
+			similarity_top_k: 5,
+			vector_distance_threshold: 2,
+		});
+	});
 });

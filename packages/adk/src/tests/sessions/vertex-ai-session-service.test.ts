@@ -868,4 +868,89 @@ describe("VertexAiSessionService", () => {
 		expect(event.errorCode).toBe("ERR");
 		expect(event.errorMessage).toBe("failed");
 	});
+
+	it("listSessions still filters when userId is whitespace-only", async () => {
+		const { service, asyncRequest } = createService({ agentEngineId: "7" });
+		asyncRequest.mockResolvedValueOnce({ sessions: [] });
+		await service.listSessions("app", "   ");
+		expect(asyncRequest).toHaveBeenCalledWith({
+			http_method: "GET",
+			path: expect.stringContaining("filter=user_id="),
+			request_dict: {},
+		});
+	});
+
+	it("listSessions omits filter when userId is empty string", async () => {
+		const { service, asyncRequest } = createService({ agentEngineId: "7" });
+		asyncRequest.mockResolvedValueOnce({ sessions: [] });
+		await service.listSessions("app", "");
+		expect(asyncRequest).toHaveBeenCalledWith({
+			http_method: "GET",
+			path: "reasoningEngines/7/sessions",
+			request_dict: {},
+		});
+	});
+
+	it("createSession surfaces GET failures after a successful LRO", async () => {
+		const { service, asyncRequest } = createService({ agentEngineId: "9" });
+		asyncRequest
+			.mockResolvedValueOnce({
+				name: "projects/p/locations/l/reasoningEngines/9/sessions/sess-x/operations/op-1",
+			})
+			.mockResolvedValueOnce({ done: true })
+			.mockRejectedValueOnce(new Error("get session failed"));
+
+		await expect(service.createSession("app", "user")).rejects.toThrow(
+			"get session failed",
+		);
+	});
+
+	it("convertEventToJson serializes an empty longRunningToolIds Set as []", () => {
+		const { service } = createService();
+		const event = new Event({
+			author: "agent",
+			longRunningToolIds: new Set(),
+			content: { parts: [{ text: "x" }] },
+		});
+		const json = (service as any).convertEventToJson(event);
+		expect(json.event_metadata.long_running_tool_ids).toEqual([]);
+	});
+
+	it("getSession returns undefined when the session GET throws", async () => {
+		const { service, asyncRequest } = createService();
+		asyncRequest.mockRejectedValueOnce(new Error("404"));
+		await expect(
+			service.getSession("app", "u", "missing"),
+		).resolves.toBeUndefined();
+	});
+
+	it("getSession first page empty sessionEvents with nextPageToken continues pagination", async () => {
+		const { service, asyncRequest } = createService();
+		asyncRequest
+			.mockResolvedValueOnce({
+				name: "projects/p/locations/l/reasoningEngines/9/sessions/sess-empty-first",
+				updateTime: "2024-01-01T00:00:30.000Z",
+				sessionState: {},
+			})
+			.mockResolvedValueOnce({
+				sessionEvents: [],
+				nextPageToken: "page-2",
+			})
+			.mockResolvedValueOnce({
+				sessionEvents: [
+					{
+						name: ".../events/e1",
+						invocationId: "i1",
+						author: "user",
+						timestamp: "2024-01-01T00:00:10.000Z",
+						content: { parts: [{ text: "later-page" }] },
+					},
+				],
+			});
+
+		const session = await service.getSession("app", "u", "sess-empty-first");
+		expect(session?.events.map((e) => e.content?.parts?.[0]?.text)).toEqual([
+			"later-page",
+		]);
+	});
 });

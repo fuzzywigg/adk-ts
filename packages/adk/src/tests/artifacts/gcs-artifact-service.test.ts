@@ -396,4 +396,124 @@ describe("GcsArtifactService", () => {
 			},
 		});
 	});
+
+	it("saveArtifact forwards undefined inlineData.data to blob.save", async () => {
+		getFilesMock.mockResolvedValueOnce([[]]);
+		const service = new GcsArtifactService("b");
+		const version = await service.saveArtifact({
+			...base,
+			filename: "bad.txt",
+			artifact: {
+				inlineData: { mimeType: "text/plain" },
+			} as any,
+		});
+		expect(version).toBe(0);
+		expect(saveMock).toHaveBeenCalledWith(undefined, {
+			contentType: "text/plain",
+			preconditionOpts: { ifGenerationMatch: 0 },
+		});
+	});
+
+	it("deleteArtifact propagates blob.delete failures", async () => {
+		getFilesMock.mockResolvedValue([
+			[{ name: "app/user-1/sess-1/note.txt/0" }],
+		]);
+		deleteMock.mockRejectedValueOnce(new Error("acl denied"));
+		const service = new GcsArtifactService("b");
+		await expect(
+			service.deleteArtifact({ ...base, filename: "note.txt" }),
+		).rejects.toThrow("acl denied");
+	});
+
+	it("listArtifactKeys propagates getFiles failures", async () => {
+		getFilesMock.mockRejectedValueOnce(new Error("list failed"));
+		const service = new GcsArtifactService("b");
+		await expect(service.listArtifactKeys(base)).rejects.toThrow("list failed");
+	});
+
+	it("listVersions propagates getFiles failures", async () => {
+		getFilesMock.mockRejectedValueOnce(new Error("versions failed"));
+		const service = new GcsArtifactService("b");
+		await expect(
+			service.listVersions({ ...base, filename: "note.txt" }),
+		).rejects.toThrow("versions failed");
+	});
+
+	it("listVersions ignores blobs with non-5 path segments", async () => {
+		getFilesMock.mockResolvedValue([
+			[
+				{ name: "app/user-1/sess-1/note.txt/0" },
+				{ name: "app/user-1/sess-1/note.txt/extra/1" },
+				{ name: "short/path" },
+				{ name: "app/user-1/sess-1/note.txt/nan" },
+				{ name: "app/user-1/sess-1/note.txt/3" },
+			],
+		]);
+		const service = new GcsArtifactService("b");
+		await expect(
+			service.listVersions({ ...base, filename: "note.txt" }),
+		).resolves.toEqual([0, 3]);
+	});
+
+	it("listArtifactKeys ignores blobs that are not exactly 5 segments", async () => {
+		getFilesMock
+			.mockResolvedValueOnce([
+				[
+					{ name: "app/user-1/sess-1/ok.txt/0" },
+					{ name: "app/user-1/sess-1/too/many/parts/0" },
+					{ name: "app/user-1/only-three" },
+				],
+			])
+			.mockResolvedValueOnce([[]]);
+		const service = new GcsArtifactService("b");
+		await expect(service.listArtifactKeys(base)).resolves.toEqual(["ok.txt"]);
+	});
+
+	it("saveArtifact propagates save failures after version allocation", async () => {
+		getFilesMock.mockResolvedValueOnce([[]]);
+		saveMock.mockRejectedValueOnce(new Error("quota"));
+		const service = new GcsArtifactService("b");
+		await expect(
+			service.saveArtifact({
+				...base,
+				filename: "q.txt",
+				artifact: {
+					inlineData: { data: "x", mimeType: "text/plain" },
+				},
+			}),
+		).rejects.toThrow("quota");
+	});
+
+	it("deleteArtifact deletes every listed version in parallel", async () => {
+		getFilesMock.mockResolvedValue([
+			[
+				{ name: "app/user-1/sess-1/multi.txt/0" },
+				{ name: "app/user-1/sess-1/multi.txt/1" },
+				{ name: "app/user-1/sess-1/multi.txt/4" },
+			],
+		]);
+		const service = new GcsArtifactService("b");
+		await service.deleteArtifact({ ...base, filename: "multi.txt" });
+		expect(deleteMock).toHaveBeenCalledTimes(3);
+		expect(fileMock).toHaveBeenCalledWith("app/user-1/sess-1/multi.txt/0");
+		expect(fileMock).toHaveBeenCalledWith("app/user-1/sess-1/multi.txt/1");
+		expect(fileMock).toHaveBeenCalledWith("app/user-1/sess-1/multi.txt/4");
+	});
+
+	it("loadArtifact defaults mimeType when metadata contentType is missing", async () => {
+		getMetadataMock.mockResolvedValue([{}]);
+		downloadMock.mockResolvedValue([Buffer.from("bin")]);
+		const service = new GcsArtifactService("b");
+		const part = await service.loadArtifact({
+			...base,
+			filename: "bin.dat",
+			version: 0,
+		});
+		expect(part).toEqual({
+			inlineData: {
+				data: "bin",
+				mimeType: "application/octet-stream",
+			},
+		});
+	});
 });

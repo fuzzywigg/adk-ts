@@ -149,4 +149,30 @@ describe("State", () => {
 		const state = State.create({ a: 1, b: 2 }, { b: 9, c: 3 });
 		expect(state.toDict()).toEqual({ a: 1, b: 9, c: 3 });
 	});
+
+	it("proxy get/set/has ignore Symbol keys and leave them on the target", () => {
+		const state = State.create({ a: 1 }, {});
+		const sym = Symbol("secret");
+		(state as any)[sym] = "symbol-value";
+		expect((state as any)[sym]).toBe("symbol-value");
+		expect(sym in (state as any)).toBe(true);
+		expect(state.has("a")).toBe(true);
+		expect(state.toDict()).toEqual({ a: 1 });
+	});
+
+	it("proxy has reports true for methods and underscore props", () => {
+		const state = State.create({}, {});
+		expect("get" in state).toBe(true);
+		expect("set" in state).toBe(true);
+		expect("hasDelta" in state).toBe(true);
+		expect("missing" in state).toBe(false);
+	});
+
+	it("set then delete-via-null is not supported; set keeps values", () => {
+		const state = State.create({}, {});
+		state.set("keep", 1);
+		state.update({ keep: 2, extra: 3 });
+		expect(state.toDict()).toEqual({ keep: 2, extra: 3 });
+		expect(state.hasDelta()).toBe(true);
+	});
 });

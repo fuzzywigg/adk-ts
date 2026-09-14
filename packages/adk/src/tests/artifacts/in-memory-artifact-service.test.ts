@@ -537,4 +537,102 @@ describe("InMemoryArtifactService", () => {
 			await service.listVersions({ ...base, filename: "dense.txt" }),
 		).toEqual([0, 1, 2]);
 	});
+
+	it("loadArtifact returns null when version equals versions.length", async () => {
+		const service = new InMemoryArtifactService();
+		await service.saveArtifact({
+			...base,
+			filename: "bound.txt",
+			artifact: { text: "only" },
+		});
+		expect(
+			await service.loadArtifact({
+				...base,
+				filename: "bound.txt",
+				version: 1,
+			}),
+		).toBeNull();
+	});
+
+	it("loadArtifact returns null for empty inlineData-only artifacts", async () => {
+		const service = new InMemoryArtifactService();
+		await service.saveArtifact({
+			...base,
+			filename: "empty-inline.txt",
+			artifact: {
+				inlineData: { data: "", mimeType: "text/plain" },
+			},
+		});
+		expect(
+			await service.loadArtifact({ ...base, filename: "empty-inline.txt" }),
+		).toBeNull();
+	});
+
+	it("resolves user-scoped artifact refs that omit sessionId in the URI", async () => {
+		const service = new InMemoryArtifactService();
+		await service.saveArtifact({
+			...base,
+			filename: "user:profile.json",
+			artifact: { text: "profile" },
+		});
+		await service.saveArtifact({
+			...base,
+			filename: "alias.json",
+			artifact: {
+				fileData: {
+					fileUri:
+						"artifact://apps/app/users/user-1/artifacts/user:profile.json/versions/0",
+					mimeType: "text/plain",
+				},
+			} as any,
+		});
+		expect(
+			await service.loadArtifact({ ...base, filename: "alias.json" }),
+		).toEqual({ text: "profile" });
+	});
+
+	it("listArtifactKeys sorts session and user-scoped filenames", async () => {
+		const service = new InMemoryArtifactService();
+		await service.saveArtifact({
+			...base,
+			filename: "zeta.txt",
+			artifact: { text: "z" },
+		});
+		await service.saveArtifact({
+			...base,
+			filename: "alpha.txt",
+			artifact: { text: "a" },
+		});
+		await service.saveArtifact({
+			...base,
+			filename: "user:beta.json",
+			artifact: { text: "b" },
+		});
+		expect(await service.listArtifactKeys(base)).toEqual([
+			"alpha.txt",
+			"user:beta.json",
+			"zeta.txt",
+		]);
+	});
+
+	it("deleteArtifact removes all versions for a filename", async () => {
+		const service = new InMemoryArtifactService();
+		await service.saveArtifact({
+			...base,
+			filename: "gone.txt",
+			artifact: { text: "v0" },
+		});
+		await service.saveArtifact({
+			...base,
+			filename: "gone.txt",
+			artifact: { text: "v1" },
+		});
+		await service.deleteArtifact({ ...base, filename: "gone.txt" });
+		expect(
+			await service.loadArtifact({ ...base, filename: "gone.txt" }),
+		).toBeNull();
+		expect(
+			await service.listVersions({ ...base, filename: "gone.txt" }),
+		).toEqual([]);
+	});
 });

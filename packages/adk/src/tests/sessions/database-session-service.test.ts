@@ -923,4 +923,559 @@ describe("DatabaseSessionService (sqlite :memory:)", () => {
 			),
 		).rejects.toThrow();
 	});
+
+	it("appendEvent without sessionStateDelta leaves storage update_time unchanged", async () => {
+		const session = await service.createSession(
+			"app",
+			"user",
+			{},
+			"s-no-delta",
+		);
+		const before = session.lastUpdateTime;
+
+		await service.appendEvent(
+			session,
+			new Event({
+				author: "agent",
+				content: { role: "model", parts: [{ text: "plain" }] },
+			}),
+		);
+
+		expect(session.lastUpdateTime).toBe(before);
+		const fetched = await service.getSession("app", "user", "s-no-delta");
+		expect(fetched?.lastUpdateTime).toBe(before);
+		expect(fetched?.events).toHaveLength(1);
+
+		await expect(
+			service.appendEvent(
+				session,
+				new Event({
+					author: "agent",
+					content: { role: "model", parts: [{ text: "again" }] },
+				}),
+			),
+		).resolves.toBeTruthy();
+		expect(session.lastUpdateTime).toBe(before);
+	});
+
+	it("app-only and user-only deltas do not bump session storage update_time", async () => {
+		const session = await service.createSession(
+			"app",
+			"user",
+			{},
+			"s-prefix-ts",
+		);
+		const before = session.lastUpdateTime;
+
+		await service.appendEvent(
+			session,
+			new Event({
+				author: "agent",
+				actions: new EventActions({
+					stateDelta: { [`${State.APP_PREFIX}theme`]: "dark" },
+				}),
+			}),
+		);
+		expect(session.lastUpdateTime).toBe(before);
+
+		await service.appendEvent(
+			session,
+			new Event({
+				author: "agent",
+				actions: new EventActions({
+					stateDelta: { [`${State.USER_PREFIX}locale`]: "en" },
+				}),
+			}),
+		);
+		expect(session.lastUpdateTime).toBe(before);
+
+		const fetched = await service.getSession("app", "user", "s-prefix-ts");
+		expect(fetched?.lastUpdateTime).toBe(before);
+		expect(fetched?.state[`${State.APP_PREFIX}theme`]).toBe("dark");
+		expect(fetched?.state[`${State.USER_PREFIX}locale`]).toBe("en");
+	});
+
+	it("session-only delta bumps update_time and enables stale rejection", async () => {
+		const session = await service.createSession("app", "user", {}, "s-bump");
+		const before = session.lastUpdateTime;
+
+		await new Promise((r) => setTimeout(r, 1100));
+
+		await service.appendEvent(
+			session,
+			new Event({
+				author: "agent",
+				actions: new EventActions({
+					stateDelta: { counter: 1 },
+				}),
+			}),
+		);
+
+		expect(session.lastUpdateTime).toBeGreaterThanOrEqual(before);
+		const bumped = session.lastUpdateTime;
+
+		const stale = {
+			...(await service.getSession("app", "user", "s-bump"))!,
+			lastUpdateTime: bumped - 10,
+		};
+		await expect(
+			service.appendEvent(
+				stale,
+				new Event({
+					author: "agent",
+					content: { parts: [{ text: "stale" }] },
+				}),
+			),
+		).rejects.toThrow();
+	});
+
+	it("getSession tolerates corrupt app_states JSON via parseJsonSafely", async () => {
+		await service.createSession("app", "user", { local: 1 }, "s-corrupt-app");
+		const db = (service as any).db;
+		await db
+			.updateTable("app_states")
+			.set({ state: "{not-json" })
+			.where("app_name", "=", "app")
+			.execute();
+
+		const fetched = await service.getSession("app", "user", "s-corrupt-app");
+		expect(fetched?.state.local).toBe(1);
+		expect(fetched?.state[`${State.APP_PREFIX}theme`]).toBeUndefined();
+	});
+
+	it("getSession tolerates corrupt user_states and session state JSON", async () => {
+		await service.createSession(
+			"app",
+			"user",
+			{
+				[`${State.USER_PREFIX}locale`]: "en",
+				local: 2,
+			},
+			"s-corrupt-user",
+		);
+		const db = (service as any).db;
+		await db
+			.updateTable("user_states")
+			.set({ state: "[[[bad" })
+			.where("app_name", "=", "app")
+			.where("user_id", "=", "user")
+			.execute();
+		await db
+			.updateTable("sessions")
+			.set({ state: "nullish-json" })
+			.where("id", "=", "s-corrupt-user")
+			.execute();
+
+		const fetched = await service.getSession("app", "user", "s-corrupt-user");
+		expect(fetched?.state).toEqual({});
+	});
+
+	it("createSession recovers when existing app_states JSON is corrupt", async () => {
+		await service.createSession("app", "user", {}, "s-seed");
+		const db = (service as any).db;
+		await db
+			.updateTable("app_states")
+			.set({ state: "{broken" })
+			.where("app_name", "=", "app")
+			.execute();
+
+		const created = await service.createSession(
+			"app",
+			"user",
+			{ [`${State.APP_PREFIX}theme`]: "light" },
+			"s-recover",
+		);
+		expect(created.state[`${State.APP_PREFIX}theme`]).toBe("light");
+	});
+
+	it("appendEvent tolerates missing app_states and user_states rows", async () => {
+		const session = await service.createSession(
+			"orphan-app",
+			"orphan-user",
+			{},
+			"s-orphan",
+		);
+		const db = (service as any).db;
+		await db
+			.deleteFrom("app_states")
+			.where("app_name", "=", "orphan-app")
+			.execute();
+		await db
+			.deleteFrom("user_states")
+			.where("app_name", "=", "orphan-app")
+			.where("user_id", "=", "orphan-user")
+			.execute();
+
+		await service.appendEvent(
+			session,
+			new Event({
+				author: "agent",
+				actions: new EventActions({
+					stateDelta: {
+						[`${State.APP_PREFIX}x`]: 1,
+						[`${State.USER_PREFIX}y`]: 2,
+						local: 3,
+					},
+				}),
+			}),
+		);
+
+		const fetched = await service.getSession(
+			"orphan-app",
+			"orphan-user",
+			"s-orphan",
+		);
+		expect(fetched?.state.local).toBe(3);
+		expect(fetched?.events).toHaveLength(1);
+	});
+
+	it("updateSession with merged app:/user: keys persists prefixed keys in the session blob", async () => {
+		const created = await service.createSession(
+			"app",
+			"user",
+			{
+				[`${State.APP_PREFIX}theme`]: "dark",
+				[`${State.USER_PREFIX}locale`]: "en",
+				local: 1,
+			},
+			"s-merge-upd",
+		);
+		const fetched = await service.getSession("app", "user", "s-merge-upd");
+		await service.updateSession({
+			...created,
+			state: fetched!.state,
+		});
+
+		const db = (service as any).db;
+		const row = await db
+			.selectFrom("sessions")
+			.select("state")
+			.where("id", "=", "s-merge-upd")
+			.executeTakeFirstOrThrow();
+		const raw = JSON.parse(row.state);
+		expect(raw.local).toBe(1);
+		expect(raw[`${State.APP_PREFIX}theme`]).toBe("dark");
+		expect(raw[`${State.USER_PREFIX}locale`]).toBe("en");
+
+		const again = await service.getSession("app", "user", "s-merge-upd");
+		expect(again?.state.local).toBe(1);
+		expect(again?.state[`${State.APP_PREFIX}theme`]).toBe("dark");
+		expect(again?.state[`${State.USER_PREFIX}locale`]).toBe("en");
+	});
+
+	it("deletes a session after manually clearing its events", async () => {
+		const session = await service.createSession(
+			"app",
+			"user",
+			{},
+			"s-del-events",
+		);
+		await service.appendEvent(
+			session,
+			new Event({
+				author: "agent",
+				content: { parts: [{ text: "bye" }] },
+			}),
+		);
+
+		const db = (service as any).db;
+		await db
+			.deleteFrom("events")
+			.where("session_id", "=", "s-del-events")
+			.execute();
+
+		await expect(
+			service.deleteSession("app", "user", "s-del-events"),
+		).resolves.toBeUndefined();
+		expect(
+			await service.getSession("app", "user", "s-del-events"),
+		).toBeUndefined();
+	});
+
+	it("generateSessionId yields unique session-prefixed ids", () => {
+		const ids = new Set<string>();
+		for (let i = 0; i < 40; i++) {
+			const id = (service as any).generateSessionId();
+			expect(id).toMatch(/^session-\d+-[a-z0-9]+$/);
+			ids.add(id);
+		}
+		expect(ids.size).toBe(40);
+	});
+
+	it("parseJsonSafely returns defaults for empty, null, and invalid input", () => {
+		expect((service as any).parseJsonSafely(null, { a: 1 })).toEqual({ a: 1 });
+		expect((service as any).parseJsonSafely("", [])).toEqual([]);
+		expect((service as any).parseJsonSafely("undefined", { x: true })).toEqual({
+			x: true,
+		});
+		expect((service as any).parseJsonSafely('{"ok":true}', {})).toEqual({
+			ok: true,
+		});
+	});
+
+	it("timestampToUnixSeconds handles Date, string, ms/seconds numbers, and fallback", () => {
+		const date = new Date("2024-01-01T00:00:00.000Z");
+		expect((service as any).timestampToUnixSeconds(date)).toBe(
+			date.getTime() / 1000,
+		);
+		expect(
+			(service as any).timestampToUnixSeconds("2024-01-01T00:00:00.000Z"),
+		).toBe(date.getTime() / 1000);
+		expect((service as any).timestampToUnixSeconds(1704067200)).toBe(
+			1704067200,
+		);
+		expect((service as any).timestampToUnixSeconds(1704067200000)).toBe(
+			1704067200,
+		);
+		const fallback = (service as any).timestampToUnixSeconds({ weird: true });
+		expect(fallback).toBeGreaterThan(0);
+	});
+
+	it("numRecentEvents alone still filters without afterTimestamp", async () => {
+		const session = await service.createSession("app", "user", {}, "s-recent");
+		for (const text of ["a", "b", "c", "d"]) {
+			await service.appendEvent(
+				session,
+				new Event({
+					author: "user",
+					content: { parts: [{ text }] },
+				}),
+			);
+		}
+
+		const recent = await service.getSession("app", "user", "s-recent", {
+			numRecentEvents: 2,
+		});
+		expect(recent?.events).toHaveLength(2);
+		const texts = recent?.events.map((e) => e.content?.parts?.[0]?.text) ?? [];
+		expect(texts.every((t) => ["a", "b", "c", "d"].includes(t as string))).toBe(
+			true,
+		);
+	});
+
+	it("surfaces bind errors when numRecentEvents is combined with afterTimestamp", async () => {
+		const session = await service.createSession("app", "user", {}, "s-combo");
+		await service.appendEvent(
+			session,
+			new Event({
+				author: "user",
+				content: { parts: [{ text: "x" }] },
+			}),
+		);
+
+		await expect(
+			service.getSession("app", "user", "s-combo", {
+				numRecentEvents: 1,
+				afterTimestamp: Date.now() / 1000 - 60,
+			}),
+		).rejects.toThrow(/bind/i);
+	});
+
+	it("initializeDatabase is a no-op when already initialized", async () => {
+		await service.createSession("app", "user", {}, "init-once");
+		await (service as any).initializeDatabase();
+		await (service as any).initializeDatabase();
+		expect(await service.getSession("app", "user", "init-once")).toBeTruthy();
+	});
+
+	it("appendEvent with empty actions.stateDelta still persists the event", async () => {
+		const session = await service.createSession(
+			"app",
+			"user",
+			{},
+			"s-empty-delta",
+		);
+		await service.appendEvent(
+			session,
+			new Event({
+				author: "agent",
+				content: { parts: [{ text: "empty-delta" }] },
+				actions: new EventActions({ stateDelta: {} }),
+			}),
+		);
+		const fetched = await service.getSession("app", "user", "s-empty-delta");
+		expect(fetched?.events).toHaveLength(1);
+		expect(fetched?.state).toEqual({});
+	});
+
+	it("TEMP-only appendEvent stateDelta does not mutate session storage state", async () => {
+		const session = await service.createSession(
+			"app",
+			"user",
+			{ keep: 1 },
+			"s-temp",
+		);
+		const before = session.lastUpdateTime;
+		await service.appendEvent(
+			session,
+			new Event({
+				author: "agent",
+				actions: new EventActions({
+					stateDelta: { [`${State.TEMP_PREFIX}scratch`]: "ephemeral" },
+				}),
+			}),
+		);
+		expect(session.lastUpdateTime).toBe(before);
+		const fetched = await service.getSession("app", "user", "s-temp");
+		expect(fetched?.state.keep).toBe(1);
+		expect(fetched?.state[`${State.TEMP_PREFIX}scratch`]).toBeUndefined();
+		expect(fetched?.events).toHaveLength(1);
+	});
+
+	it("listSessions returns lastUpdateTime from storage for each session", async () => {
+		await service.createSession("app", "lister", {}, "l1");
+		await service.createSession("app", "lister", {}, "l2");
+		const listed = await service.listSessions("app", "lister");
+		expect(listed.sessions).toHaveLength(2);
+		for (const s of listed.sessions) {
+			expect(s.lastUpdateTime).toBeGreaterThan(0);
+			expect(s.events).toEqual([]);
+			expect(s.state).toEqual({});
+		}
+	});
+
+	it("appendEvent with turnComplete true fails on sqlite boolean bind", async () => {
+		const session = await service.createSession("app", "user", {}, "s-bools");
+		const event = new Event({
+			author: "agent",
+			content: { role: "model", parts: [{ text: "done" }] },
+		});
+		event.turnComplete = true;
+
+		await expect(service.appendEvent(session, event)).rejects.toThrow(
+			/bind|SQLite3/i,
+		);
+	});
+
+	it("stores false interrupted/turnComplete as nullish via eventToStorageEvent", () => {
+		const session = {
+			id: "s1",
+			appName: "app",
+			userId: "user",
+			state: {},
+			events: [],
+			lastUpdateTime: 0,
+		};
+		const event = new Event({
+			author: "agent",
+			content: { role: "model", parts: [{ text: "ongoing" }] },
+		});
+		event.turnComplete = false;
+		event.interrupted = false;
+
+		const stored = (service as any).eventToStorageEvent(session, event);
+		expect(stored.turn_complete).toBeNull();
+		expect(stored.interrupted).toBeNull();
+	});
+
+	it("overwrites prior app/user keys on subsequent session creates", async () => {
+		await service.createSession(
+			"app",
+			"user",
+			{
+				[`${State.APP_PREFIX}theme`]: "dark",
+				[`${State.USER_PREFIX}locale`]: "en",
+			},
+			"s-ow-1",
+		);
+		const second = await service.createSession(
+			"app",
+			"user",
+			{
+				[`${State.APP_PREFIX}theme`]: "light",
+				[`${State.USER_PREFIX}locale`]: "fr",
+			},
+			"s-ow-2",
+		);
+		expect(second.state[`${State.APP_PREFIX}theme`]).toBe("light");
+		expect(second.state[`${State.USER_PREFIX}locale`]).toBe("fr");
+
+		const first = await service.getSession("app", "user", "s-ow-1");
+		expect(first?.state[`${State.APP_PREFIX}theme`]).toBe("light");
+		expect(first?.state[`${State.USER_PREFIX}locale`]).toBe("fr");
+	});
+
+	it("scopes deleteSession by composite primary key", async () => {
+		await service.createSession("app-a", "user", {}, "shared-id");
+		await service.createSession("app-b", "user", {}, "shared-id");
+		await service.deleteSession("app-a", "user", "shared-id");
+		expect(
+			await service.getSession("app-a", "user", "shared-id"),
+		).toBeUndefined();
+		expect(await service.getSession("app-b", "user", "shared-id")).toBeTruthy();
+	});
+
+	it("storageEventToEvent defaults missing optional JSON fields safely", () => {
+		const event = (service as any).storageEventToEvent({
+			id: "e-min",
+			app_name: "app",
+			user_id: "user",
+			session_id: "s1",
+			invocation_id: "",
+			author: "agent",
+			branch: null,
+			timestamp: new Date("2024-05-01T00:00:00.000Z"),
+			content: null,
+			actions: null,
+			long_running_tool_ids_json: "[]",
+			grounding_metadata: null,
+			partial: null,
+			turn_complete: null,
+			error_code: null,
+			error_message: null,
+			interrupted: null,
+		});
+		expect(Array.from(event.longRunningToolIds ?? [])).toEqual([]);
+		expect(event.content).toBeUndefined();
+		expect(event.timestamp).toBe(
+			new Date("2024-05-01T00:00:00.000Z").getTime() / 1000,
+		);
+	});
+
+	it("eventToStorageEvent serializes empty longRunningToolIds Set as null JSON", () => {
+		const session = {
+			id: "s1",
+			appName: "app",
+			userId: "user",
+			state: {},
+			events: [],
+			lastUpdateTime: 0,
+		};
+		const event = new Event({
+			author: "agent",
+			longRunningToolIds: new Set(),
+		});
+		const stored = (service as any).eventToStorageEvent(session, event);
+		expect(stored.long_running_tool_ids_json).toBe("[]");
+	});
+
+	it("appendEvent applies mixed deltas then leaves subsequent plain events non-stale", async () => {
+		const session = await service.createSession("app", "user", {}, "s-mixed");
+		await new Promise((r) => setTimeout(r, 1100));
+		await service.appendEvent(
+			session,
+			new Event({
+				author: "agent",
+				actions: new EventActions({
+					stateDelta: {
+						[`${State.APP_PREFIX}a`]: 1,
+						[`${State.USER_PREFIX}b`]: 2,
+						c: 3,
+					},
+				}),
+			}),
+		);
+		const mid = session.lastUpdateTime;
+		await service.appendEvent(
+			session,
+			new Event({
+				author: "user",
+				content: { parts: [{ text: "follow-up" }] },
+			}),
+		);
+		expect(session.lastUpdateTime).toBe(mid);
+		const fetched = await service.getSession("app", "user", "s-mixed");
+		expect(fetched?.events).toHaveLength(2);
+		expect(fetched?.state.c).toBe(3);
+	});
 });
