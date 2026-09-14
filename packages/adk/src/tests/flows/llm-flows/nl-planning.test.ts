@@ -366,4 +366,96 @@ describe("nl-planning responseProcessor more edges", () => {
 		expect(event.branch).toBe("feature");
 		expect(event.invocationId).toBe("inv-99");
 	});
+
+	it("leaves response parts unchanged when planner returns undefined", async () => {
+		const planner = {
+			buildPlanningInstruction: vi.fn(),
+			processPlanningResponse: () => undefined,
+		};
+		const original = [{ text: "keep" }];
+		const llmResponse = {
+			content: { role: "model", parts: original },
+		} as LlmResponse;
+
+		await drain(
+			responseProcessor.runAsync(
+				makeContext({ agent: { name: "planner-agent", planner } }),
+				llmResponse,
+			),
+		);
+
+		expect(llmResponse.content?.parts).toBe(original);
+	});
+
+	it("is a no-op for BuiltInPlanner on response path", async () => {
+		const llmResponse = {
+			content: { role: "model", parts: [{ text: "thought" }] },
+		} as LlmResponse;
+		const events = await drain(
+			responseProcessor.runAsync(
+				makeContext({
+					agent: {
+						name: "planner-agent",
+						planner: new BuiltInPlanner({
+							thinkingConfig: { includeThoughts: true },
+						}),
+					},
+				}),
+				llmResponse,
+			),
+		);
+		expect(events).toEqual([]);
+		expect(llmResponse.content?.parts?.[0]).toEqual({ text: "thought" });
+	});
+
+	it("requestProcessor clears thought flags from content parts for PlanReAct", async () => {
+		const llmRequest = new LlmRequest({
+			contents: [
+				{
+					role: "user",
+					parts: [{ text: "q", thought: true } as any, { text: "plain" }],
+				},
+				{
+					role: "model",
+					parts: [{ text: "a", thought: true } as any],
+				},
+			],
+		});
+
+		await drain(
+			requestProcessor.runAsync(
+				makeContext({
+					agent: {
+						name: "planner-agent",
+						planner: new PlanReActPlanner(),
+					},
+				}),
+				llmRequest,
+			),
+		);
+
+		expect(
+			llmRequest.contents
+				?.flatMap((c) => c.parts ?? [])
+				.every((p) => !p.thought),
+		).toBe(true);
+		expect(llmRequest.config?.systemInstruction).toBeTruthy();
+	});
+
+	it("requestProcessor skips thought stripping when contents are an empty array", async () => {
+		const llmRequest = new LlmRequest({ contents: [] });
+		await drain(
+			requestProcessor.runAsync(
+				makeContext({
+					agent: {
+						name: "planner-agent",
+						planner: new PlanReActPlanner(),
+					},
+				}),
+				llmRequest,
+			),
+		);
+		expect(llmRequest.contents).toEqual([]);
+		expect(llmRequest.config?.systemInstruction).toBeTruthy();
+	});
 });

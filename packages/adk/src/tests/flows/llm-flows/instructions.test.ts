@@ -178,4 +178,87 @@ describe("instructions requestProcessor", () => {
 
 		expect(llmRequest.getSystemInstructionText()).toBeUndefined();
 	});
+
+	it("appends global instruction from LlmAgent rootAgent when present", async () => {
+		const rootAgent = {
+			name: "root",
+			canonicalModel: "gpt-4o",
+			globalInstruction: "Always be polite.",
+			canonicalGlobalInstruction: async () =>
+				["Always be polite.", true] as [string, boolean],
+		};
+		const agent = {
+			name: "child",
+			canonicalModel: "gpt-4o",
+			rootAgent,
+		};
+		const llmRequest = new LlmRequest();
+		await drain(
+			requestProcessor.runAsync(
+				{ agent } as unknown as InvocationContext,
+				llmRequest,
+			),
+		);
+		expect(llmRequest.getSystemInstructionText()).toContain(
+			"Always be polite.",
+		);
+		expect(injectSessionState).not.toHaveBeenCalled();
+	});
+
+	it("resolves async canonicalInstruction values", async () => {
+		const agent = {
+			name: "async-agent",
+			canonicalModel: "gpt-4o",
+			rootAgent: { name: "root" },
+			instruction: "placeholder",
+			canonicalInstruction: async () =>
+				["Dynamic instruction", true] as [string, boolean],
+		};
+		const llmRequest = new LlmRequest();
+		await drain(
+			requestProcessor.runAsync(
+				{ agent } as unknown as InvocationContext,
+				llmRequest,
+			),
+		);
+		expect(llmRequest.getSystemInstructionText()).toContain(
+			"Dynamic instruction",
+		);
+	});
+
+	it("skips agents without canonicalModel", async () => {
+		const llmRequest = new LlmRequest();
+		await drain(
+			requestProcessor.runAsync(
+				{
+					agent: { name: "plain", instruction: "x" },
+				} as unknown as InvocationContext,
+				llmRequest,
+			),
+		);
+		expect(llmRequest.getSystemInstructionText()).toBeUndefined();
+	});
+
+	it("skips global instruction when rootAgent is not an LlmAgent", async () => {
+		const agent = {
+			name: "child",
+			canonicalModel: "gpt-4o",
+			rootAgent: {
+				name: "root",
+				globalInstruction: "should-not-apply",
+			},
+			instruction: "local",
+			canonicalInstruction: async () => ["local", true] as [string, boolean],
+		};
+		const llmRequest = new LlmRequest();
+		await drain(
+			requestProcessor.runAsync(
+				{ agent } as unknown as InvocationContext,
+				llmRequest,
+			),
+		);
+		const text = llmRequest.getSystemInstructionText() ?? "";
+		expect(text).toContain("local");
+		expect(text).not.toContain("should-not-apply");
+	});
 });

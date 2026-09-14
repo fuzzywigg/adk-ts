@@ -803,4 +803,308 @@ describe("handleFunctionCallsAsync callback and filter edges", () => {
 		expect(result?.getFunctionResponses()).toHaveLength(1);
 		expect(result?.getFunctionResponses()[0].id).toBe("f");
 	});
+
+	it("returns early from populateClientFunctionCallId when getFunctionCalls is falsy", () => {
+		const event = new Event({
+			author: "agent",
+			content: { role: "model", parts: [] },
+		});
+		vi.spyOn(event, "getFunctionCalls").mockReturnValueOnce(
+			undefined as unknown as ReturnType<Event["getFunctionCalls"]>,
+		);
+		expect(() => populateClientFunctionCallId(event)).not.toThrow();
+	});
+
+	it("returns null from handleFunctionCallsAsync when getFunctionCalls is falsy", async () => {
+		const event = functionCallEvent([{ name: "echo_tool", id: "c1" }]);
+		vi.spyOn(event, "getFunctionCalls").mockReturnValueOnce(
+			undefined as unknown as ReturnType<Event["getFunctionCalls"]>,
+		);
+		const tool = new FakeTool(
+			{ name: "echo_tool", description: "Echo tool helper" },
+			async () => ({ ok: true }),
+		);
+		const result = await handleFunctionCallsAsync(
+			makeInvocationContext({
+				name: "llm-agent",
+				canonicalModel: "gpt-4o",
+				canonicalBeforeToolCallbacks: [],
+				canonicalAfterToolCallbacks: [],
+			}),
+			event,
+			{ echo_tool: tool },
+		);
+		expect(result).toBeNull();
+	});
+
+	it("executes tools with missing functionCall id using empty functionCallId", async () => {
+		const runAsync = vi.fn(async () => ({ ran: true }));
+		const tool = new FakeTool(
+			{ name: "echo_tool", description: "Echo tool helper" },
+			runAsync,
+		);
+		const result = await handleFunctionCallsAsync(
+			makeInvocationContext({
+				name: "llm-agent",
+				canonicalModel: "gpt-4o",
+				canonicalBeforeToolCallbacks: [],
+				canonicalAfterToolCallbacks: [],
+			}),
+			functionCallEvent([{ name: "echo_tool", args: { v: 9 } }]),
+			{ echo_tool: tool },
+		);
+
+		expect(runAsync).toHaveBeenCalledWith({ v: 9 });
+		expect(result?.getFunctionResponses()[0].id).toBe("");
+		expect(result?.getFunctionResponses()[0].response).toEqual({ ran: true });
+	});
+
+	it("filter set includes calls with empty id when filter entry is empty string", async () => {
+		const tool = new FakeTool(
+			{ name: "echo_tool", description: "Echo tool helper" },
+			async () => ({ filtered: false }),
+		);
+		const withId = await handleFunctionCallsAsync(
+			makeInvocationContext({
+				name: "llm-agent",
+				canonicalModel: "gpt-4o",
+				canonicalBeforeToolCallbacks: [],
+				canonicalAfterToolCallbacks: [],
+			}),
+			functionCallEvent([{ name: "echo_tool", id: "keep" }]),
+			{ echo_tool: tool },
+			new Set(["other"]),
+		);
+		expect(withId).toBeNull();
+
+		const missingId = await handleFunctionCallsAsync(
+			makeInvocationContext({
+				name: "llm-agent",
+				canonicalModel: "gpt-4o",
+				canonicalBeforeToolCallbacks: [],
+				canonicalAfterToolCallbacks: [],
+			}),
+			functionCallEvent([{ name: "echo_tool", args: { x: 1 } }]),
+			{ echo_tool: tool },
+			new Set(["keep"]),
+		);
+		expect(missingId?.getFunctionResponses()[0].response).toEqual({
+			filtered: false,
+		});
+	});
+
+	it("wraps boolean false and string results as result envelopes", async () => {
+		const boolTool = new FakeTool(
+			{ name: "bool", description: "returns boolean" },
+			async () => false,
+		);
+		const strTool = new FakeTool(
+			{ name: "str", description: "returns string" },
+			async () => "hello",
+		);
+		const boolResult = await handleFunctionCallsAsync(
+			makeInvocationContext({
+				name: "llm-agent",
+				canonicalModel: "gpt-4o",
+				canonicalBeforeToolCallbacks: [],
+				canonicalAfterToolCallbacks: [],
+			}),
+			functionCallEvent([{ name: "bool", id: "b1" }]),
+			{ bool: boolTool },
+		);
+		const strResult = await handleFunctionCallsAsync(
+			makeInvocationContext({
+				name: "llm-agent",
+				canonicalModel: "gpt-4o",
+				canonicalBeforeToolCallbacks: [],
+				canonicalAfterToolCallbacks: [],
+			}),
+			functionCallEvent([{ name: "str", id: "s1" }]),
+			{ str: strTool },
+		);
+		expect(boolResult?.getFunctionResponses()[0].response).toEqual({
+			result: false,
+		});
+		expect(strResult?.getFunctionResponses()[0].response).toEqual({
+			result: "hello",
+		});
+	});
+
+	it("handleFunctionCallsLive delegates to async handling", async () => {
+		const tool = new FakeTool(
+			{ name: "echo_tool", description: "Echo tool helper" },
+			async () => ({ live: true }),
+		);
+		const result = await handleFunctionCallsLive(
+			makeInvocationContext({
+				name: "llm-agent",
+				canonicalModel: "gpt-4o",
+				canonicalBeforeToolCallbacks: [],
+				canonicalAfterToolCallbacks: [],
+			}),
+			functionCallEvent([{ name: "echo_tool", id: "live-1", args: {} }]),
+			{ echo_tool: tool },
+		);
+		expect(result?.getFunctionResponses()[0].response).toEqual({ live: true });
+	});
+
+	it("mergeParallelFunctionResponseEvents merges auth configs and keeps base timestamp", () => {
+		const ts = 1_700_000_000_000;
+		const first = new Event({
+			author: "agent",
+			timestamp: ts,
+			branch: "main",
+			content: {
+				role: "user",
+				parts: [
+					{
+						functionResponse: {
+							name: "a",
+							id: "1",
+							response: { a: 1 },
+						},
+					},
+				],
+			},
+			actions: new EventActions({
+				requestedAuthConfigs: {
+					"1": { authScheme: { type: "oauth2" } } as any,
+				},
+			}),
+		});
+		const second = new Event({
+			author: "agent",
+			timestamp: ts + 5,
+			branch: "main",
+			content: {
+				role: "user",
+				parts: [
+					{
+						functionResponse: {
+							name: "b",
+							id: "2",
+							response: { b: 2 },
+						},
+					},
+				],
+			},
+			actions: new EventActions({
+				requestedAuthConfigs: {
+					"2": { authScheme: { type: "apiKey" } } as any,
+				},
+			}),
+		});
+
+		const merged = mergeParallelFunctionResponseEvents([first, second]);
+		expect(merged.timestamp).toBe(ts);
+		expect(merged.branch).toBe("main");
+		expect(merged.getFunctionResponses()).toHaveLength(2);
+		expect(Object.keys(merged.actions.requestedAuthConfigs).sort()).toEqual([
+			"1",
+			"2",
+		]);
+	});
+
+	it("mergeParallelFunctionResponseEvents skips events without content parts", () => {
+		const withParts = new Event({
+			author: "agent",
+			content: {
+				role: "user",
+				parts: [
+					{
+						functionResponse: {
+							name: "a",
+							id: "1",
+							response: { ok: true },
+						},
+					},
+				],
+			},
+		});
+		const empty = new Event({
+			author: "agent",
+			content: { role: "user", parts: [] },
+		});
+		const noContent = new Event({ author: "agent" });
+		const merged = mergeParallelFunctionResponseEvents([
+			withParts,
+			empty,
+			noContent,
+		]);
+		expect(merged.getFunctionResponses()).toHaveLength(1);
+		expect(merged.getFunctionResponses()[0].id).toBe("1");
+	});
+
+	it("generateAuthEvent copies role from the function response event", () => {
+		const responseEvent = new Event({
+			author: "agent",
+			content: { role: "user", parts: [] },
+			actions: new EventActions({
+				requestedAuthConfigs: {
+					"call-1": { authScheme: { type: "oauth2" } } as any,
+				},
+			}),
+		});
+		const authEvent = generateAuthEvent(
+			makeInvocationContext({ name: "llm-agent", canonicalModel: "gpt-4o" }),
+			responseEvent,
+		);
+		expect(authEvent?.content?.role).toBe("user");
+		expect(authEvent?.content?.parts?.[0]?.functionCall?.name).toBe(
+			REQUEST_EUC_FUNCTION_CALL_NAME,
+		);
+		expect(
+			authEvent?.content?.parts?.[0]?.functionCall?.args?.function_call_id,
+		).toBe("call-1");
+	});
+
+	it("removeClientFunctionCallId clears both call and response adk-prefixed ids", () => {
+		const content = {
+			role: "user" as const,
+			parts: [
+				{
+					functionCall: {
+						name: "t",
+						id: `${AF_FUNCTION_CALL_ID_PREFIX}abc`,
+					},
+				},
+				{
+					functionResponse: {
+						name: "t",
+						id: `${AF_FUNCTION_CALL_ID_PREFIX}def`,
+						response: {},
+					},
+				},
+				{
+					functionCall: { name: "keep", id: "external-id" },
+				},
+			],
+		};
+		removeClientFunctionCallId(content);
+		expect(content.parts[0].functionCall?.id).toBeUndefined();
+		expect(content.parts[1].functionResponse?.id).toBeUndefined();
+		expect(content.parts[2].functionCall?.id).toBe("external-id");
+	});
+
+	it("getLongRunningFunctionCalls ignores missing tools and non-long-running tools", () => {
+		const long = new FakeTool({
+			name: "long",
+			description: "Long running tool",
+			isLongRunning: true,
+		});
+		const short = new FakeTool({
+			name: "short",
+			description: "Quick tool helper",
+		});
+		const ids = getLongRunningFunctionCalls(
+			[
+				{ name: "long", id: "l1" },
+				{ name: "short", id: "s1" },
+				{ name: "missing", id: "m1" },
+				{ name: "long" },
+			],
+			{ long, short },
+		);
+		expect([...ids]).toEqual(["l1"]);
+	});
 });

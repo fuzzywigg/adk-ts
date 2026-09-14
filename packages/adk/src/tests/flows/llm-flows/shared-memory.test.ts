@@ -205,4 +205,196 @@ describe("sharedMemoryRequestProcessor", () => {
 			}),
 		);
 	});
+
+	it("ignores user events whose parts array is empty", async () => {
+		const searchMemory = vi.fn();
+		const { context, llmRequest } = makeContext({
+			memoryService: { searchMemory } as any,
+			events: [
+				new Event({
+					author: "user",
+					content: { role: "user", parts: [] },
+				}),
+				new Event({
+					author: "agent",
+					content: { role: "model", parts: [{ text: "hi" }] },
+				}),
+			],
+		});
+
+		await drain(sharedMemoryRequestProcessor.runAsync(context, llmRequest));
+		expect(searchMemory).not.toHaveBeenCalled();
+	});
+
+	it("builds memory query treating non-text user parts as empty strings", async () => {
+		const searchMemory = vi.fn(async () => ({ memories: [] }));
+		const { context, llmRequest } = makeContext({
+			memoryService: { searchMemory } as any,
+			events: [
+				new Event({
+					author: "user",
+					content: {
+						role: "user",
+						parts: [
+							{ text: "hello" },
+							{ inlineData: { mimeType: "image/png", data: "xx" } } as any,
+							{ text: "world" },
+						],
+					},
+				}),
+			],
+		});
+
+		await drain(sharedMemoryRequestProcessor.runAsync(context, llmRequest));
+		expect(searchMemory).toHaveBeenCalledWith(
+			expect.objectContaining({
+				query: "hello  world",
+			}),
+		);
+	});
+
+	it("initializes llmRequest.contents when undefined before injecting memory", async () => {
+		const searchMemory = vi.fn(async () => ({
+			memories: [
+				{
+					author: "past",
+					content: { role: "user", parts: [{ text: "fact" }] },
+				},
+			],
+		}));
+		const { context, llmRequest } = makeContext({
+			memoryService: { searchMemory } as any,
+			events: [
+				new Event({
+					author: "user",
+					content: { role: "user", parts: [{ text: "q" }] },
+				}),
+			],
+		});
+		(llmRequest as any).contents = undefined;
+
+		await drain(sharedMemoryRequestProcessor.runAsync(context, llmRequest));
+		expect(llmRequest.contents).toHaveLength(1);
+		expect(llmRequest.contents?.[0].parts?.[0].text).toBe("[past] said: fact");
+	});
+
+	it("joins multi-part memory text when injecting", async () => {
+		const searchMemory = vi.fn(async () => ({
+			memories: [
+				{
+					author: "past",
+					content: {
+						role: "user",
+						parts: [{ text: "one" }, { text: "two" }],
+					},
+				},
+			],
+		}));
+		const { context, llmRequest } = makeContext({
+			memoryService: { searchMemory } as any,
+			events: [
+				new Event({
+					author: "user",
+					content: { role: "user", parts: [{ text: "q" }] },
+				}),
+			],
+			contents: [],
+		});
+
+		await drain(sharedMemoryRequestProcessor.runAsync(context, llmRequest));
+		expect(llmRequest.contents?.[0].parts?.[0].text).toBe(
+			"[past] said: one two",
+		);
+	});
+
+	it("treats memory with missing parts as empty text for dedupe and inject", async () => {
+		const searchMemory = vi.fn(async () => ({
+			memories: [
+				{
+					author: "past",
+					content: { role: "user" },
+				},
+				{
+					author: "past2",
+					content: { role: "user", parts: undefined },
+				},
+			],
+		}));
+		const { context, llmRequest } = makeContext({
+			memoryService: { searchMemory } as any,
+			events: [
+				new Event({
+					author: "user",
+					content: { role: "user", parts: [{ text: "q" }] },
+				}),
+			],
+			contents: [
+				{
+					role: "user",
+					parts: [{ text: "" }],
+				},
+			],
+		});
+
+		await drain(sharedMemoryRequestProcessor.runAsync(context, llmRequest));
+		expect(llmRequest.contents).toHaveLength(1);
+		expect(llmRequest.contents?.[0].parts?.[0].text).toBe("");
+	});
+
+	it("injects multiple distinct memories in order", async () => {
+		const searchMemory = vi.fn(async () => ({
+			memories: [
+				{
+					author: "a",
+					content: { role: "user", parts: [{ text: "first" }] },
+				},
+				{
+					author: "b",
+					content: { role: "user", parts: [{ text: "second" }] },
+				},
+			],
+		}));
+		const { context, llmRequest } = makeContext({
+			memoryService: { searchMemory } as any,
+			events: [
+				new Event({
+					author: "user",
+					content: { role: "user", parts: [{ text: "q" }] },
+				}),
+			],
+			contents: [],
+		});
+
+		await drain(sharedMemoryRequestProcessor.runAsync(context, llmRequest));
+		expect(llmRequest.contents?.map((c) => c.parts?.[0].text)).toEqual([
+			"[a] said: first",
+			"[b] said: second",
+		]);
+	});
+
+	it("uses the latest user event when earlier user events exist", async () => {
+		const searchMemory = vi.fn(async () => ({ memories: [] }));
+		const { context, llmRequest } = makeContext({
+			memoryService: { searchMemory } as any,
+			events: [
+				new Event({
+					author: "user",
+					content: { role: "user", parts: [{ text: "old" }] },
+				}),
+				new Event({
+					author: "agent",
+					content: { role: "model", parts: [{ text: "reply" }] },
+				}),
+				new Event({
+					author: "user",
+					content: { role: "user", parts: [{ text: "latest query" }] },
+				}),
+			],
+		});
+
+		await drain(sharedMemoryRequestProcessor.runAsync(context, llmRequest));
+		expect(searchMemory).toHaveBeenCalledWith(
+			expect.objectContaining({ query: "latest query" }),
+		);
+	});
 });

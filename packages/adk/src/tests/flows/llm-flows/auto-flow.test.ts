@@ -35,4 +35,22 @@ describe("AutoFlow", () => {
 			agentTransferRequestProcessor,
 		);
 	});
+
+	it("preserves SingleFlow processor prefix order before agent transfer", () => {
+		const single = new SingleFlow();
+		const auto = new AutoFlow();
+		expect(auto.requestProcessors.slice(0, -1)).toEqual(
+			single.requestProcessors,
+		);
+		expect(auto.responseProcessors).toEqual(single.responseProcessors);
+	});
+
+	it("creates independent processor arrays per instance", () => {
+		const a = new AutoFlow();
+		const b = new AutoFlow();
+		expect(a.requestProcessors).not.toBe(b.requestProcessors);
+		expect(a.requestProcessors).toHaveLength(b.requestProcessors.length);
+		expect(a.requestProcessors.at(-1)).toBe(agentTransferRequestProcessor);
+		expect(b.requestProcessors.at(-1)).toBe(agentTransferRequestProcessor);
+	});
 });

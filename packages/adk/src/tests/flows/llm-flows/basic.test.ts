@@ -249,4 +249,85 @@ describe("basic requestProcessor", () => {
 		).resolves.toBeUndefined();
 		expect(llmRequest.config?.responseSchema).toBeUndefined();
 	});
+
+	it("creates liveConnectConfig when missing on the request", async () => {
+		const llmRequest = new LlmRequest();
+		delete (llmRequest as any).liveConnectConfig;
+		const invocationContext = {
+			agent: {
+				name: "live-agent",
+				canonicalModel: "gpt-4o",
+			},
+			runConfig: {
+				responseModalities: ["AUDIO"],
+				speechConfig: {
+					voiceConfig: { prebuiltVoiceConfig: { voiceName: "Puck" } },
+				},
+				enableAffectiveDialog: true,
+			},
+		} as unknown as InvocationContext;
+
+		await drain(requestProcessor.runAsync(invocationContext, llmRequest));
+
+		expect(llmRequest.liveConnectConfig).toBeDefined();
+		expect(llmRequest.liveConnectConfig.responseModalities).toEqual(["AUDIO"]);
+		expect(llmRequest.liveConnectConfig.enableAffectiveDialog).toBe(true);
+		expect(llmRequest.liveConnectConfig.speechConfig).toEqual({
+			voiceConfig: { prebuiltVoiceConfig: { voiceName: "Puck" } },
+		});
+	});
+
+	it("copies transcription and realtime live config fields when present", async () => {
+		const llmRequest = new LlmRequest();
+		const invocationContext = {
+			agent: {
+				name: "live-agent",
+				canonicalModel: "gpt-4o",
+			},
+			runConfig: {
+				outputAudioTranscription: { languageCode: "en-US" },
+				inputAudioTranscription: { languageCode: "en-GB" },
+				realtimeInputConfig: { automaticActivityDetection: {} },
+				proactivity: { proactiveAudio: true },
+			},
+		} as unknown as InvocationContext;
+
+		await drain(requestProcessor.runAsync(invocationContext, llmRequest));
+
+		expect(llmRequest.liveConnectConfig.outputAudioTranscription).toEqual({
+			languageCode: "en-US",
+		});
+		expect(llmRequest.liveConnectConfig.inputAudioTranscription).toEqual({
+			languageCode: "en-GB",
+		});
+		expect(llmRequest.liveConnectConfig.realtimeInputConfig).toEqual({
+			automaticActivityDetection: {},
+		});
+		expect(llmRequest.liveConnectConfig.proactivity).toEqual({
+			proactiveAudio: true,
+		});
+	});
+
+	it("still configures live settings when agent has tools and output schema", async () => {
+		const schema = { type: "object" };
+		const llmRequest = new LlmRequest();
+		const invocationContext = {
+			agent: {
+				name: "tool-agent",
+				canonicalModel: "gpt-4o",
+				outputSchema: schema,
+				canonicalTools: async () => [{ name: "search" }],
+				subAgents: [],
+			},
+			runConfig: {
+				responseModalities: ["TEXT"],
+				enableAffectiveDialog: false,
+			},
+		} as unknown as InvocationContext;
+
+		await drain(requestProcessor.runAsync(invocationContext, llmRequest));
+		expect(llmRequest.config?.responseSchema).toBeUndefined();
+		expect(llmRequest.liveConnectConfig.responseModalities).toEqual(["TEXT"]);
+		expect(llmRequest.liveConnectConfig.enableAffectiveDialog).toBe(false);
+	});
 });

@@ -1088,3 +1088,213 @@ describe("BaseLlmFlow._postprocessAsync function-call path", () => {
 		expect(events[2]).toBe(functionResponse);
 	});
 });
+
+describe("BaseLlmFlow leftover edges (post #98 llm-flows deepen)", () => {
+	it("_runOneStepAsync yields preprocess processor events before the model response", async () => {
+		const flow = new InspectableFlow();
+		const preprocessEvent = new Event({ author: "pre" });
+		flow.requestProcessors = [
+			{
+				runAsync: async function* () {
+					yield preprocessEvent;
+				},
+			},
+		];
+		flow.responseProcessors = [];
+		const agent = {
+			name: "pre-agent",
+			canonicalTools: async () => [],
+			canonicalModel: {
+				model: "fake",
+				generateContentAsync: vi.fn(async function* () {
+					yield { content: { role: "model", parts: [{ text: "after-pre" }] } };
+				}),
+			},
+		};
+
+		const events = await collect(flow._runOneStepAsync(makeCtx({ agent })));
+		expect(events[0]).toBe(preprocessEvent);
+		expect(events[1].content?.parts?.[0]).toEqual({ text: "after-pre" });
+	});
+
+	it("_postprocessLive yields response processor events before finalized live event", async () => {
+		const flow = new InspectableFlow();
+		const processorEvent = new Event({ author: "live-rp" });
+		flow.responseProcessors = [
+			{
+				runAsync: async function* () {
+					yield processorEvent;
+				},
+			},
+		];
+
+		const events = await collect(
+			flow._postprocessLive(
+				mockContext,
+				new LlmRequest(),
+				{
+					content: { role: "model", parts: [{ text: "live-text" }] },
+				} as LlmResponse,
+				new Event({ id: "m", author: "agent" }),
+			),
+		);
+
+		expect(events[0]).toBe(processorEvent);
+		expect(events[1].content?.parts?.[0]).toEqual({ text: "live-text" });
+	});
+
+	it("_callLlmAsync truncates system instructions longer than 100 characters", async () => {
+		const flow = new InspectableFlow();
+		flow.requestProcessors = [];
+		flow.responseProcessors = [];
+		const longInstruction = "y".repeat(150);
+		const agent = {
+			name: "long-si",
+			canonicalTools: async () => [],
+			canonicalModel: {
+				model: "fake",
+				generateContentAsync: vi.fn(async function* (req: LlmRequest) {
+					expect(req.getSystemInstructionText()).toBe(longInstruction);
+					yield { content: { role: "model", parts: [{ text: "ok" }] } };
+				}),
+			},
+		};
+
+		const llmRequest = new LlmRequest();
+		llmRequest.appendInstructions([longInstruction]);
+		const modelEvent = new Event({ id: "me", author: "long-si" });
+		const responses = await collect(
+			flow._callLlmAsync(makeCtx({ agent }), llmRequest, modelEvent),
+		);
+		expect(responses).toHaveLength(1);
+		expect(agent.canonicalModel.generateContentAsync).toHaveBeenCalled();
+	});
+
+	it("_postprocessAsync handles functionCall with missing id", async () => {
+		const flow = new InspectableFlow();
+		flow.responseProcessors = [];
+		const functionResponse = new Event({
+			author: "agent",
+			content: {
+				parts: [{ functionResponse: { name: "f", response: { ok: 1 } } }],
+			},
+		});
+		handleFunctionCallsAsyncMock.mockResolvedValue(functionResponse);
+		generateAuthEventMock.mockReturnValue(null);
+
+		const events = await collect(
+			flow._postprocessAsync(
+				mockContext,
+				new LlmRequest(),
+				{
+					content: {
+						parts: [{ functionCall: { name: "f", args: { a: 1 } } }],
+					},
+				} as LlmResponse,
+				new Event({ id: "m", author: "agent" }),
+			),
+		);
+
+		expect(events[0].getFunctionCalls()?.[0]?.name).toBe("f");
+		expect(events[1]).toBe(functionResponse);
+		expect(handleFunctionCallsAsyncMock).toHaveBeenCalled();
+	});
+
+	it("_finalizeModelResponseEvent uses empty toolsDict when missing on request", () => {
+		const flow = new InspectableFlow();
+		const emptyIds = new Set<string>();
+		getLongRunningFunctionCallsMock.mockReturnValue(emptyIds);
+		const llmRequest = new LlmRequest();
+		delete (llmRequest as any).toolsDict;
+
+		const finalized = flow._finalizeModelResponseEvent(
+			llmRequest,
+			{
+				content: {
+					role: "model",
+					parts: [{ functionCall: { name: "t", args: {}, id: "c1" } }],
+				},
+			} as LlmResponse,
+			new Event({ id: "me", author: "agent" }),
+		);
+
+		expect(getLongRunningFunctionCallsMock).toHaveBeenCalledWith(
+			expect.any(Array),
+			{},
+		);
+		expect(finalized.longRunningToolIds).toBe(emptyIds);
+	});
+
+	it("_postprocessLive handles function calls when toolsDict is undefined", async () => {
+		const flow = new InspectableFlow();
+		flow.responseProcessors = [];
+		handleFunctionCallsAsyncMock.mockResolvedValue(null);
+		const llmRequest = new LlmRequest();
+		delete (llmRequest as any).toolsDict;
+
+		const events = await collect(
+			flow._postprocessLive(
+				mockContext,
+				llmRequest,
+				{
+					content: {
+						parts: [{ functionCall: { name: "tool", args: {}, id: "y" } }],
+					},
+				} as LlmResponse,
+				new Event({ id: "m", author: "agent" }),
+			),
+		);
+
+		expect(events).toHaveLength(1);
+		expect(handleFunctionCallsAsyncMock).toHaveBeenCalledWith(
+			mockContext,
+			expect.any(Event),
+			{},
+		);
+	});
+
+	it("_postprocessLive finalizes content without parts when turnComplete", async () => {
+		const flow = new InspectableFlow();
+		flow.responseProcessors = [];
+		const events = await collect(
+			flow._postprocessLive(
+				mockContext,
+				new LlmRequest(),
+				{
+					turnComplete: true,
+					content: { role: "model" },
+				} as any,
+				new Event({ id: "live-np", author: "agent" }),
+			),
+		);
+		expect(events).toHaveLength(1);
+		expect(events[0].author).toBe("agent");
+	});
+
+	it("_runOneStepAsync stops after preprocess when endInvocation is set", async () => {
+		const flow = new InspectableFlow();
+		const preprocessEvent = new Event({ author: "pre-end" });
+		flow.requestProcessors = [
+			{
+				runAsync: async function* (_ctx, _req) {
+					(_ctx as any).endInvocation = true;
+					yield preprocessEvent;
+				},
+			},
+		];
+		const agent = {
+			name: "end-agent",
+			canonicalTools: async () => [],
+			canonicalModel: {
+				model: "fake",
+				generateContentAsync: vi.fn(async function* () {
+					yield { content: { role: "model", parts: [{ text: "should-not" }] } };
+				}),
+			},
+		};
+
+		const events = await collect(flow._runOneStepAsync(makeCtx({ agent })));
+		expect(events).toEqual([preprocessEvent]);
+		expect(agent.canonicalModel.generateContentAsync).not.toHaveBeenCalled();
+	});
+});

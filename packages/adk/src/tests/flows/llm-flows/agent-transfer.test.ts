@@ -160,4 +160,57 @@ describe("AgentTransferLlmRequestProcessor", () => {
 			/Agent name: bare_parent/,
 		);
 	});
+
+	it("is a no-op when agent has no transferable targets", async () => {
+		const request = new LlmRequest();
+		const agent = new StubAgent("solo", "Works alone");
+
+		for await (const _ of requestProcessor.runAsync(
+			makeContext(agent),
+			request,
+		)) {
+		}
+
+		expect(request.toolsDict.transfer_to_agent).toBeUndefined();
+		expect(request.config?.systemInstruction).toBeUndefined();
+	});
+
+	it("includes parent and peer agents in transfer instructions", async () => {
+		const request = new LlmRequest();
+		const parent = new StubAgent("parent", "Parent agent");
+		const peer = new StubAgent("peer", "Peer agent");
+		const agent = new StubAgent("child", "Child agent");
+		parent.subAgents = [agent, peer];
+		agent.parentAgent = parent;
+		peer.parentAgent = parent;
+
+		for await (const _ of requestProcessor.runAsync(
+			makeContext(agent),
+			request,
+		)) {
+		}
+
+		expect(request.config?.systemInstruction).toContain("peer");
+		expect(request.config?.systemInstruction).toContain(
+			"Your parent agent is parent",
+		);
+		expect(request.toolsDict.transfer_to_agent).toBeDefined();
+	});
+
+	it("yields no events from the transfer request processor", async () => {
+		const request = new LlmRequest();
+		const child = new StubAgent("worker", "Does work");
+		const agent = new StubAgent("orchestrator", "Routes work");
+		agent.subAgents = [child];
+		child.parentAgent = agent;
+
+		const events: unknown[] = [];
+		for await (const event of requestProcessor.runAsync(
+			makeContext(agent),
+			request,
+		)) {
+			events.push(event);
+		}
+		expect(events).toEqual([]);
+	});
 });
