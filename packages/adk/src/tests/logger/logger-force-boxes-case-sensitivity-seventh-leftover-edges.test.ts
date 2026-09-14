@@ -51,6 +51,8 @@ describe("Logger seventh leftover — ADK_FORCE_BOXES === 'true' case asymmetry"
 		{ label: "empty", value: "" },
 		{ label: "true ", value: "true " },
 		{ label: " true", value: " true" },
+		{ label: "tab suffix", value: "true\t" },
+		{ label: "newline suffix", value: "true\n" },
 	] as const)("prod warn stays simple when ADK_FORCE_BOXES=$label (strict === 'true')", ({
 		value,
 	}) => {

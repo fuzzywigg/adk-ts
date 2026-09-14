@@ -112,4 +112,17 @@ describe("Logger seventh leftover — ADK_DEBUG === 'true' case asymmetry", () =
 		logger.debug("emit-dev");
 		expect(logSpy).toHaveBeenCalled();
 	});
+
+	it.each([
+		{ label: "tab suffix", value: "true\t" },
+		{ label: "newline suffix", value: "true\n" },
+		{ label: "true\\r", value: "true\r" },
+	] as const)("ADK_DEBUG=$label still misses strict === 'true'", async ({
+		value,
+	}) => {
+		process.env.NODE_ENV = "production";
+		process.env.ADK_DEBUG = value;
+		await reloadLogger();
+		expect(isDebugEnabled()).toBe(false);
+	});
 });

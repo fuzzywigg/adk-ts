@@ -125,6 +125,9 @@ describe("Logger seventh leftover — warnStructured format '' fallthrough + tim
 		{ label: "json ", value: "json " },
 		{ label: "PRETTY", value: "PRETTY" },
 		{ label: "Pretty", value: "Pretty" },
+		{ label: "json tab", value: "json\t" },
+		{ label: "pretty tab", value: "pretty\t" },
+		{ label: "json newline", value: "json\n" },
 	] as const)("ADK_WARN_FORMAT=$label misses json/pretty (strict ===) and falls through to text", ({
 		value,
 	}) => {

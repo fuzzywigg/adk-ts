@@ -51,6 +51,8 @@ describe("Logger seventh leftover — ADK_AGENT_BUILDER_WARN === 'verbose' + opt
 		{ label: "1", value: "1" },
 		{ label: "empty", value: "" },
 		{ label: "verbose ", value: "verbose " },
+		{ label: " leading space", value: " verbose" },
+		{ label: "tab suffix", value: "verbose\t" },
 	] as const)("env ADK_AGENT_BUILDER_WARN=$label does not enable Context (strict === 'verbose')", ({
 		value,
 	}) => {
