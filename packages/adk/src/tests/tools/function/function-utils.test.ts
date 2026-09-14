@@ -461,3 +461,46 @@ function cased(a, b, c) { return {}; }`,
 		expect(declaration.parameters?.required).toBeUndefined();
 	});
 });
+
+describe("buildFunctionDeclaration leftover toString and default type edges", () => {
+	it("returns empty properties when toString has no parameter list", () => {
+		const bare = withSource(
+			() => 1,
+			"function bare /* no parens */ { return 1; }",
+		);
+		Object.defineProperty(bare, "name", { value: "bare" });
+		expect(buildFunctionDeclaration(bare).parameters).toEqual({
+			type: Type.OBJECT,
+			properties: {},
+		});
+	});
+
+	it("defaults untyped params to string even with JSDoc missing types", () => {
+		const untyped = withSource(
+			(_a: unknown, _b: unknown) => ({}),
+			`/**
+ * Untyped
+ * @param a First
+ * @param b Second
+ */
+function untyped(a, b) { return {}; }`,
+		);
+		Object.defineProperty(untyped, "name", { value: "untyped" });
+		const declaration = buildFunctionDeclaration(untyped);
+		expect(declaration.parameters?.properties?.a?.type).toBe("string");
+		expect(declaration.parameters?.properties?.b?.type).toBe("string");
+		expect(declaration.parameters?.properties?.a?.description).toContain(
+			"First",
+		);
+		expect(declaration.parameters?.required).toEqual(["a", "b"]);
+	});
+
+	it("ignores empty parameter list produced by whitespace-only match groups", () => {
+		const emptyish = withSource(() => 0, "function emptyish(,) { return 0; }");
+		Object.defineProperty(emptyish, "name", { value: "emptyish" });
+		expect(buildFunctionDeclaration(emptyish).parameters).toEqual({
+			type: Type.OBJECT,
+			properties: {},
+		});
+	});
+});

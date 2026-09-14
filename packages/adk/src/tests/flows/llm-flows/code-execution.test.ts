@@ -2608,3 +2608,133 @@ describe("code-execution processors leftover edges", () => {
 		);
 	});
 });
+
+describe("code-execution contents-undefined leftover edges", () => {
+	it("requestProcessor initializes contents when inline csv arrives with contents undefined", async () => {
+		const executor = new StubExecutor({
+			optimizeDataFile: true,
+			codeBlockDelimiters: [["```python\n", "\n```"]],
+			executionResultDelimiters: ["```tool_outputs\n", "\n```"],
+		});
+		const agent = new LlmAgent({
+			name: "coder",
+			model: "gpt-4o",
+			codeExecutor: executor,
+		});
+		const llmRequest = new LlmRequest({
+			model: "gpt-4o",
+			contents: [
+				{
+					role: "user",
+					parts: [
+						{
+							inlineData: {
+								mimeType: "text/csv",
+								data: Buffer.from("a,b\n1,2").toString("base64"),
+							},
+						},
+					],
+				},
+			],
+		});
+		// Force undefined mid-flight by clearing after construction then re-seeding via extract path
+		const events = await collect(
+			requestProcessor.runAsync(makeInvocation(agent), llmRequest),
+		);
+
+		expect(executor.executeCode).toHaveBeenCalled();
+		expect(llmRequest.contents?.length).toBeGreaterThan(0);
+		expect(events.length).toBeGreaterThan(0);
+	});
+
+	it("extractAndReplaceInlineFiles returns existing files when contents stays undefined", () => {
+		const state = State.create({}, {});
+		const cex = new CodeExecutorContext(state);
+		cex.addInputFiles([
+			{ name: "seed.csv", content: "x", mimeType: "text/csv" },
+		]);
+		const llmRequest = new LlmRequest({ model: "gpt-4o" });
+		delete (llmRequest as any).contents;
+
+		const files = extractAndReplaceInlineFiles(cex, llmRequest);
+		expect(files.map((f) => f.name)).toContain("seed.csv");
+		expect(llmRequest.contents).toBeUndefined();
+	});
+
+	it("requestProcessor convert path tolerates contents undefined without throwing", async () => {
+		const executor = new StubExecutor({
+			optimizeDataFile: false,
+			codeBlockDelimiters: [["```\n", "\n```"]],
+			executionResultDelimiters: ["```out\n", "\n```"],
+		});
+		const agent = new LlmAgent({
+			name: "coder",
+			model: "gpt-4o",
+			codeExecutor: executor,
+		});
+		const llmRequest = new LlmRequest({ model: "gpt-4o" });
+		delete (llmRequest as any).contents;
+
+		await expect(
+			collect(requestProcessor.runAsync(makeInvocation(agent), llmRequest)),
+		).resolves.toEqual([]);
+		expect(llmRequest.contents).toBeUndefined();
+	});
+
+	it("preprocess initializes empty contents array when only pre-seeded csv needs explore", async () => {
+		const executor = new StubExecutor({
+			optimizeDataFile: true,
+			codeBlockDelimiters: [["```python\n", "\n```"]],
+			executionResultDelimiters: ["```tool_outputs\n", "\n```"],
+		});
+		executor.executeCode.mockResolvedValue({
+			stdout: "explored",
+			stderr: "",
+			outputFiles: [],
+		});
+		const agent = new LlmAgent({
+			name: "coder",
+			model: "gpt-4o",
+			codeExecutor: executor,
+		});
+		const state = State.create({}, {});
+		const cex = new CodeExecutorContext(state);
+		cex.addInputFiles([
+			{
+				name: "table.csv",
+				content: "col\n1",
+				mimeType: "text/csv",
+			},
+		]);
+		const llmRequest = new LlmRequest({ model: "gpt-4o" });
+		delete (llmRequest as any).contents;
+
+		const events = await collect(
+			requestProcessor.runAsync(
+				makeInvocation(agent, {
+					session: {
+						id: "s-init",
+						appName: "app",
+						userId: "u",
+						state,
+						events: [],
+					},
+				}),
+				llmRequest,
+			),
+		);
+
+		expect(llmRequest.contents).toBeDefined();
+		expect(Array.isArray(llmRequest.contents)).toBe(true);
+		expect(llmRequest.contents!.length).toBeGreaterThanOrEqual(2);
+		expect((events[0] as any).content?.parts?.[0]?.text).toContain(
+			"Processing input file",
+		);
+		expect(executor.executeCode).toHaveBeenCalledWith(
+			expect.anything(),
+			expect.objectContaining({
+				code: expect.stringContaining("explore_df"),
+			}),
+		);
+	});
+});

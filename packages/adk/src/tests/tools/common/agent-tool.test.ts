@@ -577,9 +577,56 @@ describe("AgentTool", () => {
 		const { context } = makeToolContext(agent);
 
 		await tool.runAsync({ topic: "ignored", input: "chosen" }, context);
-
 		expect(runAsync.mock.calls[0][0].userContent?.parts?.[0]?.text).toBe(
 			"chosen",
 		);
+	});
+});
+
+describe("AgentTool leftover instruction and description edges", () => {
+	it("falls back to tool description when instruction is a function", () => {
+		const agent = makeStubAgent({
+			description: "Agent desc",
+		});
+		(agent as { instruction: unknown }).instruction = () => "dynamic-fn";
+		const tool = new AgentTool({
+			name: "fn_instruction",
+			description: "Tool-level description",
+			agent,
+		});
+		expect(tool.getDeclaration().description).toBe("Tool-level description");
+	});
+
+	it("falls back to tool description when instruction is an object", () => {
+		const agent = makeStubAgent();
+		(agent as { instruction: unknown }).instruction = { kind: "provider" };
+		const tool = new AgentTool({
+			name: "obj_instruction",
+			description: "Object fallback",
+			agent,
+		});
+		expect(tool.getDeclaration().description).toBe("Object fallback");
+	});
+
+	it("uses agent instruction string when present even if tool description differs", () => {
+		const agent = makeStubAgent({
+			instruction: "Agent instruction wins",
+		});
+		const tool = new AgentTool({
+			name: "string_instruction",
+			description: "Tool description unused for declaration",
+			agent,
+		});
+		expect(tool.getDeclaration().description).toBe("Agent instruction wins");
+	});
+
+	it("defaults tool description from agent.description when config omits it", () => {
+		const agent = makeStubAgent({
+			description: "From agent",
+		});
+		(agent as { instruction: unknown }).instruction = async () => "x";
+		const tool = new AgentTool({ name: "no_tool_desc", agent });
+		expect(tool.description).toBe("From agent");
+		expect(tool.getDeclaration().description).toBe("From agent");
 	});
 });

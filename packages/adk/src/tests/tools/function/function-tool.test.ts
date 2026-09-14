@@ -782,3 +782,77 @@ describe("FunctionTool leftover parsing and type edges", () => {
 		).resolves.toEqual({ value: "true", type: "string" });
 	});
 });
+
+describe("FunctionTool leftover toString and default type edges", () => {
+	it("treats toString without parentheses as empty mandatory and param lists", async () => {
+		function opaque() {
+			return { ok: true };
+		}
+		Object.defineProperty(opaque, "toString", {
+			value: () => "function opaque /* intentionally no param list */ { }",
+		});
+
+		const tool = new FunctionTool(opaque, { description: "opaque" });
+		expect((tool as any).mandatoryArgs).toEqual([]);
+		expect((tool as any).getFunctionParameters()).toEqual([]);
+		await expect(tool.runAsync({} as any, makeContext())).resolves.toEqual({
+			ok: true,
+		});
+	});
+
+	it("defaults getParameterType to string when declaration and parameterTypes are absent", async () => {
+		function echo(value: unknown) {
+			return { value, type: typeof value };
+		}
+		Object.defineProperty(echo, "toString", {
+			value: () =>
+				"function echo(value) { return { value, type: typeof value }; }",
+		});
+
+		const tool = new FunctionTool(echo, { description: "echo" });
+		vi.spyOn(tool, "getDeclaration").mockReturnValue({
+			name: "echo",
+			description: "echo",
+		} as any);
+
+		await expect(
+			tool.runAsync({ value: 42 } as any, makeContext()),
+		).resolves.toEqual({ value: "42", type: "string" });
+	});
+
+	it("defaults getParameterType to string when parameters.properties is missing", async () => {
+		function echo(value: unknown) {
+			return { value, type: typeof value };
+		}
+		Object.defineProperty(echo, "toString", {
+			value: () =>
+				"function echo(value) { return { value, type: typeof value }; }",
+		});
+
+		const tool = new FunctionTool(echo, { description: "echo2" });
+		vi.spyOn(tool, "getDeclaration").mockReturnValue({
+			name: "echo2",
+			description: "echo2",
+			parameters: { type: "OBJECT" },
+		} as any);
+
+		await expect(
+			tool.runAsync({ value: false } as any, makeContext()),
+		).resolves.toEqual({ value: "false", type: "string" });
+	});
+
+	it("keeps null and undefined args without string coercion", async () => {
+		function wrap(value: unknown) {
+			return { value, isNull: value === null, isUndef: value === undefined };
+		}
+		Object.defineProperty(wrap, "toString", {
+			value: () =>
+				"function wrap(value) { return { value, isNull: value === null, isUndef: value === undefined }; }",
+		});
+
+		const tool = new FunctionTool(wrap, { description: "nullish" });
+		await expect(
+			tool.runAsync({ value: null } as any, makeContext()),
+		).resolves.toEqual({ value: null, isNull: true, isUndef: false });
+	});
+});

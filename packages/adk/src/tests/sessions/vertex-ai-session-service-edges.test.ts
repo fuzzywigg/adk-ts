@@ -330,3 +330,85 @@ describe("VertexAiSessionService leftover edges (post #113)", () => {
 		});
 	});
 });
+
+describe("VertexAiSessionService leftover LRO/GET and name edges", () => {
+	beforeEach(() => {
+		vi.spyOn(console, "debug").mockImplementation(() => undefined);
+		vi.spyOn(console, "error").mockImplementation(() => undefined);
+	});
+
+	afterEach(() => {
+		vi.useRealTimers();
+		vi.restoreAllMocks();
+	});
+
+	it("rethrows when LRO is done but the follow-up session GET throws", async () => {
+		const { service, asyncRequest } = createService();
+		asyncRequest
+			.mockResolvedValueOnce({
+				name: "projects/p/locations/l/reasoningEngines/9/sessions/sess-get/operations/op-get",
+			})
+			.mockResolvedValueOnce({ done: true })
+			.mockRejectedValueOnce(new Error("session GET failed"));
+
+		await expect(service.createSession("app", "u")).rejects.toThrow(
+			/session GET failed/,
+		);
+	});
+
+	it("rejects malformed non-numeric appName when agentEngineId is absent", async () => {
+		const { service } = createService({ project: "p", location: "l" } as any);
+		await expect(
+			service.createSession("not/a/valid/engine", "u"),
+		).rejects.toThrow(/App name not\/a\/valid\/engine is not valid/);
+		await expect(service.getSession("also-bad", "u", "s1")).rejects.toThrow(
+			/App name also-bad is not valid/,
+		);
+	});
+
+	it("fromApiEvent uses the whole name when it has no slash segments", () => {
+		const { service } = createService();
+		const event = (service as any).fromApiEvent({
+			name: "bare-event-id",
+			invocationId: "inv",
+			author: "agent",
+			timestamp: "2024-01-01T00:00:00.000Z",
+			content: { parts: [{ text: "hi" }] },
+		});
+		expect(event.id).toBe("bare-event-id");
+		expect(event.content?.parts?.[0]?.text).toBe("hi");
+	});
+
+	it("getSession derives id from a session name without slash path segments", async () => {
+		const { service, asyncRequest } = createService();
+		asyncRequest
+			.mockResolvedValueOnce({
+				name: "plain-session-id",
+				updateTime: "2024-01-01T00:00:00.000Z",
+				sessionState: { k: 1 },
+			})
+			.mockResolvedValueOnce({ httpHeaders: {} });
+
+		const session = await service.getSession("app", "u", "plain-session-id");
+		expect(session?.id).toBe("plain-session-id");
+		expect(session?.state).toEqual({ k: 1 });
+	});
+
+	it("createSession extracts session id even when operation name is short", async () => {
+		const { service, asyncRequest } = createService();
+		asyncRequest
+			.mockResolvedValueOnce({
+				name: "sessX/operations/opY",
+			})
+			.mockResolvedValueOnce({ done: true })
+			.mockResolvedValueOnce({
+				name: "projects/p/locations/l/reasoningEngines/9/sessions/sessX",
+				updateTime: "2024-01-01T00:00:00.000Z",
+				sessionState: {},
+			});
+
+		const session = await service.createSession("app", "u");
+		expect(session.id).toBe("sessX");
+		expect(asyncRequest.mock.calls[2][0].path).toContain("/sessions/sessX");
+	});
+});

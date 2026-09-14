@@ -1048,3 +1048,60 @@ describe("BaseTool leftover processLlmRequest and safeExecute edges", () => {
 		error.mockRestore();
 	});
 });
+
+describe("BaseTool leftover declaration and validate edges", () => {
+	it("validateArguments returns true when parameters omit the type object wrapper details", () => {
+		class LooseTool extends BaseTool {
+			getDeclaration() {
+				return {
+					name: this.name,
+					description: this.description,
+					parameters: {
+						type: Type.OBJECT,
+						properties: {
+							q: { type: Type.STRING },
+						},
+					},
+				};
+			}
+			async runAsync() {
+				return {};
+			}
+		}
+		const tool = new LooseTool({ name: "loose", description: "loose" });
+		expect(tool.validateArguments({ q: "ok" })).toBe(true);
+		expect(tool.validateArguments({})).toBe(true);
+	});
+
+	it("processLlmRequest skips tools whose declaration is null", async () => {
+		class NullTool extends BaseTool {
+			getDeclaration() {
+				return null;
+			}
+			async runAsync() {
+				return {};
+			}
+		}
+		const tool = new NullTool({
+			name: "nullish",
+			description: "Null declaration tool",
+		});
+		const request = new LlmRequest();
+		await tool.processLlmRequest(makeContext(), request);
+		expect(request.config?.tools).toBeUndefined();
+	});
+
+	it("safeExecute returns structured error when runAsync throws a non-Error", async () => {
+		const tool = new StubTool(
+			{ name: "throw_string", description: "throws string" },
+			async () => {
+				throw "string-boom";
+			},
+		);
+		const error = vi.spyOn(console, "error").mockImplementation(() => {});
+		const result = await tool.safeExecute({ query: "x" }, makeContext());
+		expect(result.error).toBe("Execution failed");
+		expect(String(result.message)).toContain("string-boom");
+		error.mockRestore();
+	});
+});

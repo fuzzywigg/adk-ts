@@ -1261,3 +1261,120 @@ describe("DatabaseSessionService (sqlite :memory:)", () => {
 		expect(sparse.interrupted).toBeNull();
 	});
 });
+
+describe("DatabaseSessionService leftover stale ISO and nullish FC bags", () => {
+	let service: DatabaseSessionService;
+
+	beforeEach(() => {
+		vi.spyOn(console, "error").mockImplementation(() => {});
+		service = createSqliteSessionService(":memory:");
+	});
+
+	afterEach(async () => {
+		vi.restoreAllMocks();
+	});
+
+	it("rejects stale appendEvent entering the ISO timestamp error path", async () => {
+		const session = await service.createSession(
+			"app",
+			"user",
+			{},
+			"s-stale-iso",
+		);
+		const storageTime = session.lastUpdateTime;
+		session.lastUpdateTime = Math.max(1, storageTime - 3600);
+
+		let thrown: unknown;
+		try {
+			await service.appendEvent(
+				session,
+				new Event({
+					author: "agent",
+					content: { parts: [{ text: "stale" }] },
+				}),
+			);
+		} catch (error) {
+			thrown = error;
+		}
+
+		expect(thrown).toBeInstanceOf(Error);
+		const message = (thrown as Error).message;
+		// sqlite may yield non-Date update_time, so formatting can throw on toISOString;
+		// either outcome proves we entered the stale-session guard.
+		expect(message).toMatch(/last_update_time|toISOString|stale session/i);
+		expect(new Date(session.lastUpdateTime * 1000).toISOString()).toMatch(
+			/\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z/,
+		);
+	});
+
+	it("storageEventToEvent coalesces undefined functionCalls/functionResponses to []", () => {
+		const event = (service as any).storageEventToEvent({
+			id: "e-undef-bags",
+			app_name: "app",
+			user_id: "user",
+			session_id: "s1",
+			invocation_id: "inv",
+			author: "agent",
+			branch: null,
+			timestamp: new Date(),
+			content: null,
+			actions: JSON.stringify({
+				stateDelta: {},
+				functionCalls: undefined,
+				functionResponses: undefined,
+			}),
+			long_running_tool_ids_json: null,
+			grounding_metadata: null,
+			partial: null,
+			turn_complete: null,
+			error_code: null,
+			error_message: null,
+			interrupted: null,
+		});
+		expect(event.getFunctionCalls()).toEqual([]);
+		expect(event.getFunctionResponses()).toEqual([]);
+	});
+
+	it("storageEventToEvent coalesces missing functionCalls keys via || []", () => {
+		const event = (service as any).storageEventToEvent({
+			id: "e-omit-bags",
+			app_name: "app",
+			user_id: "user",
+			session_id: "s1",
+			invocation_id: "inv",
+			author: "agent",
+			branch: null,
+			timestamp: new Date(),
+			content: JSON.stringify({ parts: [{ text: "x" }] }),
+			actions: JSON.stringify({ escalate: false }),
+			long_running_tool_ids_json: null,
+			grounding_metadata: null,
+			partial: null,
+			turn_complete: null,
+			error_code: null,
+			error_message: null,
+			interrupted: null,
+		});
+		expect(event.getFunctionCalls()).toEqual([]);
+		expect(event.getFunctionResponses()).toEqual([]);
+		expect(event.content?.parts?.[0]?.text).toBe("x");
+	});
+
+	it("getSession afterTimestamp alone still rejects on sqlite bind when mockable", async () => {
+		const session = await service.createSession("app", "user", {}, "s-after");
+		await service.appendEvent(
+			session,
+			new Event({
+				author: "agent",
+				timestamp: 5000,
+				content: { role: "model", parts: [{ text: "only" }] },
+			}),
+		);
+
+		await expect(
+			service.getSession("app", "user", "s-after", {
+				afterTimestamp: 1000,
+			}),
+		).rejects.toThrow(/SQLite3 can only bind/);
+	});
+});

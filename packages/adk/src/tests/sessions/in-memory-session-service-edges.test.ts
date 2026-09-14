@@ -186,3 +186,82 @@ describe("InMemorySessionService leftover edges (post #113)", () => {
 		).toBe("only");
 	});
 });
+
+describe("InMemorySessionService leftover numRecentEvents and clone edges", () => {
+	it("numRecentEvents: 0 is falsy and does not slice the event history", async () => {
+		const service = new InMemorySessionService();
+		const session = await service.createSession("app", "user", {}, "s-nre0");
+		for (const text of ["a", "b", "c", "d"]) {
+			await service.appendEvent(session, {
+				author: "user",
+				timestamp: text.charCodeAt(0),
+				content: { parts: [{ text }] },
+			} as any);
+		}
+
+		const fetched = await service.getSession("app", "user", "s-nre0", {
+			numRecentEvents: 0,
+		});
+		expect(fetched?.events.map((e) => e.content?.parts?.[0]?.text)).toEqual([
+			"a",
+			"b",
+			"c",
+			"d",
+		]);
+	});
+
+	it("propagates structuredClone failures from getSession", async () => {
+		const service = new InMemorySessionService();
+		await service.createSession("app", "user", { a: 1 }, "s-clone");
+		const spy = vi
+			.spyOn(globalThis, "structuredClone")
+			.mockImplementationOnce(() => {
+				throw new Error("structuredClone boom");
+			});
+
+		await expect(service.getSession("app", "user", "s-clone")).rejects.toThrow(
+			/structuredClone boom/,
+		);
+		spy.mockRestore();
+	});
+
+	it("propagates structuredClone failures from createSession copy", async () => {
+		const service = new InMemorySessionService();
+		const spy = vi
+			.spyOn(globalThis, "structuredClone")
+			.mockImplementationOnce(() => {
+				throw new Error("clone on create");
+			});
+
+		await expect(
+			service.createSession("app", "user", { x: 1 }, "s-fail"),
+		).rejects.toThrow(/clone on create/);
+		spy.mockRestore();
+		// session is inserted before the return clone; getSession may still resolve
+		const leftover = await service.getSession("app", "user", "s-fail");
+		expect(leftover?.id).toBe("s-fail");
+		expect(leftover?.state).toEqual({ x: 1 });
+	});
+
+	it("listSessions clones each session and structuredClone errors abort the list", async () => {
+		const service = new InMemorySessionService();
+		await service.createSession("app", "user", {}, "s1");
+		await service.createSession("app", "user", {}, "s2");
+		const realClone = globalThis.structuredClone.bind(globalThis);
+		let calls = 0;
+		const spy = vi
+			.spyOn(globalThis, "structuredClone")
+			.mockImplementation((v) => {
+				calls++;
+				if (calls === 2) {
+					throw new Error("list clone fail");
+				}
+				return realClone(v);
+			});
+
+		await expect(service.listSessions("app", "user")).rejects.toThrow(
+			/list clone fail/,
+		);
+		spy.mockRestore();
+	});
+});
