@@ -89,4 +89,52 @@ describe("Logger seventh leftover — ADK_FORCE_BOXES === 'true' case asymmetry"
 		expect(out).not.toContain("┌");
 		expect(out).toContain("T: d");
 	});
+
+	it.each([
+		{ label: "PRODUCTION", value: "PRODUCTION" },
+		{ label: "Production", value: "Production" },
+		{ label: "prod", value: "prod" },
+		{ label: "production ", value: "production " },
+		{ label: " production", value: " production" },
+		{ label: "empty", value: "" },
+	] as const)("NODE_ENV=$label is not production (strict ===) so warn boxes without FORCE_BOXES", ({
+		value,
+	}) => {
+		process.env.NODE_ENV = value;
+		delete process.env.ADK_FORCE_BOXES;
+		const logger = new Logger({ name: "prod-case" });
+		logger.warn("boxed-via-case");
+		const rendered = stripAnsi(String(warnSpy.mock.calls[0][0]));
+		expect(rendered).toContain("┌");
+		expect(rendered).toContain("boxed-via-case");
+	});
+
+	it("NODE_ENV exact 'production' stays simple without FORCE_BOXES", () => {
+		process.env.NODE_ENV = "production";
+		delete process.env.ADK_FORCE_BOXES;
+		const logger = new Logger({ name: "prod-exact" });
+		logger.warn("simple-prod");
+		const rendered = stripAnsi(String(warnSpy.mock.calls[0][0]));
+		expect(rendered).not.toContain("┌");
+		expect(rendered).toContain("simple-prod");
+	});
+
+	it.each([
+		{ label: "PRODUCTION", value: "PRODUCTION" },
+		{ label: "prod", value: "prod" },
+	] as const)("formatBox boxes when NODE_ENV=$label even without FORCE_BOXES", ({
+		value,
+	}) => {
+		process.env.NODE_ENV = value;
+		delete process.env.ADK_FORCE_BOXES;
+		const logger = new Logger({ name: "box-prod-case" });
+		const out = stripAnsi(
+			logger.formatBox({
+				title: "T",
+				description: "d",
+			}),
+		);
+		expect(out).toContain("┌");
+		expect(out).not.toContain("T: d");
+	});
 });

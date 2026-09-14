@@ -216,6 +216,31 @@ describe("telemetry leftover contents || [] edges", () => {
 		expect(request.contents).toEqual([]);
 	});
 
+	it.each([
+		{ label: "empty string", contents: "" },
+		{ label: "0", contents: 0 },
+		{ label: "false", contents: false },
+	])("traceLlmCall coalesces falsy contents ($label) via || []", async ({
+		contents,
+	}) => {
+		const { setAttributes } = await withActiveSpan();
+		const service = new TelemetryService();
+		service.traceLlmCall(
+			invocation,
+			"evt-falsy-contents",
+			{
+				model: "m",
+				config: {},
+				contents,
+			} as LlmRequest,
+			response,
+		);
+		const request = JSON.parse(
+			setAttributes.mock.calls[0][0]["adk.llm_request"],
+		);
+		expect(request.contents).toEqual([]);
+	});
+
 	it("contents with missing parts become empty parts arrays", async () => {
 		const { setAttributes } = await withActiveSpan();
 		const service = new TelemetryService();

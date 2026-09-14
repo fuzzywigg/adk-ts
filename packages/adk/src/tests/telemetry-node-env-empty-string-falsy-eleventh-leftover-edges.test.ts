@@ -127,4 +127,63 @@ describe("telemetry NODE_ENV empty-string falsy eleventh leftover", () => {
 			else process.env.NODE_ENV = prev;
 		}
 	});
+
+	it.each([
+		{ label: "single space", value: " " },
+		{ label: "tabs", value: "\t" },
+		{ label: "zero string", value: "0" },
+		{ label: "false string", value: "false" },
+	])("traceToolCall keeps deployment env when NODE_ENV is truthy $label", async ({
+		value,
+	}) => {
+		const { setAttributes } = await withActiveSpan();
+		const prev = process.env.NODE_ENV;
+		process.env.NODE_ENV = value;
+		try {
+			const service = new TelemetryService();
+			service.traceToolCall(
+				tool,
+				{},
+				new Event({
+					author: "tool",
+					content: {
+						parts: [
+							{ functionResponse: { id: "c1", name: "t", response: {} } },
+						],
+					},
+				}),
+			);
+			expect(
+				setAttributes.mock.calls[0][0]["deployment.environment.name"],
+			).toBe(value);
+		} finally {
+			if (prev === undefined) delete process.env.NODE_ENV;
+			else process.env.NODE_ENV = prev;
+		}
+	});
+
+	it("traceLlmCall keeps whitespace NODE_ENV (truthy && spread, unlike empty string)", async () => {
+		const { setAttributes } = await withActiveSpan();
+		const prev = process.env.NODE_ENV;
+		process.env.NODE_ENV = " ";
+		try {
+			const service = new TelemetryService();
+			service.traceLlmCall(
+				mockInvocation(),
+				"evt-1",
+				{
+					model: "m",
+					config: {},
+					contents: [],
+				} as LlmRequest,
+				{} as LlmResponse,
+			);
+			expect(
+				setAttributes.mock.calls[0][0]["deployment.environment.name"],
+			).toBe(" ");
+		} finally {
+			if (prev === undefined) delete process.env.NODE_ENV;
+			else process.env.NODE_ENV = prev;
+		}
+	});
 });

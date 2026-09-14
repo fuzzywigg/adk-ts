@@ -72,4 +72,16 @@ describe("telemetry completion content falsy coalesce leftover edges", () => {
 		);
 		expect(JSON.parse(completion![1]["gen_ai.completion"])).toEqual({});
 	});
+
+	it("whitespace-only string content is truthy and kept (unlike empty string || '')", async () => {
+		const { addEvent } = await withActiveSpan();
+		const service = new TelemetryService();
+		service.traceLlmCall(invocation, "evt", request, {
+			content: " " as any,
+		} as LlmResponse);
+		const completion = addEvent.mock.calls.find(
+			(c) => c[0] === "gen_ai.content.completion",
+		);
+		expect(JSON.parse(completion![1]["gen_ai.completion"])).toBe(" ");
+	});
 });

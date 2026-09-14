@@ -130,4 +130,19 @@ describe("Logger seventh leftover — warnStructured suggestion falsy + extractM
 		expect(rendered).toContain("a=1");
 		expect(rendered).not.toContain("Suggestion:");
 	});
+
+	it.each([
+		{ label: "empty object", context: {} },
+		{ label: "null", context: null },
+		{ label: "0", context: 0 },
+		{ label: "false", context: false },
+	] as const)("log meta context=$label omits Context line (keys length / falsy)", ({
+		context,
+	}) => {
+		const logger = new Logger({ name: "meta-ctx" });
+		logger.warn("w", { suggestion: "keep", context: context as any });
+		const rendered = stripAnsi(String(warnSpy.mock.calls[0][0]));
+		expect(rendered).toContain("Suggestion: keep");
+		expect(rendered).not.toContain("Context:");
+	});
 });

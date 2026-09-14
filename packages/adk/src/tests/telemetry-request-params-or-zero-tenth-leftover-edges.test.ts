@@ -53,6 +53,15 @@ describe("telemetry request-params or-zero tenth leftover edges", () => {
 			config: { maxOutputTokens: 128, temperature: 0.5, topP: 0.9 },
 			expected: { max: 128, temp: 0.5, topP: 0.9 },
 		},
+		{
+			label: "whitespace strings are truthy (no || 0)",
+			config: {
+				maxOutputTokens: " ",
+				temperature: "0",
+				topP: "false",
+			},
+			expected: { max: " ", temp: "0", topP: "false" },
+		},
 	])("traceLlmCall request params ($label)", async ({ config, expected }) => {
 		const { setAttributes } = await withActiveSpan();
 		const service = new TelemetryService();

@@ -45,4 +45,23 @@ describe("telemetry response_schema key case eleventh leftover", () => {
 		expect(built.config.responseSchema).toEqual({ type: "number" });
 		expect(built.config.topP).toBe(0.9);
 	});
+
+	it.each([
+		"Functions",
+		"FUNCTIONS",
+		"functions ",
+		" functions",
+	])("near-miss functions key %j is stored raw (only exact functions is mapped)", (key) => {
+		const raw = [{ name: "n", handler: () => 1 }];
+		const result = exclude({
+			[key]: raw,
+			functions: [{ name: "mapped", handler: () => 2 }],
+		});
+		expect(result[key]).toBe(raw);
+		expect(result[key][0]).toHaveProperty("handler");
+		expect(result.functions).toEqual([
+			{ name: "mapped", description: undefined, parameters: undefined },
+		]);
+		expect(result.functions[0]).not.toHaveProperty("handler");
+	});
 });
