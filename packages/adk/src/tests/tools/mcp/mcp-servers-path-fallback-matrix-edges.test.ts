@@ -42,13 +42,14 @@ describe("createMcpConfig PATH fallback matrix", () => {
 		expect(env.PATH).toBe("");
 	});
 
-	it("preserves explicit PATH override including empty string", () => {
+	it("preserves non-empty PATH override; empty PATH is falsy and reinjected", () => {
 		process.env.PATH = "/should-not-win";
 		expect(
 			stdioEnv(getConfig(McpDiscord({ env: { PATH: "/explicit" } }))).PATH,
 		).toBe("/explicit");
+		// createMcpConfig uses `if (!env.PATH)` so "" is treated as missing
 		expect(stdioEnv(getConfig(McpDiscord({ env: { PATH: "" } }))).PATH).toBe(
-			"",
+			"/should-not-win",
 		);
 	});
 
