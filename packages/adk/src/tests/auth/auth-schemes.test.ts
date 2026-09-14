@@ -114,6 +114,43 @@ describe("auth schemes", () => {
 		});
 		expect(scheme.description).toBe("OIDC");
 	});
+
+	it("exposes AuthSchemeType string values exhaustively", () => {
+		expect(AuthSchemeType.APIKEY).toBe("apiKey");
+		expect(AuthSchemeType.HTTP).toBe("http");
+		expect(AuthSchemeType.OAUTH2).toBe("oauth2");
+		expect(AuthSchemeType.OPENID_CONNECT).toBe("openIdConnect");
+	});
+
+	it("builds HTTP basic schemes with optional description", () => {
+		const basic = new HttpScheme({
+			scheme: "basic",
+			description: "Basic auth",
+		});
+		expect(basic.scheme).toBe("basic");
+		expect(basic.description).toBe("Basic auth");
+		expect(basic.type).toBe(AuthSchemeType.HTTP);
+	});
+
+	it("builds OAuth2 schemes with empty flows and authorizationCode refreshUrl", () => {
+		const empty = new OAuth2Scheme({ flows: {} });
+		expect(empty.flows).toEqual({});
+		expect(empty.type).toBe(AuthSchemeType.OAUTH2);
+
+		const withRefresh = new OAuth2Scheme({
+			flows: {
+				authorizationCode: {
+					authorizationUrl: "https://example.com/auth",
+					tokenUrl: "https://example.com/token",
+					refreshUrl: "https://example.com/refresh",
+					scopes: { read: "Read" },
+				},
+			},
+		});
+		expect(withRefresh.flows.authorizationCode?.refreshUrl).toBe(
+			"https://example.com/refresh",
+		);
+	});
 });
 
 describe("AuthConfig", () => {

@@ -141,4 +141,78 @@ describe("createAuthToolArguments / isEnhancedAuthConfig", () => {
 		expect(enhanced.rawAuthCredential?.type).toBeUndefined();
 		expect(AuthCredentialType.API_KEY).toBe("api_key");
 	});
+
+	it("stores exchangedAuthCredential and context on EnhancedAuthConfig", () => {
+		const raw = new ApiKeyCredential("raw-secret");
+		const exchanged = new ApiKeyCredential("exchanged-secret");
+		const context = { tenant: "acme" };
+		const config = new EnhancedAuthConfig({
+			authScheme: new ApiKeyScheme({ in: "header", name: "x-api-key" }),
+			rawAuthCredential: raw,
+			exchangedAuthCredential: exchanged,
+			context,
+			credentialKey: "explicit",
+		});
+
+		expect(config.rawAuthCredential).toBe(raw);
+		expect(config.exchangedAuthCredential).toBe(exchanged);
+		expect(config.context).toBe(context);
+		expect(config.credentialKey).toBe("explicit");
+	});
+
+	it("processAuthRequest auto-generates credentialKey for Enhanced without explicit key", async () => {
+		const authConfig = new EnhancedAuthConfig({
+			authScheme: new ApiKeyScheme({ in: "header", name: "x-api-key" }),
+			rawAuthCredential: new ApiKeyCredential("secret"),
+		});
+		const result = await AuthTool.processAuthRequest({
+			function_call_id: "fc-auto",
+			auth_config: authConfig,
+		});
+		expect(result.status).toBe("auth_request_processed");
+		expect(result.credentialKey).toMatch(/^adk_apiKey_api_key_\d+$/);
+		expect(result.credentialKey).toBe(authConfig.credentialKey);
+	});
+
+	it("validateAuthArguments rejects non-object auth_config and non-object args", () => {
+		expect(
+			AuthTool.validateAuthArguments({
+				function_call_id: "fc-1",
+				auth_config: "x",
+			}),
+		).toBe(false);
+		expect(
+			AuthTool.validateAuthArguments({
+				function_call_id: "fc-1",
+				auth_config: 42,
+			}),
+		).toBe(false);
+		expect(AuthTool.validateAuthArguments([])).toBe(false);
+	});
+
+	it("validateAuthArguments accepts empty-string function_call_id", () => {
+		expect(
+			AuthTool.validateAuthArguments({
+				function_call_id: "",
+				auth_config: { authScheme: { type: "http" } },
+			}),
+		).toBe(true);
+	});
+
+	it("createAuthToolArguments accepts EnhancedAuthConfig by reference", () => {
+		const enhanced = new EnhancedAuthConfig({
+			authScheme: new HttpScheme({ scheme: "bearer" }),
+			credentialKey: "k",
+		});
+		const args = createAuthToolArguments("fc-enhanced", enhanced);
+		expect(args.function_call_id).toBe("fc-enhanced");
+		expect(args.auth_config).toBe(enhanced);
+	});
+
+	it("generateCredentialKey uses scheme type and none without raw credential", () => {
+		const config = new EnhancedAuthConfig({
+			authScheme: new HttpScheme({ scheme: "bearer" }),
+		});
+		expect(config.credentialKey).toMatch(/^adk_http_none_\d+$/);
+	});
 });

@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { AuthConfig } from "../../auth/auth-config";
 import {
 	ApiKeyCredential,
@@ -143,5 +143,100 @@ describe("auth credentials", () => {
 		const credential = new BearerTokenCredential("tok");
 		expect(credential.canRefresh()).toBe(false);
 		expect(credential.type).toBe(AuthCredentialType.BEARER);
+	});
+
+	it("exposes AuthCredentialType enum string values including CUSTOM", () => {
+		expect(AuthCredentialType.API_KEY).toBe("api_key");
+		expect(AuthCredentialType.BASIC).toBe("basic");
+		expect(AuthCredentialType.BEARER).toBe("bearer");
+		expect(AuthCredentialType.OAUTH2).toBe("oauth2");
+		expect(AuthCredentialType.CUSTOM).toBe("custom");
+	});
+
+	it("tags basic and oauth credentials with their AuthCredentialType", () => {
+		expect(new BasicAuthCredential("u", "p").type).toBe(
+			AuthCredentialType.BASIC,
+		);
+		expect(new OAuth2Credential({ accessToken: "a" }).type).toBe(
+			AuthCredentialType.OAUTH2,
+		);
+	});
+
+	it("requires both refreshToken and refreshFunction for canRefresh", () => {
+		const tokenOnly = new OAuth2Credential({
+			accessToken: "a",
+			refreshToken: "r",
+		});
+		expect(tokenOnly.canRefresh()).toBe(false);
+
+		const fnOnly = new OAuth2Credential({
+			accessToken: "a",
+			refreshFunction: async () => ({ accessToken: "n" }),
+		});
+		expect(fnOnly.canRefresh()).toBe(false);
+	});
+
+	it("treats comfortably-future expiresIn as not expired", () => {
+		const credential = new OAuth2Credential({
+			accessToken: "a",
+			refreshToken: "r",
+			expiresIn: 120,
+			refreshFunction: async () => ({ accessToken: "n" }),
+		});
+		expect(credential.isExpired()).toBe(false);
+	});
+
+	it("leaves expiresAt unchanged when refresh omits expiresIn", async () => {
+		const credential = new OAuth2Credential({
+			accessToken: "a",
+			refreshToken: "r",
+			expiresIn: 1,
+			refreshFunction: async () => ({ accessToken: "rotated" }),
+		});
+		expect(credential.isExpired()).toBe(true);
+		await credential.refresh();
+		expect(credential.getToken()).toBe("rotated");
+		expect(credential.isExpired()).toBe(true);
+	});
+
+	it("invokes refreshFunction with the current refreshToken", async () => {
+		const refreshFunction = vi.fn(async (refreshToken: string) => ({
+			accessToken: `next-for-${refreshToken}`,
+			expiresIn: 3600,
+		}));
+		const credential = new OAuth2Credential({
+			accessToken: "a",
+			refreshToken: "rt-42",
+			refreshFunction,
+		});
+		await credential.refresh();
+		expect(refreshFunction).toHaveBeenCalledWith("rt-42");
+		expect(credential.getToken()).toBe("next-for-rt-42");
+		expect(credential.isExpired()).toBe(false);
+	});
+
+	it("encodes empty password and unicode usernames for basic auth", () => {
+		const emptyPass = new BasicAuthCredential("user", "");
+		expect(emptyPass.getToken()).toBe(Buffer.from("user:").toString("base64"));
+		expect(emptyPass.getHeaders()).toEqual({
+			Authorization: `Basic ${Buffer.from("user:").toString("base64")}`,
+		});
+
+		const unicode = new BasicAuthCredential("üser", "päss");
+		const expected = Buffer.from("üser:päss").toString("base64");
+		expect(unicode.getToken()).toBe(expected);
+		expect(unicode.getHeaders().Authorization).toBe(`Basic ${expected}`);
+	});
+
+	it("reports canRefresh false on unsupported base subclass", () => {
+		class Unsupported extends AuthCredential {
+			getToken() {
+				return "x";
+			}
+			getHeaders() {
+				return {};
+			}
+		}
+		expect(new Unsupported(AuthCredentialType.CUSTOM).canRefresh()).toBe(false);
 	});
 });

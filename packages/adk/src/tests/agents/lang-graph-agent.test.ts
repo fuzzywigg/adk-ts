@@ -26,7 +26,7 @@ class MockAgent extends BaseAgent {
 	}
 
 	async *runAsync(
-		ctx: InvocationContext,
+		_ctx: InvocationContext,
 	): AsyncGenerator<Event, void, unknown> {
 		this.executionCount++;
 
@@ -286,6 +286,199 @@ describe("LangGraphAgent", () => {
 			);
 		});
 
+		it("should fan out when multiple target conditions are true", async () => {
+			const conditionTrueA = vi.fn().mockResolvedValue(true);
+			const conditionTrueB = vi.fn().mockResolvedValue(true);
+
+			const branchNodeA = { ...nodeA, targets: ["BranchB", "BranchC"] };
+			const branchNodeB = {
+				name: "BranchB",
+				agent: agentB,
+				targets: [],
+				condition: conditionTrueA,
+			};
+			const branchNodeC = {
+				name: "BranchC",
+				agent: agentC,
+				targets: [],
+				condition: conditionTrueB,
+			};
+
+			const graph = new LangGraphAgent({
+				name: "FanOutGraph",
+				description: "Fan-out graph test",
+				nodes: [branchNodeA, branchNodeB, branchNodeC],
+				rootNode: "NodeA",
+			});
+
+			const events = await executeGraphAndGetEvents(graph, mockContext);
+
+			expect(agentA.executionCount).toBe(1);
+			expect(agentB.executionCount).toBe(1);
+			expect(agentC.executionCount).toBe(1);
+			expect(conditionTrueA).toHaveBeenCalledOnce();
+			expect(conditionTrueB).toHaveBeenCalledOnce();
+
+			const completionEvent = events[events.length - 1];
+			expect(completionEvent.turnComplete).toBe(true);
+			expect(completionEvent.content?.parts[0].text).toContain(
+				"NodeA → BranchB → BranchC",
+			);
+		});
+
+		it("should not enqueue next nodes when a node yields zero events", async () => {
+			class SilentAgent extends BaseAgent {
+				constructor(name: string) {
+					super({ name, description: `Silent ${name}` });
+				}
+				async *runAsync(
+					_ctx: InvocationContext,
+				): AsyncGenerator<Event, void, unknown> {
+					yield* [] as Event[];
+				}
+			}
+
+			const silent = new SilentAgent("SilentRoot");
+			const next = new MockAgent("NeverRuns");
+			const graph = new LangGraphAgent({
+				name: "SilentGraph",
+				description: "Empty events stop fan-out",
+				nodes: [
+					{ name: "SilentRoot", agent: silent, targets: ["NeverRuns"] },
+					{ name: "NeverRuns", agent: next, targets: [] },
+				],
+				rootNode: "SilentRoot",
+			});
+
+			const events = await executeGraphAndGetEvents(graph, mockContext);
+
+			expect(next.executionCount).toBe(0);
+			expect(events).toHaveLength(1);
+			expect(events[0].turnComplete).toBe(true);
+			expect(events[0].content?.parts[0].text).toContain(
+				"Executed nodes: SilentRoot",
+			);
+			expect(graph.getExecutionResults()[0].events).toEqual([]);
+		});
+
+		it("should stringify non-Error throws in node execution", async () => {
+			class ThrowingAgent extends BaseAgent {
+				constructor(name: string) {
+					super({ name, description: `Throwing ${name}` });
+				}
+				async *runAsync(
+					_ctx: InvocationContext,
+				): AsyncGenerator<Event, void, unknown> {
+					yield* [] as Event[];
+					throw "plain-fail";
+				}
+			}
+
+			const throwing = new ThrowingAgent("ThrowsString");
+			const later = new MockAgent("Later");
+			const graph = new LangGraphAgent({
+				name: "NonErrorGraph",
+				description: "Non-Error throw test",
+				nodes: [
+					{ name: "ThrowsString", agent: throwing, targets: ["Later"] },
+					{ name: "Later", agent: later, targets: [] },
+				],
+				rootNode: "ThrowsString",
+			});
+
+			const events = await executeGraphAndGetEvents(graph, mockContext);
+
+			expect(later.executionCount).toBe(0);
+			expect(events).toHaveLength(1);
+			expect(events[0].errorCode).toBe("NODE_EXECUTION_ERROR");
+			expect(events[0].errorMessage).toBe("plain-fail");
+			expect(events[0].content?.parts[0].text).toContain(
+				'Error in node "ThrowsString": plain-fail',
+			);
+		});
+
+		it("should honor synchronous boolean conditions", async () => {
+			const syncTrue = vi.fn(() => true);
+			const syncFalse = vi.fn(() => false);
+
+			const branchNodeA = { ...nodeA, targets: ["BranchB", "BranchC"] };
+			const branchNodeB = {
+				name: "BranchB",
+				agent: agentB,
+				targets: [],
+				condition: syncTrue,
+			};
+			const branchNodeC = {
+				name: "BranchC",
+				agent: agentC,
+				targets: [],
+				condition: syncFalse,
+			};
+
+			const graph = new LangGraphAgent({
+				name: "SyncCondGraph",
+				description: "Sync condition graph",
+				nodes: [branchNodeA, branchNodeB, branchNodeC],
+				rootNode: "NodeA",
+			});
+
+			const events = await executeGraphAndGetEvents(graph, mockContext);
+
+			expect(agentB.executionCount).toBe(1);
+			expect(agentC.executionCount).toBe(0);
+			expect(syncTrue).toHaveBeenCalledOnce();
+			expect(syncFalse).toHaveBeenCalledOnce();
+			expect(events[events.length - 1].content?.parts[0].text).toContain(
+				"NodeA → BranchB",
+			);
+			expect(events[events.length - 1].content?.parts[0].text).not.toContain(
+				"BranchC",
+			);
+		});
+
+		it("should skip missing target nodes at runtime and continue", async () => {
+			const source = {
+				name: "Source",
+				agent: agentA,
+				targets: ["Exists", "Gone"],
+			};
+			const exists = { name: "Exists", agent: agentB, targets: [] };
+			const gone = { name: "Gone", agent: agentC, targets: [] };
+			const graph = new LangGraphAgent({
+				name: "MissingTargetGraph",
+				description: "Missing target skip",
+				nodes: [source, exists, gone],
+				rootNode: "Source",
+			});
+
+			(graph as any).nodes.delete("Gone");
+
+			const lastEvent = new Event({ author: "test" });
+			const nextNodes = await graph["getNextNodes"](
+				source,
+				lastEvent,
+				mockContext,
+			);
+
+			expect(nextNodes.map((n) => n.name)).toEqual(["Exists"]);
+		});
+
+		it("should set turnComplete on successful linear completion", async () => {
+			const graph = new LangGraphAgent({
+				name: "CompleteGraph",
+				description: "turnComplete test",
+				nodes: [nodeA, nodeB, nodeC],
+				rootNode: "NodeA",
+			});
+
+			const events = await executeGraphAndGetEvents(graph, mockContext);
+			const completionEvent = events[events.length - 1];
+			expect(completionEvent.turnComplete).toBe(true);
+			expect(completionEvent.content?.parts[0].text).toContain(
+				"Graph execution complete",
+			);
+		});
+
 		it("should yield an event if no nodes are defined", async () => {
 			const dummyNode = {
 				name: "dummy",
@@ -463,10 +656,17 @@ describe("LangGraphAgent", () => {
 			});
 
 			const runAsyncImplSpy = vi.spyOn(graph as any, "runAsyncImpl");
-			await executeGraphAndGetEvents(graph, mockContext);
+			const events = [];
+			for await (const event of graph["runLiveImpl"](mockContext)) {
+				events.push(event);
+			}
 
 			expect(runAsyncImplSpy).toHaveBeenCalledOnce();
 			expect(runAsyncImplSpy).toHaveBeenCalledWith(mockContext);
+			expect(events[events.length - 1].turnComplete).toBe(true);
+			expect(agentA.executionCount).toBe(1);
+			expect(agentB.executionCount).toBe(1);
+			expect(agentC.executionCount).toBe(1);
 		});
 	});
 });

@@ -186,4 +186,95 @@ describe("VertexAiEvalFacade", () => {
 		expect(result.perInvocationResults).toHaveLength(2);
 		expect(result.overallScore).toBeCloseTo((first + second) / 2);
 	});
+
+	it("marks NOT_EVALUATED when summaryMetrics are missing", async () => {
+		vi.spyOn(VertexAiEvalFacade as any, "_performEval").mockResolvedValue({});
+		const facade = new VertexAiEvalFacade({
+			threshold: 0.5,
+			metricName: PrebuiltMetrics.SAFETY_V1,
+		});
+		const result = await facade.evaluateInvocations(
+			[invocation({ response: "a" })],
+			[invocation({ response: "b" })],
+		);
+		expect(result.perInvocationResults[0].score).toBeUndefined();
+		expect(result.perInvocationResults[0].evalStatus).toBe(
+			EvalStatus.NOT_EVALUATED,
+		);
+		expect(result.overallEvalStatus).toBe(EvalStatus.NOT_EVALUATED);
+	});
+
+	it("marks NOT_EVALUATED when meanScore is NaN or non-number", async () => {
+		vi.spyOn(VertexAiEvalFacade as any, "_performEval")
+			.mockResolvedValueOnce({
+				summaryMetrics: [{ meanScore: Number.NaN }],
+			})
+			.mockResolvedValueOnce({
+				summaryMetrics: [{ meanScore: "0.9" }],
+			});
+
+		const facade = new VertexAiEvalFacade({
+			threshold: 0.5,
+			metricName: PrebuiltMetrics.SAFETY_V1,
+		});
+
+		const nanResult = await facade.evaluateInvocations(
+			[invocation({ response: "a" })],
+			[invocation({ response: "b" })],
+		);
+		expect(nanResult.perInvocationResults[0].evalStatus).toBe(
+			EvalStatus.NOT_EVALUATED,
+		);
+
+		const stringResult = await facade.evaluateInvocations(
+			[invocation({ response: "a" })],
+			[invocation({ response: "b" })],
+		);
+		expect(stringResult.perInvocationResults[0].evalStatus).toBe(
+			EvalStatus.NOT_EVALUATED,
+		);
+	});
+
+	it("averages only numeric scores when mixing scored and NOT_EVALUATED", async () => {
+		vi.spyOn(VertexAiEvalFacade as any, "_performEval")
+			.mockResolvedValueOnce({
+				summaryMetrics: [{ meanScore: 0.8 }],
+			})
+			.mockRejectedValueOnce(new Error("second boom"));
+
+		const facade = new VertexAiEvalFacade({
+			threshold: 0.5,
+			metricName: PrebuiltMetrics.SAFETY_V1,
+		});
+		const result = await facade.evaluateInvocations(
+			[invocation({ response: "a1" }), invocation({ response: "a2" })],
+			[invocation({ response: "e1" }), invocation({ response: "e2" })],
+		);
+
+		expect(result.perInvocationResults).toHaveLength(2);
+		expect(result.perInvocationResults[0].score).toBe(0.8);
+		expect(result.perInvocationResults[0].evalStatus).toBe(EvalStatus.PASSED);
+		expect(result.perInvocationResults[1].evalStatus).toBe(
+			EvalStatus.NOT_EVALUATED,
+		);
+		expect(result.overallScore).toBe(0.8);
+		expect(result.overallEvalStatus).toBe(EvalStatus.PASSED);
+	});
+
+	it("marks FAILED when score equals threshold boundary as PASSED", async () => {
+		vi.spyOn(VertexAiEvalFacade as any, "_performEval").mockResolvedValue({
+			summaryMetrics: [{ meanScore: 0.7 }],
+		});
+		const facade = new VertexAiEvalFacade({
+			threshold: 0.7,
+			metricName: PrebuiltMetrics.SAFETY_V1,
+		});
+		const result = await facade.evaluateInvocations(
+			[invocation({ response: "a" })],
+			[invocation({ response: "b" })],
+		);
+		expect(result.overallScore).toBe(0.7);
+		expect(result.overallEvalStatus).toBe(EvalStatus.PASSED);
+		expect(result.perInvocationResults[0].evalStatus).toBe(EvalStatus.PASSED);
+	});
 });

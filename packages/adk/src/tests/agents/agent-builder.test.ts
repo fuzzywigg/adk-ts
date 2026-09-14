@@ -10,12 +10,29 @@ import { SequentialAgent } from "../../agents/sequential-agent.js";
 import { InMemoryArtifactService } from "../../artifacts/in-memory-artifact-service.js";
 import { BaseCodeExecutor } from "../../code-executors/base-code-executor.js";
 import { Event } from "../../events/event.js";
+import { Logger } from "../../logger/index.js";
 import { InMemoryMemoryService } from "../../memory/in-memory-memory-service.js";
+import { BaseLlm } from "../../models/base-llm.js";
+import type { LlmRequest } from "../../models/llm-request.js";
+import type { LlmResponse } from "../../models/llm-response.js";
 import { BuiltInPlanner } from "../../planners/built-in-planner.js";
 import { BasePlugin } from "../../plugins/base-plugin.js";
 import { Runner } from "../../runners.js";
 import { InMemorySessionService } from "../../sessions/in-memory-session-service.js";
 import { createTool } from "../../tools/base/create-tool.js";
+
+class StubLlm extends BaseLlm {
+	constructor(model = "stub-llm") {
+		super(model);
+	}
+
+	async *generateContentAsync(
+		_llmRequest: LlmRequest,
+		_stream?: boolean,
+	): AsyncGenerator<LlmResponse, void, unknown> {
+		yield { content: { parts: [{ text: "stub" }] } } as LlmResponse;
+	}
+}
 
 class StubCodeExecutor extends BaseCodeExecutor {
 	async executeCode() {
@@ -1060,6 +1077,728 @@ describe("AgentBuilder", () => {
 				})
 				.build();
 			await expect(badRunner.ask("q")).rejects.toThrow(/zod-string-error/);
+		});
+	});
+
+	describe("TOKENMAXX deepen — lock, wiring, LangGraph, ask edges", () => {
+		let warnSpy: ReturnType<typeof vi.spyOn>;
+
+		beforeEach(() => {
+			vi.restoreAllMocks();
+			warnSpy = vi
+				.spyOn(Logger.prototype, "warn")
+				.mockImplementation(() => undefined);
+		});
+
+		it("warnIfLocked logs for definition mutators after withAgent", async () => {
+			const existing = new LlmAgent({
+				name: "locked_warn",
+				model: "gemini-2.5-flash",
+			});
+			const tool = createTool({
+				name: "t",
+				description: "locked tool helper",
+				fn: () => "ok",
+			});
+			const plugin = new StubPlugin();
+			const planner = new BuiltInPlanner({
+				thinkingConfig: { includeThoughts: false },
+			});
+			const codeExecutor = new StubCodeExecutor();
+			const beforeAgent = vi.fn(() => undefined);
+			const afterAgent = vi.fn(() => undefined);
+			const beforeModel = vi.fn(() => undefined);
+			const afterModel = vi.fn(() => undefined);
+			const beforeTool = vi.fn(() => undefined);
+			const afterTool = vi.fn(() => undefined);
+
+			AgentBuilder.withAgent(existing)
+				.withModel("gpt-4o")
+				.withDescription("ignored-desc")
+				.withInstruction("ignored-instr")
+				.withInputSchema(z.object({ a: z.string() }))
+				.withOutputSchema(z.object({ b: z.string() }))
+				.withTools(tool)
+				.withPlanner(planner)
+				.withCodeExecutor(codeExecutor)
+				.withOutputKey("ignored-key")
+				.withSubAgents([])
+				.withBeforeAgentCallback(beforeAgent)
+				.withAfterAgentCallback(afterAgent)
+				.withBeforeModelCallback(beforeModel)
+				.withAfterModelCallback(afterModel)
+				.withBeforeToolCallback(beforeTool)
+				.withAfterToolCallback(afterTool)
+				.withPlugins(plugin);
+
+			const warnedMethods = warnSpy.mock.calls
+				.map((c) => String(c[0]))
+				.filter((msg) => msg.includes("ignored because builder is locked"));
+			expect(warnedMethods.length).toBeGreaterThanOrEqual(15);
+			for (const method of [
+				"withModel",
+				"withDescription",
+				"withInstruction",
+				"withInputSchema",
+				"withOutputSchema",
+				"withTools",
+				"withPlanner",
+				"withCodeExecutor",
+				"withOutputKey",
+				"withSubAgents",
+				"withBeforeAgentCallback",
+				"withAfterAgentCallback",
+				"withBeforeModelCallback",
+				"withAfterModelCallback",
+				"withBeforeToolCallback",
+				"withAfterToolCallback",
+				"withPlugins",
+			]) {
+				expect(warnedMethods.some((m) => m.includes(`${method}()`))).toBe(true);
+			}
+
+			const { agent } = await AgentBuilder.withAgent(existing).build();
+			expect(agent).toBe(existing);
+		});
+
+		it("asSequential and asParallel warn and early-return when locked", async () => {
+			const existing = new LlmAgent({
+				name: "locked_agg",
+				model: "gemini-2.5-flash",
+			});
+			const sub = new LlmAgent({
+				name: "child",
+				model: "gemini-2.5-flash",
+			});
+			const seqBuilder = AgentBuilder.withAgent(existing).asSequential([sub]);
+			expect((seqBuilder as any).agentType).toBe("llm");
+			expect((seqBuilder as any).existingAgent).toBe(existing);
+			expect(warnSpy).toHaveBeenCalledWith(
+				expect.stringContaining("asSequential() ignored"),
+				expect.objectContaining({
+					suggestion: "Call asSequential() before withAgent().",
+				}),
+			);
+
+			warnSpy.mockClear();
+			const parBuilder = AgentBuilder.withAgent(existing).asParallel([sub]);
+			expect((parBuilder as any).agentType).toBe("llm");
+			expect(warnSpy).toHaveBeenCalledWith(
+				expect.stringContaining("asParallel() ignored"),
+				expect.objectContaining({
+					suggestion: "Call asParallel() before withAgent().",
+				}),
+			);
+
+			const { agent } = await seqBuilder.build();
+			expect(agent).toBe(existing);
+		});
+
+		it("asLoop and asLangGraph warn when locked but still mutate agentType", () => {
+			const existing = new LlmAgent({
+				name: "locked_loop_lg",
+				model: "gemini-2.5-flash",
+			});
+			const sub = new LlmAgent({
+				name: "loop_child",
+				model: "gemini-2.5-flash",
+			});
+			const nodes = [{ name: "n1", agent: sub, targets: [] }];
+
+			const loopBuilder = AgentBuilder.withAgent(existing).asLoop([sub], 7);
+			expect(warnSpy).toHaveBeenCalledWith(
+				expect.stringContaining("asLoop() ignored because builder is locked"),
+				expect.any(Object),
+			);
+			expect((loopBuilder as any).agentType).toBe("loop");
+			expect((loopBuilder as any).config.maxIterations).toBe(7);
+
+			warnSpy.mockClear();
+			const lgBuilder = AgentBuilder.withAgent(existing).asLangGraph(
+				nodes,
+				"n1",
+			);
+			expect(warnSpy).toHaveBeenCalledWith(
+				expect.stringContaining(
+					"asLangGraph() ignored because builder is locked",
+				),
+				expect.any(Object),
+			);
+			expect((lgBuilder as any).agentType).toBe("langgraph");
+			expect((lgBuilder as any).config.rootNode).toBe("n1");
+			expect((lgBuilder as any).config.nodes).toEqual(nodes);
+		});
+
+		it("withOutputKey is ignored on sequential aggregators with a warning", async () => {
+			const sub = new LlmAgent({
+				name: "seq_out_child",
+				model: "gemini-2.5-flash",
+			});
+			const { agent } = await AgentBuilder.create("seq_out")
+				.asSequential([sub])
+				.withOutputKey("ignored-seq")
+				.build();
+
+			expect(agent).toBeInstanceOf(SequentialAgent);
+			expect(warnSpy).toHaveBeenCalledWith(
+				expect.stringContaining(
+					"outputKey ignored for sequential/parallel aggregator",
+				),
+				expect.objectContaining({
+					context: expect.objectContaining({
+						attemptedOutputKey: "ignored-seq",
+						agentType: "sequential",
+					}),
+				}),
+			);
+		});
+
+		it("asSequential strips outputKey alone; asParallel strips outputSchema alone", () => {
+			const sub = new LlmAgent({
+				name: "strip_child",
+				model: "gemini-2.5-flash",
+			});
+			const seq = AgentBuilder.create("seq_key_only")
+				.withModel("gemini-2.5-flash")
+				.withOutputKey("only-key");
+			seq.asSequential([sub]);
+			expect((seq as any).config.outputKey).toBeUndefined();
+			expect(warnSpy).toHaveBeenCalledWith(
+				expect.stringContaining(
+					"outputKey ignored for sequential agent aggregator; removed",
+				),
+				expect.objectContaining({
+					context: { previousValue: "only-key" },
+				}),
+			);
+
+			warnSpy.mockClear();
+			const schema = z.object({ v: z.number() });
+			const par = AgentBuilder.create("par_schema_only")
+				.withModel("gemini-2.5-flash")
+				.withOutputSchema(schema);
+			par.asParallel([sub]);
+			expect((par as any).config.outputSchema).toBeUndefined();
+			expect(warnSpy).toHaveBeenCalledWith(
+				expect.stringContaining(
+					"outputSchema cannot be applied to parallel aggregator; removed",
+				),
+				expect.any(Object),
+			);
+		});
+
+		it("withPlugins and withTools accumulate across repeated calls", async () => {
+			const t1 = createTool({
+				name: "t1",
+				description: "first accumulated tool",
+				fn: () => 1,
+			});
+			const t2 = createTool({
+				name: "t2",
+				description: "second accumulated tool",
+				fn: () => 2,
+			});
+			const p1 = new StubPlugin();
+			const p2 = new (class extends BasePlugin {
+				constructor() {
+					super("stub-plugin-2");
+				}
+			})();
+
+			const { agent } = await AgentBuilder.create("accumulate")
+				.withModel("gemini-2.5-flash")
+				.withTools(t1)
+				.withTools(t2)
+				.withPlugins(p1)
+				.withPlugins(p2)
+				.build();
+
+			const llm = agent as LlmAgent;
+			expect(llm.tools.map((t: any) => t.name)).toEqual(["t1", "t2"]);
+			expect(llm.plugins).toEqual([p1, p2]);
+		});
+
+		it("withInputSchema and withOutputSchema are applied on built LlmAgent", async () => {
+			const input = z.object({ q: z.string() });
+			const output = z.object({ a: z.string() });
+			const { agent } = await AgentBuilder.create("schemas_on_agent")
+				.withModel("gemini-2.5-flash")
+				.withInputSchema(input)
+				.withOutputSchema(output)
+				.build();
+
+			const llm = agent as LlmAgent;
+			expect(llm.inputSchema).toBe(input);
+			expect(llm.outputSchema).toBe(output);
+		});
+
+		it("withModel forwards BaseLlm instances unchanged onto LlmAgent", async () => {
+			const stub = new StubLlm("custom-stub");
+			const { agent } = await AgentBuilder.create("base_llm_model")
+				.withModel(stub)
+				.build();
+			expect((agent as LlmAgent).model).toBe(stub);
+		});
+
+		it("withAgent keeps a non-default builder name", async () => {
+			const existing = new LlmAgent({
+				name: "agent_name",
+				model: "gemini-2.5-flash",
+			});
+			const builder = AgentBuilder.create("custom_builder_name").withAgent(
+				existing,
+			);
+			expect((builder as any).config.name).toBe("custom_builder_name");
+			const { agent } = await builder.build();
+			expect(agent).toBe(existing);
+		});
+
+		it("aggregator agents default missing description to empty string", async () => {
+			const { agent: seq } = await AgentBuilder.create("seq_no_desc")
+				.asSequential([
+					new LlmAgent({ name: "seq_child_desc", model: "gemini-2.5-flash" }),
+				])
+				.build();
+			expect(seq.description).toBe("");
+
+			const { agent: par } = await AgentBuilder.create("par_no_desc")
+				.asParallel([
+					new LlmAgent({ name: "par_child_desc", model: "gemini-2.5-flash" }),
+				])
+				.build();
+			expect(par.description).toBe("");
+
+			const { agent: loop } = await AgentBuilder.create("loop_no_desc")
+				.asLoop(
+					[
+						new LlmAgent({
+							name: "loop_child_desc",
+							model: "gemini-2.5-flash",
+						}),
+					],
+					2,
+				)
+				.build();
+			expect(loop.description).toBe("");
+
+			const lgChild = new LlmAgent({
+				name: "lg_child_desc",
+				model: "gemini-2.5-flash",
+			});
+			const { agent: lg } = await AgentBuilder.create("lg_no_desc")
+				.asLangGraph([{ name: "root", agent: lgChild, targets: [] }], "root")
+				.build();
+			expect(lg.description).toBe("");
+		});
+
+		it("asLoop applies custom maxIterations; asLangGraph passes nodes and rootNode", async () => {
+			const child = new LlmAgent({
+				name: "loop_custom",
+				model: "gemini-2.5-flash",
+			});
+			const { agent: loop } = await AgentBuilder.create("loop_custom_iters")
+				.asLoop([child], 9)
+				.build();
+			expect(loop).toBeInstanceOf(LoopAgent);
+			expect((loop as LoopAgent).maxIterations).toBe(9);
+
+			const nodes = [
+				{ name: "start", agent: child, targets: ["end"] },
+				{ name: "end", agent: child, targets: [] },
+			];
+			const { agent: lg } = await AgentBuilder.create("lg_nodes")
+				.asLangGraph(nodes, "start")
+				.build();
+			expect(lg).toBeInstanceOf(LangGraphAgent);
+			expect((lg as LangGraphAgent).getRootNodeName()).toBe("start");
+			expect((lg as LangGraphAgent).getNodes().map((n) => n.name)).toEqual([
+				"start",
+				"end",
+			]);
+		});
+
+		it("createAgent langgraph throws when rootNode is cleared after asLangGraph", async () => {
+			const child = new LlmAgent({
+				name: "lg_missing_root",
+				model: "gemini-2.5-flash",
+			});
+			const builder = AgentBuilder.create("lg_bad_root").asLangGraph(
+				[{ name: "n", agent: child, targets: [] }],
+				"n",
+			);
+			(builder as any).config.rootNode = undefined;
+			await expect(builder.build()).rejects.toThrow(
+				/Nodes and root node required for LangGraph agent/,
+			);
+		});
+
+		it("withSessionService forwards state and sessionId into createSession", async () => {
+			const createSession = vi.spyOn(sessionService, "createSession");
+			const { session } = await AgentBuilder.create("session_opts")
+				.withModel("gemini-2.5-flash")
+				.withSessionService(sessionService, {
+					userId: "u-opts",
+					appName: "a-opts",
+					state: { seeded: true },
+					sessionId: "fixed-session-id",
+				})
+				.build();
+
+			expect(createSession).toHaveBeenCalledWith(
+				"a-opts",
+				"u-opts",
+				{ seeded: true },
+				"fixed-session-id",
+			);
+			expect(session.id).toBe("fixed-session-id");
+			expect(session.state).toEqual({ seeded: true });
+		});
+
+		it("withSession copies state onto sessionOptions", async () => {
+			const existing = await sessionService.createSession(
+				"copy-app",
+				"copy-user",
+				{ fromSession: 42 },
+				"copy-id",
+			);
+			const builder = AgentBuilder.create("copy_state")
+				.withModel("gemini-2.5-flash")
+				.withSessionService(sessionService)
+				.withSession(existing);
+
+			expect((builder as any).sessionOptions).toEqual(
+				expect.objectContaining({
+					userId: "copy-user",
+					appName: "copy-app",
+					sessionId: "copy-id",
+					state: { fromSession: 42 },
+				}),
+			);
+		});
+
+		it("withQuickSession uses InMemorySessionService and generated ids", async () => {
+			const { session, sessionService: svc } = await AgentBuilder.create(
+				"quick_ids",
+			)
+				.withModel("gemini-2.5-flash")
+				.withQuickSession()
+				.build();
+
+			expect(svc).toBeInstanceOf(InMemorySessionService);
+			expect(session.appName).toBe("app-quick_ids");
+			expect(session.userId).toMatch(/^user-quick_ids-/);
+		});
+
+		it("build forwards plugins, compaction, memory, and artifacts to Runner", async () => {
+			const plugin = new StubPlugin();
+			const compaction = {
+				compactionInterval: 3,
+				overlapSize: 1,
+				summarizer: { name: "fake-summarizer" } as any,
+			};
+			let capturedRunner: Runner | undefined;
+			const origRunAsync = Runner.prototype.runAsync;
+			vi.spyOn(Runner.prototype, "runAsync").mockImplementation(function (
+				this: Runner,
+				params: any,
+			) {
+				capturedRunner = this;
+				return origRunAsync.call(this, params);
+			});
+
+			const { runner, agent, session } = await AgentBuilder.create(
+				"wire_runner",
+			)
+				.withModel("gemini-2.5-flash")
+				.withMemory(memoryService)
+				.withArtifactService(artifactService)
+				.withPlugins(plugin)
+				.withEventsCompaction(compaction)
+				.withSessionService(sessionService, {
+					userId: "u",
+					appName: "a",
+				})
+				.build();
+
+			expect((agent as LlmAgent).memoryService).toBe(memoryService);
+			expect((agent as LlmAgent).artifactService).toBe(artifactService);
+			expect((agent as LlmAgent).plugins).toEqual([plugin]);
+			expect((agent as LlmAgent).sessionService).toBe(sessionService);
+
+			for await (const _ of runner.runAsync({
+				userId: session.userId,
+				sessionId: session.id,
+				newMessage: { parts: [{ text: "hi" }] },
+			})) {
+				/* drain */
+			}
+
+			expect(capturedRunner).toBeDefined();
+			expect(capturedRunner!.memoryService).toBe(memoryService);
+			expect(capturedRunner!.artifactService).toBe(artifactService);
+			expect(capturedRunner!.eventsCompactionConfig).toEqual(compaction);
+			expect((capturedRunner as any).pluginManager).toBeDefined();
+		});
+
+		it("withEventsCompaction last write wins on the builder", async () => {
+			const first = { compactionInterval: 2, overlapSize: 0 };
+			const second = {
+				compactionInterval: 11,
+				overlapSize: 4,
+				summarizer: { id: "s2" } as any,
+			};
+			const builder = AgentBuilder.create("compaction_last")
+				.withModel("gemini-2.5-flash")
+				.withEventsCompaction(first)
+				.withEventsCompaction(second);
+
+			expect((builder as any).eventsCompactionConfig).toEqual(second);
+			await builder.build();
+			expect((builder as any).eventsCompactionConfig.summarizer).toEqual({
+				id: "s2",
+			});
+		});
+
+		it("withRunConfig Partial works with no prior RunConfig; RunConfig instance replaces", () => {
+			const builder = AgentBuilder.create("run_partial")
+				.withModel("gemini-2.5-flash")
+				.withRunConfig({ streamingMode: StreamingMode.SSE });
+			expect((builder as any).runConfig).toBeInstanceOf(RunConfig);
+			expect((builder as any).runConfig.streamingMode).toBe(StreamingMode.SSE);
+
+			const replacement = new RunConfig({
+				streamingMode: StreamingMode.BIDI,
+			});
+			builder.withRunConfig(replacement);
+			expect((builder as any).runConfig).toBe(replacement);
+			expect((builder as any).runConfig.streamingMode).toBe(StreamingMode.BIDI);
+		});
+
+		it("runAsync prefers params.runConfig over builder withRunConfig", async () => {
+			const runAsync = vi.fn(async function* () {
+				yield new Event({
+					author: "override",
+					content: { parts: [{ text: "x" }] },
+				});
+			});
+			vi.spyOn(Runner.prototype, "runAsync").mockImplementation(
+				runAsync as any,
+			);
+
+			const { runner, session } = await AgentBuilder.create("override_rc")
+				.withModel("gemini-2.5-flash")
+				.withRunConfig({ streamingMode: StreamingMode.SSE })
+				.withSessionService(sessionService, {
+					userId: "u",
+					appName: "a",
+				})
+				.build();
+
+			const override = new RunConfig({ streamingMode: StreamingMode.BIDI });
+			for await (const _ of runner.runAsync({
+				userId: session.userId,
+				sessionId: session.id,
+				newMessage: { parts: [{ text: "hi" }] },
+				runConfig: override,
+			})) {
+				/* drain */
+			}
+
+			expect(runAsync).toHaveBeenCalledWith(
+				expect.objectContaining({ runConfig: override }),
+			);
+		});
+
+		it("ask returns empty string when events have no text parts", async () => {
+			mockRunnerEvents([
+				new Event({
+					author: "empty_text",
+					content: { parts: [{ inlineData: {} as any }] },
+				}),
+				new Event({ author: "empty_text", content: { parts: [] } }),
+			]);
+
+			const { runner } = await AgentBuilder.create("empty_text")
+				.withModel("gemini-2.5-flash")
+				.withSessionService(sessionService, {
+					userId: "u",
+					appName: "a",
+				})
+				.build();
+
+			await expect(runner.ask("hi")).resolves.toBe("");
+		});
+
+		it("AgentBuilder.ask accepts FullMessage", async () => {
+			mockRunnerEvents([
+				new Event({
+					author: "full_msg_builder",
+					content: { parts: [{ text: "full-ok" }] },
+				}),
+			]);
+
+			const text = await AgentBuilder.create("full_msg_builder")
+				.withModel("gemini-2.5-flash")
+				.withSessionService(sessionService, {
+					userId: "u",
+					appName: "a",
+				})
+				.ask({ parts: [{ text: "full" }] });
+
+			expect(text).toBe("full-ok");
+		});
+
+		it("ask schema failure embeds JSON parse and Zod validation Error messages", async () => {
+			mockRunnerEvents([
+				new Event({
+					author: "schema_msgs",
+					content: { parts: [{ text: "not-json" }] },
+				}),
+			]);
+			const schema = z.object({ answer: z.string() });
+			const { runner } = await AgentBuilder.create("schema_msgs")
+				.withModel("gemini-2.5-flash")
+				.withOutputSchema(schema)
+				.withSessionService(sessionService, {
+					userId: "u",
+					appName: "a",
+				})
+				.build();
+
+			await expect(runner.ask("q")).rejects.toThrow(
+				/JSON parse error:[\s\S]*Zod validation error:/,
+			);
+		});
+
+		it("multi ask ignores empty author and user author in per-agent buffers", async () => {
+			mockRunnerEvents([
+				new Event({
+					author: "",
+					content: { parts: [{ text: "no-author" }] },
+				}),
+				new Event({
+					author: "user",
+					content: { parts: [{ text: "user-text" }] },
+				}),
+				new Event({
+					author: "alpha",
+					content: { parts: [{ text: "A" }] },
+				}),
+			]);
+
+			const alpha = new LlmAgent({
+				name: "alpha",
+				model: "gemini-2.5-flash",
+			});
+			const beta = new LlmAgent({
+				name: "beta",
+				model: "gemini-2.5-flash",
+			});
+			const { runner } = await AgentBuilder.create("multi_authors")
+				.asSequential([alpha, beta])
+				.withSessionService(sessionService, {
+					userId: "u",
+					appName: "a",
+				})
+				.build();
+
+			await expect(runner.ask("go")).resolves.toEqual([
+				{ agent: "alpha", response: "A" },
+				{ agent: "beta", response: "" },
+			]);
+		});
+
+		it("buildWithSchema returns the same BuiltAgent shape as build", async () => {
+			const schema = z.object({ n: z.number() });
+			const builder = AgentBuilder.create("parity")
+				.withModel("gemini-2.5-flash")
+				.withOutputSchema(schema)
+				.withSessionService(sessionService, {
+					userId: "u",
+					appName: "a",
+				});
+
+			const a = await builder.build();
+			const b = await builder.buildWithSchema<{ n: number }>();
+			expect(b.agent).toBeInstanceOf(LlmAgent);
+			expect(b.sessionService).toBe(sessionService);
+			expect(b.runner.__outputSchema).toBe(schema);
+			expect(a.runner.__outputSchema).toBe(schema);
+			expect(typeof b.runner.ask).toBe("function");
+			expect(typeof a.runner.ask).toBe("function");
+		});
+
+		it("static create default name drives app-/user- prefixes", async () => {
+			const { session } = await AgentBuilder.create()
+				.withModel("gemini-2.5-flash")
+				.withSessionService(sessionService)
+				.build();
+			expect(session.appName).toBe("app-default_agent");
+			expect(session.userId).toMatch(/^user-default_agent-/);
+		});
+
+		it("build wires memory/artifact/sessionService onto LlmAgent", async () => {
+			const { agent } = await AgentBuilder.create("svc_wire")
+				.withModel("gemini-2.5-flash")
+				.withMemory(memoryService)
+				.withArtifactService(artifactService)
+				.withSessionService(sessionService, {
+					userId: "u",
+					appName: "a",
+				})
+				.build();
+
+			const llm = agent as LlmAgent;
+			expect(llm.memoryService).toBe(memoryService);
+			expect(llm.artifactService).toBe(artifactService);
+			expect(llm.sessionService).toBe(sessionService);
+		});
+
+		it("createAgent throws for non-array or empty subAgents on aggregators", async () => {
+			const loop = AgentBuilder.create("bad_loop");
+			(loop as any).agentType = "loop";
+			(loop as any).config.subAgents = "not-array";
+			await expect(loop.build()).rejects.toThrow(
+				/Sub-agents required for loop agent/,
+			);
+
+			const seq = AgentBuilder.create("bad_seq");
+			(seq as any).agentType = "sequential";
+			(seq as any).config.subAgents = [];
+			await expect(seq.build()).rejects.toThrow(
+				/Sub-agents required for sequential agent/,
+			);
+
+			const par = AgentBuilder.create("bad_par");
+			(par as any).agentType = "parallel";
+			(par as any).config.subAgents = null;
+			await expect(par.build()).rejects.toThrow(
+				/Sub-agents required for parallel agent/,
+			);
+		});
+
+		it("createAgent langgraph throws when nodes are empty or rootNode is not a string", async () => {
+			const emptyNodes = AgentBuilder.create("lg_empty");
+			(emptyNodes as any).agentType = "langgraph";
+			(emptyNodes as any).config.nodes = [];
+			(emptyNodes as any).config.rootNode = "x";
+			await expect(emptyNodes.build()).rejects.toThrow(
+				/Nodes and root node required for LangGraph agent/,
+			);
+
+			const badRoot = AgentBuilder.create("lg_bad_root_type");
+			(badRoot as any).agentType = "langgraph";
+			(badRoot as any).config.nodes = [
+				{
+					name: "n",
+					agent: new LlmAgent({ name: "n", model: "gemini-2.5-flash" }),
+					targets: [],
+				},
+			];
+			(badRoot as any).config.rootNode = 123;
+			await expect(badRoot.build()).rejects.toThrow(
+				/Nodes and root node required for LangGraph agent/,
+			);
 		});
 	});
 });

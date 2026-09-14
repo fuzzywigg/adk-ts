@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { AgentBuilder } from "../../agents/agent-builder";
 import type { EvalCase } from "../../evaluation/eval-case";
 import type { EvalSet } from "../../evaluation/eval-set";
 import { PrebuiltMetrics } from "../../evaluation/eval-metrics";
@@ -509,5 +510,201 @@ describe("LocalEvalService", () => {
 
 		expect(actualText).toContain("Error: Unknown error");
 		errorSpy.mockRestore();
+	});
+
+	it("falls back to mock ask when agent lacks ask and AgentBuilder fails", async () => {
+		const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+		vi.spyOn(AgentBuilder, "create").mockImplementation(() => {
+			throw new Error("builder unavailable");
+		});
+
+		const service = new LocalEvalService({
+			name: "no-ask-agent",
+		} as any);
+
+		const evalCase: EvalCase = {
+			evalId: "mock-fallback",
+			conversation: [
+				{
+					userContent: { role: "user", parts: [{ text: "hello" }] },
+					creationTimestamp: 1,
+				},
+			],
+		};
+
+		let text = "";
+		for await (const batch of service.performInference({
+			evalSetId: "set-1",
+			evalCases: [makeEvalSet(evalCase)],
+		})) {
+			text = batch[0].finalResponse?.parts?.[0]?.text ?? "";
+		}
+
+		expect(text).toBe("Mock response to: [object Object]");
+		expect(warn).toHaveBeenCalledWith(
+			expect.stringContaining(
+				"Failed to create AgentBuilder runner, falling back to mock:",
+			),
+			expect.any(Error),
+		);
+		warn.mockRestore();
+		vi.restoreAllMocks();
+	});
+
+	it("uses AgentBuilder runner when agent lacks ask and build succeeds", async () => {
+		const ask = vi.fn(async () => "from-builder");
+		vi.spyOn(AgentBuilder, "create").mockReturnValue({
+			withModel: vi.fn().mockReturnThis(),
+			withDescription: vi.fn().mockReturnThis(),
+			build: vi.fn().mockResolvedValue({
+				runner: { ask },
+			}),
+		} as any);
+
+		const service = new LocalEvalService({
+			name: "builder-agent",
+		} as any);
+
+		const evalCase: EvalCase = {
+			evalId: "builder-path",
+			conversation: [
+				{
+					userContent: { role: "user", parts: [{ text: "q" }] },
+					creationTimestamp: 1,
+				},
+			],
+		};
+
+		let text = "";
+		for await (const batch of service.performInference({
+			evalSetId: "set-1",
+			evalCases: [makeEvalSet(evalCase)],
+		})) {
+			text = batch[0].finalResponse?.parts?.[0]?.text ?? "";
+		}
+
+		expect(ask).toHaveBeenCalled();
+		expect(text).toBe("from-builder");
+		vi.restoreAllMocks();
+	});
+
+	it("omits expected rows when conversation turns lack finalResponse", async () => {
+		const ask = vi.fn(async () => "only-actual");
+		const service = new LocalEvalService({
+			name: "stub-agent",
+			ask,
+		} as any);
+
+		const evalCase: EvalCase = {
+			evalId: "noExp",
+			conversation: [
+				{
+					userContent: { role: "user", parts: [{ text: "hi" }] },
+					creationTimestamp: 1,
+				},
+			],
+		};
+
+		const batches: { invocationId: string }[][] = [];
+		for await (const batch of service.performInference({
+			evalSetId: "set-1",
+			evalCases: [makeEvalSet(evalCase)],
+		})) {
+			batches.push(batch);
+		}
+
+		expect(batches[0]).toHaveLength(1);
+		expect(batches[0][0].invocationId).toBe("noExp-0");
+		expect(batches[0][0].invocationId.includes("expected")).toBe(false);
+	});
+
+	it("groups evaluate results when invocationId has no hyphen", async () => {
+		const service = new LocalEvalService({
+			name: "unused",
+			ask: async () => "unused",
+		} as any);
+
+		const results: { evalSetId: string }[] = [];
+		for await (const evalResult of service.evaluate({
+			inferenceResults: [
+				[
+					{
+						invocationId: "plainCaseexpected",
+						userContent: { role: "user", parts: [{ text: "q" }] },
+						finalResponse: {
+							role: "model",
+							parts: [{ text: "same" }],
+						},
+						creationTimestamp: 1,
+					},
+					{
+						invocationId: "plainCaseactual",
+						userContent: { role: "user", parts: [{ text: "q" }] },
+						finalResponse: {
+							role: "model",
+							parts: [{ text: "same" }],
+						},
+						creationTimestamp: 2,
+					},
+				],
+			],
+			evaluateConfig: {
+				evalMetrics: [
+					{
+						metricName: PrebuiltMetrics.RESPONSE_MATCH_SCORE,
+						threshold: 0.5,
+					},
+				],
+			},
+		})) {
+			results.push(evalResult);
+		}
+
+		expect(results).toHaveLength(1);
+		expect(results[0].evalSetId).toBe("plainCaseexpected");
+	});
+
+	it("awaits pending initializeRunner when runner is still unset", async () => {
+		let resolveBuild!: (value: any) => void;
+		const buildPromise = new Promise((resolve) => {
+			resolveBuild = resolve;
+		});
+		const ask = vi.fn(async () => "delayed");
+		vi.spyOn(AgentBuilder, "create").mockReturnValue({
+			withModel: vi.fn().mockReturnThis(),
+			withDescription: vi.fn().mockReturnThis(),
+			build: vi.fn().mockReturnValue(buildPromise),
+		} as any);
+
+		const service = new LocalEvalService({
+			name: "slow-builder",
+		} as any);
+
+		const evalCase: EvalCase = {
+			evalId: "await-init",
+			conversation: [
+				{
+					userContent: { role: "user", parts: [{ text: "hi" }] },
+					creationTimestamp: 1,
+				},
+			],
+		};
+
+		const inference = (async () => {
+			const batches: any[] = [];
+			for await (const batch of service.performInference({
+				evalSetId: "set-1",
+				evalCases: [makeEvalSet(evalCase)],
+			})) {
+				batches.push(batch);
+			}
+			return batches;
+		})();
+
+		await Promise.resolve();
+		resolveBuild({ runner: { ask } });
+		const batches = await inference;
+		expect(batches[0][0].finalResponse?.parts?.[0]?.text).toBe("delayed");
+		vi.restoreAllMocks();
 	});
 });
