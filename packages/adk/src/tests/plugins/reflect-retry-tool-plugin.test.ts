@@ -319,4 +319,44 @@ describe("ReflectAndRetryToolPlugin", () => {
 			}),
 		).rejects.toThrow(/Unknown scope: invalid-scope/);
 	});
+
+	it("afterToolCallback reset is a no-op when the tool has no counter yet", async () => {
+		const plugin = new ReflectAndRetryToolPlugin({ maxRetries: 2 });
+		const result = await plugin.afterToolCallback({
+			tool: makeTool("fresh"),
+			toolArgs: {},
+			toolContext: makeToolContext(),
+			result: { ok: true },
+		});
+		expect(result).toBeUndefined();
+	});
+
+	it("formats multiple tool args as bullet lines in reflection guidance", async () => {
+		const plugin = new ReflectAndRetryToolPlugin({ maxRetries: 1 });
+		const response = await plugin.onToolErrorCallback({
+			tool: makeTool("multi"),
+			toolArgs: { a: 1, b: true, c: "x" },
+			toolContext: makeToolContext(),
+			error: { message: "plain-object-error" },
+		});
+
+		expect(response?.error_type).toBe("ToolError");
+		expect(response?.error_details).toBe("[object Object]");
+		expect(response?.reflection_guidance).toContain("- a: 1");
+		expect(response?.reflection_guidance).toContain("- b: true");
+		expect(response?.reflection_guidance).toContain("- c: x");
+	});
+
+	it("throws Unknown scope from afterToolCallback reset path", async () => {
+		const plugin = new ReflectAndRetryToolPlugin({ maxRetries: 2 });
+		(plugin as { scope: string }).scope = "bad";
+		await expect(
+			plugin.afterToolCallback({
+				tool: makeTool(),
+				toolArgs: {},
+				toolContext: makeToolContext(),
+				result: { ok: true },
+			}),
+		).rejects.toThrow(/Unknown scope: bad/);
+	});
 });

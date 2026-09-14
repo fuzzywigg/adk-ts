@@ -1468,4 +1468,70 @@ describe("LangfusePlugin", () => {
 
 		expect((plugin as any).modelsUsed.size).toBe(0);
 	});
+
+	it("toPlainText unwraps duck-typed Event-named objects via afterRun result", async () => {
+		const plugin = new LangfusePlugin({ publicKey: "pk", secretKey: "sk" });
+		const inv = makeInvocation({ invocationId: "inv-duck-event" });
+		await plugin.beforeRunCallback({ invocationContext: inv });
+		updateMock.mockClear();
+
+		class Event {
+			content = {
+				role: "model",
+				parts: [{ text: "duck-typed-event" }],
+			};
+		}
+		await plugin.afterRunCallback({
+			invocationContext: inv,
+			result: new Event(),
+		});
+		expect(updateMock).toHaveBeenCalledWith(
+			expect.objectContaining({ output: "duck-typed-event" }),
+		);
+	});
+
+	it("afterRunCallback uses instanceof Event branch when content is missing", async () => {
+		const plugin = new LangfusePlugin({ publicKey: "pk", secretKey: "sk" });
+		const inv = makeInvocation({ invocationId: "inv-event-no-content" });
+		await plugin.beforeRunCallback({ invocationContext: inv });
+		updateMock.mockClear();
+		eventMock.mockClear();
+
+		const bare = Object.create(Event.prototype) as Event;
+		Object.defineProperty(bare, "content", {
+			value: undefined,
+			configurable: true,
+		});
+		(bare as any).author = "root";
+		(bare as any).invocationId = "inv-event-no-content";
+
+		await plugin.afterRunCallback({
+			invocationContext: inv,
+			result: bare,
+		});
+
+		expect(updateMock).not.toHaveBeenCalled();
+		expect(eventMock).not.toHaveBeenCalledWith(
+			expect.objectContaining({ name: "run_complete" }),
+		);
+	});
+
+	it("toPlainText falls back to String when JSON.stringify throws", async () => {
+		const plugin = new LangfusePlugin({ publicKey: "pk", secretKey: "sk" });
+		const inv = makeInvocation({ invocationId: "inv-stringify-fail" });
+		await plugin.beforeRunCallback({ invocationContext: inv });
+		updateMock.mockClear();
+
+		const cyclic: Record<string, unknown> = {};
+		cyclic.self = cyclic;
+		await plugin.afterRunCallback({
+			invocationContext: inv,
+			result: cyclic,
+		});
+		expect(updateMock).toHaveBeenCalledWith(
+			expect.objectContaining({
+				output: expect.stringMatching(/\[object Object\]/),
+			}),
+		);
+	});
 });

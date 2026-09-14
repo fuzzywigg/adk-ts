@@ -178,6 +178,39 @@ describe("ResponseEvaluator", () => {
 			);
 			expect(result.overallScore).toBe(1);
 		});
+
+		it("scores zero recall when expected text tokenizes to empty", async () => {
+			const result = await evaluator.evaluateInvocations(
+				[invocation("only actual tokens")],
+				[invocation("!!!")],
+			);
+			expect(result.perInvocationResults[0].score).toBe(0);
+			expect(result.overallScore).toBe(0);
+			expect(result.overallEvalStatus).toBe(EvalStatus.FAILED);
+		});
+
+		it("extracts empty text when finalResponse has no parts", async () => {
+			const actual: Invocation = {
+				userContent: { parts: [{ text: "hi" }] },
+				creationTimestamp: 1,
+				finalResponse: { role: "model" } as any,
+			};
+			const expected: Invocation = {
+				userContent: { parts: [{ text: "hi" }] },
+				creationTimestamp: 1,
+				finalResponse: { role: "model", parts: [{ text: "expected" }] },
+			};
+			const result = await evaluator.evaluateInvocations([actual], [expected]);
+			expect(result.perInvocationResults[0].score).toBe(0);
+		});
+
+		it("scores zero precision when actual text tokenizes to empty against expected tokens", async () => {
+			const result = await evaluator.evaluateInvocations(
+				[invocation("???")],
+				[invocation("expected words")],
+			);
+			expect(result.perInvocationResults[0].score).toBe(0);
+		});
 	});
 
 	describe("RESPONSE_EVALUATION_SCORE Vertex facade path", () => {

@@ -400,4 +400,29 @@ describe("PluginManager", () => {
 		);
 		expect(values).toHaveLength(12);
 	});
+
+	it("skips plugins whose selected callback method is undefined", async () => {
+		const plugin = new TestPlugin("missing-method");
+		(plugin as { beforeRunCallback?: unknown }).beforeRunCallback = undefined;
+		const manager = new PluginManager({ plugins: [plugin] });
+
+		await expect(
+			manager.runBeforeRunCallback({ invocationContext: {} as any }),
+		).resolves.toBeUndefined();
+		expect(plugin.beforeRunCalls).toBe(0);
+	});
+
+	it("skips close when plugin.close is undefined even if others close", async () => {
+		const closed = vi.fn(async () => undefined);
+		const withClose = new ClosePlugin("has-close", closed);
+		const without = new TestPlugin("no-close-prop");
+		(without as { close?: unknown }).close = undefined;
+
+		const manager = new PluginManager({
+			plugins: [without, withClose],
+			closeTimeout: 1000,
+		});
+		await expect(manager.close()).resolves.toBeUndefined();
+		expect(closed).toHaveBeenCalledOnce();
+	});
 });

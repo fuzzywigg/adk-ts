@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { AgentBuilder } from "../../agents/agent-builder";
 import type { EvalCase } from "../../evaluation/eval-case";
 import type { EvalSet } from "../../evaluation/eval-set";
 import { PrebuiltMetrics } from "../../evaluation/eval-metrics";
@@ -850,5 +851,91 @@ describe("LocalEvalService", () => {
 		};
 		expect(evaluator).toBeDefined();
 		spy.mockRestore();
+	});
+
+	it("falls back to a mock ask runner when AgentBuilder build fails", async () => {
+		const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+		const createSpy = vi.spyOn(AgentBuilder, "create").mockReturnValue({
+			withModel: () => ({
+				withDescription: () => ({
+					build: async () => {
+						throw new Error("builder unavailable");
+					},
+				}),
+			}),
+		} as any);
+
+		const service = new LocalEvalService({
+			name: "plain-agent-without-ask",
+		} as any);
+
+		await (service as any).initializeRunner();
+
+		const evalCase: EvalCase = {
+			evalId: "mock-fallback",
+			conversation: [
+				{
+					userContent: { role: "user", parts: [{ text: "ping" }] },
+					creationTimestamp: 1,
+				},
+			],
+		};
+
+		let text = "";
+		for await (const batch of service.performInference({
+			evalSetId: "set-1",
+			evalCases: [makeEvalSet(evalCase)],
+		})) {
+			text = batch[0].finalResponse?.parts?.[0]?.text ?? "";
+		}
+
+		expect(text).toBe("Mock response to: [object Object]");
+		expect(warn).toHaveBeenCalledWith(
+			expect.stringContaining("Failed to create AgentBuilder runner"),
+			expect.any(Error),
+		);
+
+		createSpy.mockRestore();
+		warn.mockRestore();
+	});
+
+	it("uses AgentBuilder runner ask when the agent has no ask method", async () => {
+		const ask = vi.fn(async (message: unknown) => `built:${String(message)}`);
+		const createSpy = vi.spyOn(AgentBuilder, "create").mockReturnValue({
+			withModel: () => ({
+				withDescription: () => ({
+					build: async () => ({
+						runner: { ask },
+					}),
+				}),
+			}),
+		} as any);
+
+		const service = new LocalEvalService({
+			name: "needs-builder",
+		} as any);
+		await (service as any).initializeRunner();
+
+		const evalCase: EvalCase = {
+			evalId: "builder-ok",
+			conversation: [
+				{
+					userContent: { role: "user", parts: [{ text: "hello" }] },
+					creationTimestamp: 1,
+				},
+			],
+		};
+
+		let text = "";
+		for await (const batch of service.performInference({
+			evalSetId: "set-1",
+			evalCases: [makeEvalSet(evalCase)],
+		})) {
+			text = batch[0].finalResponse?.parts?.[0]?.text ?? "";
+		}
+
+		expect(text).toBe("built:[object Object]");
+		expect(ask).toHaveBeenCalledOnce();
+		createSpy.mockRestore();
 	});
 });

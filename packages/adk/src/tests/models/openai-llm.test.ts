@@ -343,6 +343,39 @@ describe("OpenAiLlm", () => {
 			expect(response.finishReason).toBe("STOP");
 		});
 
+		it("openAiMessageToLlmResponse omits usage and skips non-function tool calls", () => {
+			const response = (llm as any).openAiMessageToLlmResponse({
+				message: {
+					content: "hi",
+					tool_calls: [
+						{
+							id: "custom",
+							type: "custom",
+							custom: { name: "x", input: "{}" },
+						},
+						{
+							id: "fn",
+							type: "function",
+							function: { name: "ping", arguments: "" },
+						},
+					],
+				},
+				finish_reason: "stop",
+			});
+
+			expect(response.usageMetadata).toBeUndefined();
+			expect(response.content?.parts).toEqual([
+				{ text: "hi" },
+				{
+					functionCall: {
+						id: "fn",
+						name: "ping",
+						args: {},
+					},
+				},
+			]);
+		});
+
 		it("createChunkResponse handles thought text and tool call deltas", () => {
 			const thought = (llm as any).createChunkResponse({
 				content: "[thinking] draft",
@@ -373,6 +406,24 @@ describe("OpenAiLlm", () => {
 
 			const empty = (llm as any).createChunkResponse({});
 			expect(empty.content).toBeUndefined();
+		});
+
+		it("createChunkResponse parses empty tool arguments as {}", () => {
+			const tools = (llm as any).createChunkResponse({
+				tool_calls: [
+					{
+						id: "d2",
+						type: "function",
+						function: { name: "empty", arguments: "" },
+					},
+				],
+			});
+			expect(tools.content?.parts?.[0]?.functionCall).toEqual({
+				id: "d2",
+				name: "empty",
+				args: {},
+			});
+			expect(tools.usageMetadata).toBeUndefined();
 		});
 
 		it("preprocessRequest clears labels and walks contents", () => {
@@ -741,6 +792,175 @@ describe("OpenAiLlm", () => {
 			expect(
 				responses.some((r) => r.content?.parts?.[0]?.text === "only"),
 			).toBe(true);
+		});
+
+		it("emits thought leftover when finish arrives on a thought-bearing chunk", async () => {
+			mockCreate.mockResolvedValue(
+				(async function* () {
+					yield {
+						choices: [
+							{
+								delta: { content: "[thinking] step-1" },
+								finish_reason: null,
+							},
+						],
+					};
+					yield {
+						choices: [
+							{
+								delta: { content: "[thinking] step-2" },
+								finish_reason: "stop",
+							},
+						],
+						usage: {
+							prompt_tokens: 2,
+							completion_tokens: 4,
+							total_tokens: 6,
+						},
+					};
+				})(),
+			);
+
+			const responses: LlmResponse[] = [];
+			for await (const response of (llm as any).generateContentAsyncImpl(
+				baseRequest(),
+				true,
+			)) {
+				responses.push(response);
+			}
+
+			const finished = responses.find((r) => r.finishReason === "STOP");
+			expect(finished?.content?.parts).toEqual([
+				{
+					text: "[thinking] step-1[thinking] step-2",
+					thought: true,
+				},
+			]);
+			expect(
+				responses.some(
+					(r) =>
+						!r.partial &&
+						!r.finishReason &&
+						r.content?.parts?.[0]?.thought === true &&
+						r.content?.parts?.[0]?.text ===
+							"[thinking] step-1[thinking] step-2" &&
+						r.usageMetadata?.totalTokenCount === 6,
+				),
+			).toBe(true);
+		});
+
+		it("omits usageMetadata on finish when the stream never reports usage", async () => {
+			mockCreate.mockResolvedValue(
+				(async function* () {
+					yield {
+						choices: [{ delta: { content: "plain" }, finish_reason: "stop" }],
+					};
+				})(),
+			);
+
+			const responses: LlmResponse[] = [];
+			for await (const response of (llm as any).generateContentAsyncImpl(
+				baseRequest(),
+				true,
+			)) {
+				responses.push(response);
+			}
+
+			const finished = responses.find((r) => r.finishReason === "STOP");
+			expect(finished?.content?.parts).toEqual([{ text: "plain" }]);
+			expect(finished?.usageMetadata).toBeUndefined();
+			expect(
+				responses.every(
+					(r) => r.usageMetadata === undefined || !r.finishReason,
+				),
+			).toBe(true);
+		});
+
+		it("skips streamed tool calls that never receive a function name", async () => {
+			mockCreate.mockResolvedValue(
+				(async function* () {
+					yield {
+						choices: [
+							{
+								delta: {
+									tool_calls: [
+										{
+											index: 0,
+											id: "orphan",
+											type: "function",
+											function: { arguments: "{}" },
+										},
+									],
+								},
+								finish_reason: null,
+							},
+						],
+					};
+					yield {
+						choices: [
+							{
+								delta: {},
+								finish_reason: "tool_calls",
+							},
+						],
+						usage: {
+							prompt_tokens: 1,
+							completion_tokens: 1,
+							total_tokens: 2,
+						},
+					};
+				})(),
+			);
+
+			const responses: LlmResponse[] = [];
+			for await (const response of (llm as any).generateContentAsyncImpl(
+				baseRequest(),
+				true,
+			)) {
+				responses.push(response);
+			}
+
+			const finished = responses.find((r) => r.finishReason === "STOP");
+			expect(finished?.content?.parts ?? []).toEqual([]);
+		});
+
+		it("merges without usageMetadata when a clear-content chunk has no usage", async () => {
+			mockCreate.mockResolvedValue(
+				(async function* () {
+					yield {
+						choices: [{ delta: { content: "draft" }, finish_reason: null }],
+					};
+					yield {
+						choices: [{ delta: {}, finish_reason: null }],
+					};
+					yield {
+						choices: [{ delta: {}, finish_reason: "stop" }],
+						usage: {
+							prompt_tokens: 1,
+							completion_tokens: 1,
+							total_tokens: 2,
+						},
+					};
+				})(),
+			);
+
+			const responses: LlmResponse[] = [];
+			for await (const response of (llm as any).generateContentAsyncImpl(
+				baseRequest(),
+				true,
+			)) {
+				responses.push(response);
+			}
+
+			const merged = responses.find(
+				(r) =>
+					!r.partial &&
+					!r.finishReason &&
+					r.content?.parts?.[0]?.text === "draft" &&
+					r.usageMetadata === undefined,
+			);
+			expect(merged).toBeTruthy();
+			expect(responses.some((r) => r.finishReason === "STOP")).toBe(true);
 		});
 	});
 });

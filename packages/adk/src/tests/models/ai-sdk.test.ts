@@ -146,6 +146,27 @@ describe("AiSdkLlm", () => {
 		it("returns an empty object when no tools are configured", () => {
 			expect((llm as any).convertToAiSdkTools(new LlmRequest())).toEqual({});
 		});
+
+		it("skips tool configs without functionDeclarations and defaults missing params", () => {
+			const request = new LlmRequest({
+				config: {
+					tools: [
+						{ googleSearch: {} } as any,
+						{
+							functionDeclarations: [
+								{
+									name: "bare",
+									description: "no params",
+								},
+							],
+						},
+					],
+				},
+			});
+			const tools = (llm as any).convertToAiSdkTools(request);
+			expect(Object.keys(tools)).toEqual(["bare"]);
+			expect(jsonSchema).toHaveBeenCalledWith({});
+		});
 	});
 
 	describe("contentToAiSdkMessage", () => {
@@ -269,6 +290,135 @@ describe("AiSdkLlm", () => {
 					parts: [{ inlineData: { mimeType: "image/png", data: "x" } }],
 				}),
 			).toBeNull();
+		});
+
+		it("collapses multi-part content with a single surviving text for each role", () => {
+			expect(
+				(llm as any).contentToAiSdkMessage({
+					role: "system",
+					parts: [
+						{ inlineData: { mimeType: "image/png", data: "x" } },
+						{ text: "sys-only" },
+					],
+				}),
+			).toEqual({ role: "system", content: "sys-only" });
+
+			expect(
+				(llm as any).contentToAiSdkMessage({
+					role: "model",
+					parts: [
+						{ inlineData: { mimeType: "image/png", data: "x" } },
+						{ text: "asst-only" },
+					],
+				}),
+			).toEqual({ role: "assistant", content: "asst-only" });
+
+			expect(
+				(llm as any).contentToAiSdkMessage({
+					role: "user",
+					parts: [
+						{ inlineData: { mimeType: "image/png", data: "x" } },
+						{ text: "user-only" },
+					],
+				}),
+			).toEqual({ role: "user", content: "user-only" });
+		});
+
+		it("keeps multi-text assistant and user parts as content arrays", () => {
+			expect(
+				(llm as any).contentToAiSdkMessage({
+					role: "assistant",
+					parts: [{ text: "one" }, { text: "two" }],
+				}),
+			).toEqual({
+				role: "assistant",
+				content: [
+					{ type: "text", text: "one" },
+					{ type: "text", text: "two" },
+				],
+			});
+
+			expect(
+				(llm as any).contentToAiSdkMessage({
+					role: "user",
+					parts: [{ text: "alpha" }, { text: "beta" }],
+				}),
+			).toEqual({
+				role: "user",
+				content: [
+					{ type: "text", text: "alpha" },
+					{ type: "text", text: "beta" },
+				],
+			});
+		});
+
+		it("skips empty text parts when building function-call assistant content", () => {
+			const msg = (llm as any).contentToAiSdkMessage({
+				role: "model",
+				parts: [
+					{ text: "" },
+					{
+						functionCall: {
+							id: "c1",
+							name: "search",
+							args: { q: "x" },
+						},
+					},
+					{ text: "note" },
+				],
+			});
+			expect(msg).toEqual({
+				role: "assistant",
+				content: [
+					{ type: "text", text: "note" },
+					{
+						type: "tool-call",
+						toolCallId: "c1",
+						toolName: "search",
+						input: { q: "x" },
+					},
+				],
+			});
+		});
+
+		it("formats undefined functionResponse as json null", () => {
+			const msg = (llm as any).contentToAiSdkMessage({
+				role: "user",
+				parts: [
+					{
+						functionResponse: {
+							id: "c9",
+							name: "noop",
+							response: undefined,
+						},
+					},
+				],
+			});
+			expect(msg).toEqual({
+				role: "tool",
+				content: [
+					{
+						type: "tool-result",
+						toolCallId: "c9",
+						toolName: "noop",
+						output: { type: "json", value: null },
+					},
+				],
+			});
+		});
+	});
+
+	describe("convertToAiSdkMessages", () => {
+		it("drops contents that convert to null", () => {
+			const request = new LlmRequest({
+				contents: [
+					{ role: "user", parts: [] },
+					{ role: "user", parts: [{ text: "keep" }] },
+				],
+			});
+			expect((llm as any).convertToAiSdkMessages(request)).toEqual([
+				{ role: "user", content: "keep" },
+			]);
 		});
 	});
 
@@ -406,6 +556,144 @@ describe("AiSdkLlm", () => {
 			expect(responses).toHaveLength(1);
 			expect(responses[0].errorCode).toBe("AI_SDK_ERROR");
 			expect(responses[0].errorMessage).toContain("provider down");
+		});
+
+		it("yields empty text parts when non-stream result has no text or tools", async () => {
+			generateText.mockResolvedValue({
+				text: "",
+				toolCalls: [],
+				usage: undefined,
+				finishReason: "end_of_message",
+			});
+
+			const responses = [];
+			for await (const response of (llm as any).generateContentAsyncImpl(
+				new LlmRequest({
+					contents: [{ role: "user", parts: [{ text: "hi" }] }],
+				}),
+				false,
+			)) {
+				responses.push(response);
+			}
+
+			expect(responses).toHaveLength(1);
+			expect(responses[0].content.parts).toEqual([{ text: "" }]);
+			expect(responses[0].usageMetadata).toBeUndefined();
+			expect(responses[0].finishReason).toBe("STOP");
+			expect(responses[0].turnComplete).toBe(true);
+		});
+
+		it("omits tools from requestParams when convertToAiSdkTools is empty", async () => {
+			generateText.mockResolvedValue({
+				text: "ok",
+				toolCalls: undefined,
+				finishReason: "stop",
+			});
+
+			for await (const _ of (llm as any).generateContentAsyncImpl(
+				new LlmRequest({
+					contents: [{ role: "user", parts: [{ text: "hi" }] }],
+					config: { tools: [{ googleSearch: {} } as any] },
+				}),
+				false,
+			)) {
+				/* drain */
+			}
+
+			expect(generateText).toHaveBeenCalledWith(
+				expect.objectContaining({ tools: undefined }),
+			);
+		});
+
+		it("streams empty final parts when there is no text and no tool calls", async () => {
+			streamText.mockReturnValue({
+				textStream: (async function* () {})(),
+				toolCalls: Promise.resolve([]),
+				usage: Promise.resolve(undefined),
+				finishReason: Promise.resolve("max_tokens"),
+			});
+
+			const responses = [];
+			for await (const response of (llm as any).generateContentAsyncImpl(
+				new LlmRequest({
+					contents: [{ role: "user", parts: [{ text: "hi" }] }],
+				}),
+				true,
+			)) {
+				responses.push(response);
+			}
+
+			expect(responses).toHaveLength(1);
+			expect(responses[0].partial).toBeUndefined();
+			expect(responses[0].turnComplete).toBe(true);
+			expect(responses[0].content.parts).toEqual([{ text: "" }]);
+			expect(responses[0].usageMetadata).toBeUndefined();
+			expect(responses[0].finishReason).toBe("MAX_TOKENS");
+		});
+
+		it("streams final response with tool calls and no accumulated text", async () => {
+			streamText.mockReturnValue({
+				textStream: (async function* () {})(),
+				toolCalls: Promise.resolve([
+					{
+						toolCallId: "only-tool",
+						toolName: "ping",
+						input: { n: 1 },
+					},
+				]),
+				usage: Promise.resolve({
+					inputTokens: 2,
+					outputTokens: 3,
+					totalTokens: 5,
+				}),
+				finishReason: Promise.resolve("stop"),
+			});
+
+			const responses = [];
+			for await (const response of (llm as any).generateContentAsyncImpl(
+				new LlmRequest({
+					contents: [{ role: "user", parts: [{ text: "hi" }] }],
+				}),
+				true,
+			)) {
+				responses.push(response);
+			}
+
+			expect(responses).toHaveLength(1);
+			expect(responses[0].content.parts).toEqual([
+				{
+					functionCall: {
+						id: "only-tool",
+						name: "ping",
+						args: { n: 1 },
+					},
+				},
+			]);
+			expect(responses[0].usageMetadata).toEqual({
+				promptTokenCount: 2,
+				candidatesTokenCount: 3,
+				totalTokenCount: 5,
+			});
+		});
+
+		it("yields an error response when streamText throws", async () => {
+			streamText.mockImplementation(() => {
+				throw new Error("stream exploded");
+			});
+
+			const responses = [];
+			for await (const response of (llm as any).generateContentAsyncImpl(
+				new LlmRequest({
+					contents: [{ role: "user", parts: [{ text: "hi" }] }],
+				}),
+				true,
+			)) {
+				responses.push(response);
+			}
+
+			expect(responses).toHaveLength(1);
+			expect(responses[0].errorCode).toBe("AI_SDK_ERROR");
+			expect(responses[0].errorMessage).toContain("stream exploded");
 		});
 	});
 });

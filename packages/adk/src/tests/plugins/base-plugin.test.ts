@@ -53,4 +53,86 @@ describe("BasePlugin", () => {
 		expect(plugin.hits).toBe(2);
 		expect(plugin.name).toBe("counting");
 	});
+
+	it("default callbacks accept typed params and return undefined content", async () => {
+		const plugin = new ConcretePlugin("typed");
+		const content = { role: "user", parts: [{ text: "hi" }] };
+		const event = { id: "e1" };
+		const llmRequest = { model: "m" };
+		const llmResponse = { content: { role: "model", parts: [{ text: "ok" }] } };
+		const tool = { name: "t" };
+		const toolArgs = { q: 1 };
+		const toolContext = { invocationId: "inv" };
+		const agent = { name: "a" };
+		const callbackContext = { invocationId: "inv" };
+
+		expect(
+			await plugin.onUserMessageCallback?.({
+				invocationContext: {} as never,
+				userMessage: content as never,
+			}),
+		).toBeUndefined();
+		expect(
+			await plugin.onEventCallback?.({
+				invocationContext: {} as never,
+				event: event as never,
+			}),
+		).toBeUndefined();
+		expect(
+			await plugin.beforeAgentCallback?.({
+				agent: agent as never,
+				callbackContext: callbackContext as never,
+			}),
+		).toBeUndefined();
+		expect(
+			await plugin.afterAgentCallback?.({
+				agent: agent as never,
+				callbackContext: callbackContext as never,
+				result: { ok: true },
+			}),
+		).toBeUndefined();
+		expect(
+			await plugin.beforeModelCallback?.({
+				callbackContext: callbackContext as never,
+				llmRequest: llmRequest as never,
+			}),
+		).toBeUndefined();
+		expect(
+			await plugin.afterModelCallback?.({
+				callbackContext: callbackContext as never,
+				llmResponse: llmResponse as never,
+				llmRequest: llmRequest as never,
+			}),
+		).toBeUndefined();
+		expect(
+			await plugin.onModelErrorCallback?.({
+				callbackContext: callbackContext as never,
+				llmRequest: llmRequest as never,
+				error: new Error("model"),
+			}),
+		).toBeUndefined();
+		expect(
+			await plugin.beforeToolCallback?.({
+				tool: tool as never,
+				toolArgs,
+				toolContext: toolContext as never,
+			}),
+		).toBeUndefined();
+		expect(
+			await plugin.afterToolCallback?.({
+				tool: tool as never,
+				toolArgs,
+				toolContext: toolContext as never,
+				result: { ok: true },
+			}),
+		).toBeUndefined();
+		expect(
+			await plugin.onToolErrorCallback?.({
+				tool: tool as never,
+				toolArgs,
+				toolContext: toolContext as never,
+				error: "tool-fail",
+			}),
+		).toBeUndefined();
+	});
 });
