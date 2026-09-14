@@ -154,9 +154,13 @@ describe("BaseTool heavy matrix leftover edges", () => {
 				throw new Error("boom");
 			},
 		);
+		vi.spyOn(console, "error").mockImplementation(() => {});
 		const result = await tool.safeExecute({ query: "x" }, makeContext());
-		expect(result.error).toBeDefined();
-		expect(String(result.message || result.error)).toContain("boom");
+		expect(result).toEqual({
+			error: "Execution failed",
+			message: "boom",
+			tool: "boom_tool",
+		});
 	});
 });
 
