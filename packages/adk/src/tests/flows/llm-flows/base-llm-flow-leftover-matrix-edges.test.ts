@@ -52,6 +52,9 @@ function makeCtx(overrides: Record<string, unknown> = {}): InvocationContext {
 		invocationId: "inv-leftover",
 		agent: { name: "leftover-agent" },
 		branch: "main",
+		session: { state: {}, events: [] },
+		runConfig: {},
+		incrementLlmCallCount: vi.fn(),
 		...overrides,
 	} as unknown as InvocationContext;
 }
