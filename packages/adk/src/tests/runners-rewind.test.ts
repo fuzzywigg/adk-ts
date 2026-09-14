@@ -1115,4 +1115,563 @@ describe("Runner.rewind", () => {
 			["brand-new", "restore"].sort(),
 		);
 	});
+
+	it("produces an empty state delta when only content events exist before rewind", async () => {
+		const session = await runner.sessionService.createSession(
+			runner.appName,
+			userId,
+			{},
+			sessionId,
+		);
+
+		await runner.sessionService.appendEvent(
+			session,
+			new Event({
+				invocationId: "invocation1",
+				author: "agent",
+				content: { role: "model", parts: [{ text: "one" }] },
+			}),
+		);
+		await runner.sessionService.appendEvent(
+			session,
+			new Event({
+				invocationId: "invocation2",
+				author: "agent",
+				content: { role: "model", parts: [{ text: "two" }] },
+			}),
+		);
+
+		await runner.rewind({
+			userId,
+			sessionId,
+			rewindBeforeInvocationId: "invocation2",
+		});
+
+		const updated = await runner.sessionService.getSession(
+			runner.appName,
+			userId,
+			sessionId,
+		);
+		expect(updated?.events.at(-1)?.actions?.stateDelta).toEqual({});
+		expect(updated?.events.at(-1)?.actions?.artifactDelta).toEqual({});
+	});
+
+	it("merges overlapping artifact deltas across multiple pre-rewind events", async () => {
+		const session = await runner.sessionService.createSession(
+			runner.appName,
+			userId,
+			{},
+			sessionId,
+		);
+
+		await runner.artifactService?.saveArtifact({
+			appName: runner.appName,
+			userId,
+			sessionId,
+			filename: "doc",
+			artifact: { text: "v0" },
+		});
+		await runner.sessionService.appendEvent(
+			session,
+			new Event({
+				invocationId: "invocation1",
+				author: "agent",
+				content: { role: "model", parts: [{ text: "one" }] },
+				actions: new EventActions({
+					artifactDelta: { doc: 0 },
+				}),
+			}),
+		);
+
+		await runner.artifactService?.saveArtifact({
+			appName: runner.appName,
+			userId,
+			sessionId,
+			filename: "doc",
+			artifact: { text: "v1" },
+		});
+		await runner.sessionService.appendEvent(
+			session,
+			new Event({
+				invocationId: "invocation2",
+				author: "agent",
+				content: { role: "model", parts: [{ text: "two" }] },
+				actions: new EventActions({
+					artifactDelta: { doc: 1 },
+				}),
+			}),
+		);
+
+		await runner.artifactService?.saveArtifact({
+			appName: runner.appName,
+			userId,
+			sessionId,
+			filename: "doc",
+			artifact: { text: "v2" },
+		});
+		await runner.sessionService.appendEvent(
+			session,
+			new Event({
+				invocationId: "invocation3",
+				author: "agent",
+				content: { role: "model", parts: [{ text: "three" }] },
+				actions: new EventActions({
+					artifactDelta: { doc: 2 },
+				}),
+			}),
+		);
+
+		const saveSpy = vi.spyOn(runner.artifactService!, "saveArtifact");
+		const expectedUri = getArtifactUri({
+			appName: runner.appName,
+			userId,
+			sessionId,
+			filename: "doc",
+			version: 1,
+		});
+
+		await runner.rewind({
+			userId,
+			sessionId,
+			rewindBeforeInvocationId: "invocation3",
+		});
+
+		const fileDataCall = saveSpy.mock.calls.find(
+			([args]) =>
+				args.filename === "doc" &&
+				args.artifact?.fileData?.fileUri === expectedUri,
+		);
+		expect(fileDataCall).toBeTruthy();
+
+		const loaded = await runner.artifactService?.loadArtifact({
+			appName: runner.appName,
+			userId,
+			sessionId,
+			filename: "doc",
+		});
+		expect(loaded).toEqual({ text: "v1" });
+	});
+
+	it("restores a key deleted after the rewind point back into session state", async () => {
+		const session = await runner.sessionService.createSession(
+			runner.appName,
+			userId,
+			{},
+			sessionId,
+		);
+
+		await runner.sessionService.appendEvent(
+			session,
+			new Event({
+				invocationId: "invocation1",
+				author: "agent",
+				content: { role: "model", parts: [{ text: "one" }] },
+				actions: new EventActions({
+					stateDelta: { resurrect: "alive" },
+				}),
+			}),
+		);
+		await runner.sessionService.appendEvent(
+			session,
+			new Event({
+				invocationId: "invocation2",
+				author: "agent",
+				content: { role: "model", parts: [{ text: "two" }] },
+				actions: new EventActions({
+					stateDelta: { resurrect: null },
+				}),
+			}),
+		);
+
+		await runner.rewind({
+			userId,
+			sessionId,
+			rewindBeforeInvocationId: "invocation2",
+		});
+
+		const updated = await runner.sessionService.getSession(
+			runner.appName,
+			userId,
+			sessionId,
+		);
+		expect(updated?.state.resurrect).toBe("alive");
+		expect(updated?.events.at(-1)?.actions?.stateDelta).toEqual({
+			resurrect: "alive",
+		});
+	});
+
+	it("leaves app: and user: keys untouched when nulling session-scoped keys only", async () => {
+		const session = await runner.sessionService.createSession(
+			runner.appName,
+			userId,
+			{},
+			sessionId,
+		);
+
+		await runner.sessionService.appendEvent(
+			session,
+			new Event({
+				invocationId: "invocation1",
+				author: "agent",
+				content: { role: "model", parts: [{ text: "one" }] },
+				actions: new EventActions({
+					stateDelta: {
+						"app:theme": "dark",
+						"user:locale": "en",
+					},
+				}),
+			}),
+		);
+		await runner.sessionService.appendEvent(
+			session,
+			new Event({
+				invocationId: "invocation2",
+				author: "agent",
+				content: { role: "model", parts: [{ text: "two" }] },
+				actions: new EventActions({
+					stateDelta: {
+						local: "temp",
+						"app:theme": "light",
+					},
+				}),
+			}),
+		);
+
+		await runner.rewind({
+			userId,
+			sessionId,
+			rewindBeforeInvocationId: "invocation2",
+		});
+
+		const updated = await runner.sessionService.getSession(
+			runner.appName,
+			userId,
+			sessionId,
+		);
+		expect(updated?.state.local).toBeUndefined();
+		expect(updated?.state["app:theme"]).toBe("light");
+		expect(updated?.state["user:locale"]).toBe("en");
+		expect(updated?.events.at(-1)?.actions?.stateDelta).toEqual({
+			local: null,
+		});
+	});
+
+	it("produces an empty artifact delta when every version already matches", async () => {
+		const session = await runner.sessionService.createSession(
+			runner.appName,
+			userId,
+			{},
+			sessionId,
+		);
+
+		await runner.artifactService?.saveArtifact({
+			appName: runner.appName,
+			userId,
+			sessionId,
+			filename: "stable",
+			artifact: { text: "v0" },
+		});
+
+		await runner.sessionService.appendEvent(
+			session,
+			new Event({
+				invocationId: "invocation1",
+				author: "agent",
+				content: { role: "model", parts: [{ text: "one" }] },
+				actions: new EventActions({
+					artifactDelta: { stable: 0 },
+					stateDelta: { k: "v1" },
+				}),
+			}),
+		);
+		await runner.sessionService.appendEvent(
+			session,
+			new Event({
+				invocationId: "invocation2",
+				author: "agent",
+				content: { role: "model", parts: [{ text: "two" }] },
+				actions: new EventActions({
+					stateDelta: { k: "v2" },
+				}),
+			}),
+		);
+
+		const saveSpy = vi.spyOn(runner.artifactService!, "saveArtifact");
+
+		await runner.rewind({
+			userId,
+			sessionId,
+			rewindBeforeInvocationId: "invocation2",
+		});
+
+		expect(saveSpy).not.toHaveBeenCalled();
+		const updated = await runner.sessionService.getSession(
+			runner.appName,
+			userId,
+			sessionId,
+		);
+		expect(updated?.events.at(-1)?.actions?.artifactDelta).toEqual({});
+		expect(updated?.state.k).toBe("v1");
+	});
+
+	it("treats null artifact versions at the rewind point as empty-blob restores", async () => {
+		const session = await runner.sessionService.createSession(
+			runner.appName,
+			userId,
+			{},
+			sessionId,
+		);
+
+		await runner.sessionService.appendEvent(
+			session,
+			new Event({
+				invocationId: "invocation1",
+				author: "agent",
+				content: { role: "model", parts: [{ text: "one" }] },
+				actions: new EventActions({
+					artifactDelta: { spooky: null as unknown as number },
+				}),
+			}),
+		);
+
+		await runner.artifactService?.saveArtifact({
+			appName: runner.appName,
+			userId,
+			sessionId,
+			filename: "spooky",
+			artifact: { text: "later" },
+		});
+		await runner.sessionService.appendEvent(
+			session,
+			new Event({
+				invocationId: "invocation2",
+				author: "agent",
+				content: { role: "model", parts: [{ text: "two" }] },
+				actions: new EventActions({
+					artifactDelta: { spooky: 0 },
+				}),
+			}),
+		);
+
+		const saveSpy = vi.spyOn(runner.artifactService!, "saveArtifact");
+
+		await runner.rewind({
+			userId,
+			sessionId,
+			rewindBeforeInvocationId: "invocation2",
+		});
+
+		const emptyBlobCall = saveSpy.mock.calls.find(
+			([args]) =>
+				args.filename === "spooky" &&
+				args.artifact?.inlineData?.mimeType === "application/octet-stream" &&
+				args.artifact?.inlineData?.data === "",
+		);
+		expect(emptyBlobCall).toBeTruthy();
+	});
+
+	it("skips events whose actions omit stateDelta while still applying later deltas", async () => {
+		const session = await runner.sessionService.createSession(
+			runner.appName,
+			userId,
+			{},
+			sessionId,
+		);
+
+		const bareActions = new EventActions();
+		delete (bareActions as { stateDelta?: unknown }).stateDelta;
+
+		await runner.sessionService.appendEvent(
+			session,
+			new Event({
+				invocationId: "invocation1",
+				author: "agent",
+				content: { role: "model", parts: [{ text: "bare-actions" }] },
+				actions: bareActions,
+			}),
+		);
+		await runner.sessionService.appendEvent(
+			session,
+			new Event({
+				invocationId: "invocation2",
+				author: "agent",
+				content: { role: "model", parts: [{ text: "with-state" }] },
+				actions: new EventActions({
+					stateDelta: { k: "v2" },
+				}),
+			}),
+		);
+		await runner.sessionService.appendEvent(
+			session,
+			new Event({
+				invocationId: "invocation3",
+				author: "agent",
+				content: { role: "model", parts: [{ text: "later" }] },
+				actions: new EventActions({
+					stateDelta: { k: "v3" },
+				}),
+			}),
+		);
+
+		await runner.rewind({
+			userId,
+			sessionId,
+			rewindBeforeInvocationId: "invocation3",
+		});
+
+		const updated = await runner.sessionService.getSession(
+			runner.appName,
+			userId,
+			sessionId,
+		);
+		expect(updated?.state.k).toBe("v2");
+	});
+
+	it("rewinds state and artifacts together in a single rewind event", async () => {
+		const session = await runner.sessionService.createSession(
+			runner.appName,
+			userId,
+			{},
+			sessionId,
+		);
+
+		await runner.artifactService?.saveArtifact({
+			appName: runner.appName,
+			userId,
+			sessionId,
+			filename: "combo",
+			artifact: { text: "c0" },
+		});
+		await runner.sessionService.appendEvent(
+			session,
+			new Event({
+				invocationId: "invocation1",
+				author: "agent",
+				content: { role: "model", parts: [{ text: "one" }] },
+				actions: new EventActions({
+					stateDelta: { a: "1", b: "1" },
+					artifactDelta: { combo: 0 },
+				}),
+			}),
+		);
+
+		await runner.artifactService?.saveArtifact({
+			appName: runner.appName,
+			userId,
+			sessionId,
+			filename: "combo",
+			artifact: { text: "c1" },
+		});
+		await runner.artifactService?.saveArtifact({
+			appName: runner.appName,
+			userId,
+			sessionId,
+			filename: "extra",
+			artifact: { text: "e0" },
+		});
+		await runner.sessionService.appendEvent(
+			session,
+			new Event({
+				invocationId: "invocation2",
+				author: "agent",
+				content: { role: "model", parts: [{ text: "two" }] },
+				actions: new EventActions({
+					stateDelta: { a: "2", c: "2" },
+					artifactDelta: { combo: 1, extra: 0 },
+				}),
+			}),
+		);
+
+		await runner.rewind({
+			userId,
+			sessionId,
+			rewindBeforeInvocationId: "invocation2",
+		});
+
+		const updated = await runner.sessionService.getSession(
+			runner.appName,
+			userId,
+			sessionId,
+		);
+		expect(updated?.state.a).toBe("1");
+		expect(updated?.state.b).toBe("1");
+		expect(updated?.state.c).toBeUndefined();
+
+		const combo = await runner.artifactService?.loadArtifact({
+			appName: runner.appName,
+			userId,
+			sessionId,
+			filename: "combo",
+		});
+		expect(combo).toEqual({ text: "c0" });
+		const extra = await runner.artifactService?.loadArtifact({
+			appName: runner.appName,
+			userId,
+			sessionId,
+			filename: "extra",
+		});
+		expect(extra).toBeNull();
+
+		const rewindEvent = updated?.events.at(-1);
+		expect(rewindEvent?.actions?.rewindBeforeInvocationId).toBe("invocation2");
+		expect(rewindEvent?.actions?.stateDelta).toEqual({
+			a: "1",
+			c: null,
+		});
+		expect(
+			Object.keys(rewindEvent?.actions?.artifactDelta ?? {}).sort(),
+		).toEqual(["combo", "extra"].sort());
+	});
+
+	it("ignores artifactDelta on events after the rewind point when computing versions at rewind", async () => {
+		const session = await runner.sessionService.createSession(
+			runner.appName,
+			userId,
+			{},
+			sessionId,
+		);
+
+		await runner.artifactService?.saveArtifact({
+			appName: runner.appName,
+			userId,
+			sessionId,
+			filename: "only-later",
+			artifact: { text: "v0" },
+		});
+
+		await runner.sessionService.appendEvent(
+			session,
+			new Event({
+				invocationId: "invocation1",
+				author: "agent",
+				content: { role: "model", parts: [{ text: "one" }] },
+			}),
+		);
+		await runner.sessionService.appendEvent(
+			session,
+			new Event({
+				invocationId: "invocation2",
+				author: "agent",
+				content: { role: "model", parts: [{ text: "two" }] },
+				actions: new EventActions({
+					artifactDelta: { "only-later": 0 },
+				}),
+			}),
+		);
+
+		const saveSpy = vi.spyOn(runner.artifactService!, "saveArtifact");
+
+		await runner.rewind({
+			userId,
+			sessionId,
+			rewindBeforeInvocationId: "invocation2",
+		});
+
+		const emptyBlobCall = saveSpy.mock.calls.find(
+			([args]) =>
+				args.filename === "only-later" &&
+				args.artifact?.inlineData?.mimeType === "application/octet-stream",
+		);
+		expect(emptyBlobCall).toBeTruthy();
+	});
 });
