@@ -214,6 +214,21 @@ describe("GoogleLlm", () => {
 			]);
 		});
 
+		it("convertContents falls back to empty text when parts and content are absent", () => {
+			process.env.GOOGLE_API_KEY = "abc";
+			const llm = new GoogleLlm();
+			const converted = (llm as any).convertContents([
+				{ role: "user" },
+				{ role: "assistant", content: undefined },
+				{ role: "user", parts: undefined, content: "" },
+			]);
+			expect(converted).toEqual([
+				{ role: "user", parts: [{ text: "" }] },
+				{ role: "model", parts: [{ text: "" }] },
+				{ role: "user", parts: [{ text: "" }] },
+			]);
+		});
+
 		it("removeDisplayNameIfPresent nulls displayName", () => {
 			process.env.GOOGLE_API_KEY = "abc";
 			const llm = new GoogleLlm();
