@@ -1,0 +1,116 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+const { unlinkSync, writeFileSync } = vi.hoisted(() => ({
+	unlinkSync: vi.fn(),
+	writeFileSync: vi.fn(),
+}));
+
+vi.mock("node:fs", async (importOriginal) => {
+	const actual = await importOriginal<typeof import("node:fs")>();
+	return {
+		...actual,
+		unlinkSync,
+		writeFileSync,
+	};
+});
+
+import {
+	rag,
+	VertexAiRagMemoryService,
+} from "../../memory/vertex-ai-rag-memory-service";
+
+/**
+ * Eighteenth leftover: parsed JSON `author || ""` / `text || ""` — seventeenth
+ * keeps boolean `true`; fifteenth keeps string `"0"` / `"false"`. Number `1`
+ * is truthy and kept as the numeric value (not coalesced to "").
+ */
+describe("vertex-rag json author/text number-one keep eighteenth leftover", () => {
+	beforeEach(() => {
+		unlinkSync.mockReset();
+		unlinkSync.mockImplementation(() => undefined);
+		writeFileSync.mockReset();
+		writeFileSync.mockImplementation(() => undefined);
+		vi.spyOn(console, "log").mockImplementation(() => undefined);
+		vi.spyOn(console, "warn").mockImplementation(() => undefined);
+	});
+
+	afterEach(() => {
+		vi.restoreAllMocks();
+	});
+
+	it("keeps number 1 author and text from parsed JSON", async () => {
+		const service = new VertexAiRagMemoryService("corpus-18");
+		vi.spyOn(rag, "retrieval_query").mockResolvedValue({
+			contexts: {
+				contexts: [
+					{
+						source_display_name: "app.user.sess",
+						text: JSON.stringify({
+							author: 1,
+							timestamp: 1,
+							text: 1,
+						}),
+					},
+				],
+			},
+		});
+		const result = await service.searchMemory({
+			appName: "app",
+			userId: "user",
+			query: "q",
+		});
+		expect(result.memories).toHaveLength(1);
+		expect(result.memories[0].author).toBe(1);
+		expect(result.memories[0].content?.parts?.[0]?.text).toBe(1);
+	});
+
+	it("boolean true author still kept (seventeenth control)", async () => {
+		const service = new VertexAiRagMemoryService("corpus-18");
+		vi.spyOn(rag, "retrieval_query").mockResolvedValue({
+			contexts: {
+				contexts: [
+					{
+						source_display_name: "app.user.sess",
+						text: JSON.stringify({
+							author: true,
+							timestamp: 1,
+							text: "kept",
+						}),
+					},
+				],
+			},
+		});
+		const result = await service.searchMemory({
+			appName: "app",
+			userId: "user",
+			query: "q",
+		});
+		expect(result.memories).toHaveLength(1);
+		expect(result.memories[0].author).toBe(true);
+	});
+
+	it("numeric 0 author still coalesces to empty (falsy control)", async () => {
+		const service = new VertexAiRagMemoryService("corpus-18");
+		vi.spyOn(rag, "retrieval_query").mockResolvedValue({
+			contexts: {
+				contexts: [
+					{
+						source_display_name: "app.user.sess",
+						text: JSON.stringify({
+							author: 0,
+							timestamp: 1,
+							text: "t",
+						}),
+					},
+				],
+			},
+		});
+		const result = await service.searchMemory({
+			appName: "app",
+			userId: "user",
+			query: "q",
+		});
+		expect(result.memories).toHaveLength(1);
+		expect(result.memories[0].author).toBe("");
+	});
+});
