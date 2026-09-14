@@ -149,4 +149,65 @@ describe("State", () => {
 		const state = State.create({ a: 1, b: 2 }, { b: 9, c: 3 });
 		expect(state.toDict()).toEqual({ a: 1, b: 9, c: 3 });
 	});
+
+	it("set writes through both value and delta stores", () => {
+		const state = State.create({ a: 1 }, {});
+		state.set("a", 2);
+		state.set("b", 3);
+		expect(state.get("a")).toBe(2);
+		expect(state.get("b")).toBe(3);
+		expect(state.hasDelta()).toBe(true);
+		expect(state.toDict()).toEqual({ a: 2, b: 3 });
+	});
+
+	it("get returns undefined default when key is absent", () => {
+		const state = State.create({}, {});
+		expect(state.get("missing")).toBeUndefined();
+		expect(state.get("missing", null)).toBeNull();
+		expect(state.has("missing")).toBe(false);
+	});
+
+	it("has is true for value-only or delta-only keys", () => {
+		const state = State.create({ onlyValue: 1 }, { onlyDelta: 2 });
+		expect(state.has("onlyValue")).toBe(true);
+		expect(state.has("onlyDelta")).toBe(true);
+		expect(state.get("onlyValue")).toBe(1);
+		expect(state.get("onlyDelta")).toBe(2);
+	});
+
+	it("update merges into both stores and preserves prior delta keys", () => {
+		const state = State.create({ a: 1 }, { pending: true });
+		state.update({ a: 5, b: 6 });
+		expect(state.toDict()).toEqual({ a: 5, pending: true, b: 6 });
+		expect(state.hasDelta()).toBe(true);
+	});
+
+	it("proxy set routes underscore-prefixed props as instance fields not state keys", () => {
+		const state = State.create({ keep: 1 }, {});
+		(state as any)._custom = "meta";
+		expect((state as any)._custom).toBe("meta");
+		expect(state.has("_custom")).toBe(false);
+		expect(state.toDict()).toEqual({ keep: 1 });
+		state["ok"] = 2;
+		expect(state.get("ok")).toBe(2);
+	});
+
+	it("prefix constants match documented app/user/temp markers", () => {
+		expect(State.APP_PREFIX).toBe("app:");
+		expect(State.USER_PREFIX).toBe("user:");
+		expect(State.TEMP_PREFIX).toBe("temp:");
+	});
+
+	it("hasDelta is false for empty delta after create", () => {
+		const state = State.create({ a: 1 }, {});
+		expect(state.hasDelta()).toBe(false);
+		state.update({});
+		expect(state.hasDelta()).toBe(false);
+	});
+
+	it("delta overrides value for the same key via proxy get", () => {
+		const state = State.create({ k: "value" }, { k: "delta" });
+		expect(state["k"]).toBe("delta");
+		expect(state.get("k")).toBe("delta");
+	});
 });

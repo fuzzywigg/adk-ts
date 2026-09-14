@@ -170,4 +170,65 @@ describe("BaseSessionService.appendEvent", () => {
 		).toEqual(["b"]);
 		expect(await service.getSession("app", "user", "a")).toBeUndefined();
 	});
+
+	it("appendEvent with stateDelta null deletes keys and skips temp_ prefix", async () => {
+		const service = new InMemoryStubSessionService();
+		const session = await service.createSession(
+			"app",
+			"user",
+			{ keep: 1, remove: 2, temp_scratch: 3 },
+			"delta",
+		);
+		await service.appendEvent(session, {
+			author: "agent",
+			actions: {
+				stateDelta: {
+					remove: null,
+					temp_scratch: "ignored",
+					added: "yes",
+				},
+			},
+		} as any);
+		expect(session.state.keep).toBe(1);
+		expect(session.state.remove).toBeUndefined();
+		expect(session.state.temp_scratch).toBe(3);
+		expect(session.state.added).toBe("yes");
+		expect(session.events).toHaveLength(1);
+	});
+
+	it("appendEvent no-ops state when actions or stateDelta are missing", async () => {
+		const service = new InMemoryStubSessionService();
+		const session = await service.createSession(
+			"app",
+			"user",
+			{ a: 1 },
+			"noop",
+		);
+		await service.appendEvent(session, {
+			author: "agent",
+			content: { parts: [{ text: "x" }] },
+		} as any);
+		await service.appendEvent(session, {
+			author: "agent",
+			actions: {},
+		} as any);
+		expect(session.state).toEqual({ a: 1 });
+		expect(session.events).toHaveLength(2);
+	});
+
+	it("appendEvent with undefined stateDelta value deletes the key", async () => {
+		const service = new InMemoryStubSessionService();
+		const session = await service.createSession(
+			"app",
+			"user",
+			{ soft: "yes" },
+			"undef",
+		);
+		await service.appendEvent(session, {
+			author: "agent",
+			actions: { stateDelta: { soft: undefined } },
+		} as any);
+		expect(session.state.soft).toBeUndefined();
+		expect(Object.hasOwn(session.state, "soft")).toBe(false);
+	});
 });

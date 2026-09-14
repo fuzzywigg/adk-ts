@@ -224,4 +224,68 @@ describe("isArtifactRef", () => {
 			}),
 		).toBe(false);
 	});
+
+	it("is false when fileData is absent entirely", () => {
+		expect(isArtifactRef({ text: "x" })).toBe(false);
+		expect(isArtifactRef({} as any)).toBe(false);
+	});
+});
+
+describe("parseArtifactUri edge matrix", () => {
+	it.each([
+		[
+			"session scoped",
+			"artifact://apps/A/users/U/sessions/S/artifacts/f.txt/versions/0",
+			{
+				appName: "A",
+				userId: "U",
+				sessionId: "S",
+				filename: "f.txt",
+				version: 0,
+			},
+		],
+		[
+			"user scoped",
+			"artifact://apps/A/users/U/artifacts/user:f.json/versions/9",
+			{
+				appName: "A",
+				userId: "U",
+				sessionId: undefined,
+				filename: "user:f.json",
+				version: 9,
+			},
+		],
+	])("parses %s URIs", (_label, uri, expected) => {
+		expect(parseArtifactUri(uri)).toEqual(expected);
+	});
+
+	it("rejects trailing slash and missing versions segment", () => {
+		expect(
+			parseArtifactUri(
+				"artifact://apps/a/users/u/sessions/s/artifacts/f/versions/1/",
+			),
+		).toBeNull();
+		expect(
+			parseArtifactUri("artifact://apps/a/users/u/sessions/s/artifacts/f"),
+		).toBeNull();
+	});
+
+	it("round-trips getArtifactUri for user-scoped filenames", () => {
+		const uri = getArtifactUri({
+			appName: "app",
+			userId: "user",
+			filename: "user:prefs.json",
+			version: 2,
+		});
+		expect(uri).toBe(
+			"artifact://apps/app/users/user/artifacts/user:prefs.json/versions/2",
+		);
+		expect(parseArtifactUri(uri)).toEqual({
+			appName: "app",
+			userId: "user",
+			sessionId: undefined,
+			filename: "user:prefs.json",
+			version: 2,
+		});
+	});
 });
