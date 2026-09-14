@@ -58,8 +58,9 @@ describe("LlmEventSummarizer fourth leftover edges", () => {
 				await summarizer.maybeSummarizeEvents(events);
 				const promptText = (mockLlm.generateContentAsync as any).mock
 					.calls[0][0].contents[0].parts[0].text as string;
-				expect(promptText).toContain(`${author}:`);
-				expect(promptText).toContain(`msg-from-${author || "empty"}`);
+				expect(promptText).toContain(
+					`] ${author}: msg-from-${author || "empty"}`,
+				);
 			});
 		}
 
