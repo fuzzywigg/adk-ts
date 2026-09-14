@@ -422,10 +422,11 @@ describe("VertexAiSessionService leftover LRO/GET and name edges", () => {
 			.mockResolvedValue({ done: false });
 
 		const pending = service.createSession("app", "u");
-		await vi.runAllTimersAsync();
-		await expect(pending).rejects.toThrow(
+		const assertion = expect(pending).rejects.toThrow(
 			/Timeout waiting for operation op-to to complete/,
 		);
+		await vi.runAllTimersAsync();
+		await assertion;
 	});
 
 	it("getSession returns undefined and logs when the session GET fails", async () => {

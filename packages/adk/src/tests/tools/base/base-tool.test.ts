@@ -1224,6 +1224,7 @@ describe("BaseTool leftover retry backoff and validation edges", () => {
 	});
 
 	it("safeExecute reports the last Error message after exhausting retries", async () => {
+		vi.useFakeTimers();
 		const tool = new StubTool(
 			{
 				name: "always_fail",
@@ -1239,13 +1240,15 @@ describe("BaseTool leftover retry backoff and validation edges", () => {
 		tool.maxRetryDelay = 1;
 		const random = vi.spyOn(Math, "random").mockReturnValue(0);
 		const error = vi.spyOn(console, "error").mockImplementation(() => {});
-		const result = await tool.safeExecute({ query: "x" }, makeContext());
-		expect(result).toEqual({
+		const pending = tool.safeExecute({ query: "x" }, makeContext());
+		await vi.runAllTimersAsync();
+		await expect(pending).resolves.toEqual({
 			error: "Execution failed",
 			message: "persistent failure",
 			tool: "always_fail",
 		});
 		error.mockRestore();
 		random.mockRestore();
+		vi.useRealTimers();
 	});
 });
