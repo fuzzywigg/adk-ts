@@ -144,4 +144,69 @@ describe("auth credentials", () => {
 		expect(credential.canRefresh()).toBe(false);
 		expect(credential.type).toBe(AuthCredentialType.BEARER);
 	});
+
+	it("exposes Basic and OAuth2 credential types", () => {
+		expect(new BasicAuthCredential("u", "p").type).toBe(
+			AuthCredentialType.BASIC,
+		);
+		expect(new OAuth2Credential({ accessToken: "a" }).type).toBe(
+			AuthCredentialType.OAUTH2,
+		);
+	});
+
+	it("canRefresh is false when only refreshToken or only refreshFunction is set", () => {
+		const tokenOnly = new OAuth2Credential({
+			accessToken: "a",
+			refreshToken: "r",
+		});
+		expect(tokenOnly.canRefresh()).toBe(false);
+
+		const fnOnly = new OAuth2Credential({
+			accessToken: "a",
+			refreshFunction: async () => ({ accessToken: "b" }),
+		});
+		expect(fnOnly.canRefresh()).toBe(false);
+	});
+
+	it("refresh without expiresIn leaves prior expiresAt unchanged", async () => {
+		const credential = new OAuth2Credential({
+			accessToken: "access",
+			refreshToken: "refresh",
+			expiresIn: 3600,
+			refreshFunction: async () => ({
+				accessToken: "next-access",
+				refreshToken: "next-refresh",
+			}),
+		});
+		const priorExpiry = credential.expiresAt!.getTime();
+		await credential.refresh();
+		expect(credential.getToken()).toBe("next-access");
+		expect(credential.refreshToken).toBe("next-refresh");
+		expect(credential.expiresAt!.getTime()).toBe(priorExpiry);
+	});
+
+	it("marks oauth tokens outside the skew window as not expired", () => {
+		const credential = new OAuth2Credential({
+			accessToken: "access",
+			refreshToken: "refresh",
+			expiresIn: 120,
+			refreshFunction: async () => ({ accessToken: "next" }),
+		});
+		expect(credential.isExpired()).toBe(false);
+	});
+
+	it("base AuthCredential canRefresh defaults to false", () => {
+		class Unsupported extends AuthCredential {
+			getToken() {
+				return "x";
+			}
+			getHeaders() {
+				return {};
+			}
+		}
+		expect(new Unsupported(AuthCredentialType.CUSTOM).canRefresh()).toBe(false);
+		expect(new Unsupported(AuthCredentialType.CUSTOM).type).toBe(
+			AuthCredentialType.CUSTOM,
+		);
+	});
 });

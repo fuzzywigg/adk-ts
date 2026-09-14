@@ -76,4 +76,30 @@ describe("RunConfig", () => {
 		expect(warn).toHaveBeenCalledOnce();
 		expect(warn.mock.calls[0][0]).toContain("no enforcement");
 	});
+
+	it("warns for negative maxLlmCalls as well as zero", () => {
+		const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+		new RunConfig({ maxLlmCalls: -1 });
+		expect(warn).toHaveBeenCalledOnce();
+		expect(warn.mock.calls[0][0]).toContain("less than or equal to 0");
+	});
+
+	it("exposes StreamingMode enum values", () => {
+		expect(StreamingMode.NONE).toBe("NONE");
+		expect(StreamingMode.SSE).toBe("sse");
+		expect(StreamingMode.BIDI).toBe("bidi");
+	});
+
+	it("treats omitted boolean flags as false via || defaults", () => {
+		const config = new RunConfig({
+			saveInputBlobsAsArtifacts: undefined,
+			supportCFC: undefined,
+			streamingMode: undefined,
+			maxLlmCalls: undefined,
+		});
+		expect(config.saveInputBlobsAsArtifacts).toBe(false);
+		expect(config.supportCFC).toBe(false);
+		expect(config.streamingMode).toBe(StreamingMode.NONE);
+		expect(config.maxLlmCalls).toBe(500);
+	});
 });

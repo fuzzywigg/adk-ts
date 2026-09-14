@@ -19,6 +19,8 @@ vi.mock("@adk/helpers/logger", () => ({
 class MockAgent extends BaseAgent {
 	public executionCount = 0;
 	public errorMode = false;
+	public throwValue: unknown = undefined;
+	public yieldNothing = false;
 	public eventsToYield: Event[] = [];
 
 	constructor(name: string) {
@@ -26,12 +28,20 @@ class MockAgent extends BaseAgent {
 	}
 
 	async *runAsync(
-		ctx: InvocationContext,
+		_ctx: InvocationContext,
 	): AsyncGenerator<Event, void, unknown> {
 		this.executionCount++;
 
+		if (this.throwValue !== undefined) {
+			throw this.throwValue;
+		}
+
 		if (this.errorMode) {
 			throw new Error(`Error in ${this.name}`);
+		}
+
+		if (this.yieldNothing) {
+			return;
 		}
 
 		for (const event of this.eventsToYield) {
@@ -454,7 +464,7 @@ describe("LangGraphAgent", () => {
 	});
 
 	describe("runLiveImpl", () => {
-		it("should delegate to runAsyncImpl", async () => {
+		it("should delegate to runAsyncImpl when invoked directly", async () => {
 			const graph = new LangGraphAgent({
 				name: "LiveGraph",
 				description: "Live graph test",
@@ -463,10 +473,275 @@ describe("LangGraphAgent", () => {
 			});
 
 			const runAsyncImplSpy = vi.spyOn(graph as any, "runAsyncImpl");
-			await executeGraphAndGetEvents(graph, mockContext);
+			const liveEvents: Event[] = [];
+			for await (const event of graph["runLiveImpl"](mockContext)) {
+				liveEvents.push(event);
+			}
 
 			expect(runAsyncImplSpy).toHaveBeenCalledOnce();
 			expect(runAsyncImplSpy).toHaveBeenCalledWith(mockContext);
+			expect(liveEvents.length).toBeGreaterThan(0);
+			expect(liveEvents[liveEvents.length - 1].turnComplete).toBe(true);
+		});
+	});
+
+	describe("Leftover deepen (post #90/#91) — parallel, throws, edges", () => {
+		it("executes true parallel fan-out when multiple conditions pass", async () => {
+			const branchNodeA = {
+				name: "NodeA",
+				agent: agentA,
+				targets: ["BranchB", "BranchC"],
+			};
+			const branchNodeB = {
+				name: "BranchB",
+				agent: agentB,
+				targets: [],
+				condition: () => true,
+			};
+			const branchNodeC = {
+				name: "BranchC",
+				agent: agentC,
+				targets: [],
+				condition: async () => true,
+			};
+
+			const graph = new LangGraphAgent({
+				name: "FanOutGraph",
+				description: "Parallel fan-out",
+				nodes: [branchNodeA, branchNodeB, branchNodeC],
+				rootNode: "NodeA",
+			});
+
+			const events = await executeGraphAndGetEvents(graph, mockContext);
+
+			expect(agentA.executionCount).toBe(1);
+			expect(agentB.executionCount).toBe(1);
+			expect(agentC.executionCount).toBe(1);
+			expect(events[events.length - 1].content?.parts[0].text).toContain(
+				"NodeA → BranchB → BranchC",
+			);
+		});
+
+		it("stringifies non-Error throws from node agents", async () => {
+			const thrower = new MockAgent("StringThrow");
+			thrower.throwValue = "plain-string-failure";
+			const root = {
+				name: "Root",
+				agent: thrower,
+				targets: [],
+			};
+			const graph = new LangGraphAgent({
+				name: "StringErrorGraph",
+				description: "non-Error throw",
+				nodes: [root],
+				rootNode: "Root",
+			});
+
+			const events = await executeGraphAndGetEvents(graph, mockContext);
+			expect(events).toHaveLength(1);
+			expect(events[0].errorCode).toBe("NODE_EXECUTION_ERROR");
+			expect(events[0].errorMessage).toBe("plain-string-failure");
+			expect(events[0].content?.parts[0].text).toContain(
+				'Error in node "Root": plain-string-failure',
+			);
+		});
+
+		it("stringifies object throws from node agents", async () => {
+			const thrower = new MockAgent("ObjectThrow");
+			thrower.throwValue = { code: 42, detail: "boom" };
+			const root = {
+				name: "Root",
+				agent: thrower,
+				targets: [],
+			};
+			const graph = new LangGraphAgent({
+				name: "ObjectErrorGraph",
+				description: "object throw",
+				nodes: [root],
+				rootNode: "Root",
+			});
+
+			const events = await executeGraphAndGetEvents(graph, mockContext);
+			expect(events[0].errorMessage).toBe("[object Object]");
+			expect(events[0].content?.parts[0].text).toContain("[object Object]");
+		});
+
+		it("skips downstream when a node yields zero events", async () => {
+			const silent = new MockAgent("Silent");
+			silent.yieldNothing = true;
+			const next = new MockAgent("Next");
+			const graph = new LangGraphAgent({
+				name: "SilentGraph",
+				description: "zero events",
+				nodes: [
+					{ name: "Silent", agent: silent, targets: ["Next"] },
+					{ name: "Next", agent: next, targets: [] },
+				],
+				rootNode: "Silent",
+			});
+
+			const events = await executeGraphAndGetEvents(graph, mockContext);
+			expect(next.executionCount).toBe(0);
+			expect(events).toHaveLength(1);
+			expect(events[0].content?.parts[0].text).toContain(
+				"Executed nodes: Silent",
+			);
+			expect(events[0].turnComplete).toBe(true);
+		});
+
+		it("treats undefined targets like an empty terminal list", async () => {
+			const terminal = {
+				name: "Terminal",
+				agent: agentA,
+				targets: undefined,
+			};
+			const graph = new LangGraphAgent({
+				name: "UndefTargets",
+				description: "undefined targets",
+				nodes: [terminal],
+				rootNode: "Terminal",
+			});
+
+			const next = await graph["getNextNodes"](
+				terminal,
+				new Event({ author: "x" }),
+				mockContext,
+			);
+			expect(next).toEqual([]);
+
+			const events = await executeGraphAndGetEvents(graph, mockContext);
+			expect(events[events.length - 1].turnComplete).toBe(true);
+		});
+
+		it("populates subAgents from each node agent at construction", () => {
+			const graph = new LangGraphAgent({
+				name: "SubAgentsGraph",
+				description: "subAgents",
+				nodes: [nodeA, nodeB, nodeC],
+				rootNode: "NodeA",
+			});
+			expect(graph.subAgents).toEqual([agentA, agentB, agentC]);
+		});
+
+		it("getNextNodes logs and skips missing targets after map mutation", async () => {
+			const gone = { name: "Gone", agent: agentC, targets: [] };
+			const source = {
+				name: "Source",
+				agent: agentA,
+				targets: ["Gone", "StillHere"],
+			};
+			const stillHere = { name: "StillHere", agent: agentB, targets: [] };
+			const graph = new LangGraphAgent({
+				name: "MissingTargetGraph",
+				description: "missing target continue",
+				nodes: [source, gone, stillHere],
+				rootNode: "Source",
+			});
+
+			(graph as any).nodes.delete("Gone");
+			const loggerError = vi.spyOn((graph as any).logger, "error");
+			const next = await graph["getNextNodes"](
+				source,
+				new Event({ author: "x" }),
+				mockContext,
+			);
+
+			expect(loggerError).toHaveBeenCalledWith('Target node "Gone" not found');
+			expect(next.map((n) => n.name)).toEqual(["StillHere"]);
+		});
+
+		it("getExecutionResults returns a defensive array copy", async () => {
+			const graph = new LangGraphAgent({
+				name: "CopyGraph",
+				description: "defensive copy",
+				nodes: [nodeC],
+				rootNode: "NodeC",
+			});
+			await executeGraphAndGetEvents(graph, mockContext);
+			const results = graph.getExecutionResults();
+			expect(results).toHaveLength(1);
+			results.push({ node: "injected", events: [] });
+			expect(graph.getExecutionResults()).toHaveLength(1);
+			expect(graph.getExecutionResults()).not.toBe(results);
+		});
+
+		it("maxSteps of 1 yields one node then turnComplete completion", async () => {
+			const graph = new LangGraphAgent({
+				name: "OneStep",
+				description: "maxSteps boundary",
+				nodes: [nodeA, nodeB, nodeC],
+				rootNode: "NodeA",
+				maxSteps: 1,
+			});
+
+			const events = await executeGraphAndGetEvents(graph, mockContext);
+			expect(agentA.executionCount).toBe(1);
+			expect(agentB.executionCount).toBe(0);
+			expect(events).toHaveLength(2);
+			expect(events[0].author).toBe("AgentA");
+			expect(events[1].turnComplete).toBe(true);
+			expect(events[1].content?.parts[0].text).toContain(
+				"Executed nodes: NodeA",
+			);
+		});
+
+		it("supports sync boolean conditions without Promise wrapping", async () => {
+			const syncTrue = vi.fn(() => true);
+			const syncFalse = vi.fn(() => false);
+			const root = {
+				name: "Root",
+				agent: agentA,
+				targets: ["Yes", "No"],
+			};
+			const yes = {
+				name: "Yes",
+				agent: agentB,
+				targets: [],
+				condition: syncTrue,
+			};
+			const no = {
+				name: "No",
+				agent: agentC,
+				targets: [],
+				condition: syncFalse,
+			};
+
+			const graph = new LangGraphAgent({
+				name: "SyncCond",
+				description: "sync conditions",
+				nodes: [root, yes, no],
+				rootNode: "Root",
+			});
+
+			const events = await executeGraphAndGetEvents(graph, mockContext);
+			expect(syncTrue).toHaveBeenCalledOnce();
+			expect(syncFalse).toHaveBeenCalledOnce();
+			expect(agentB.executionCount).toBe(1);
+			expect(agentC.executionCount).toBe(0);
+			expect(events[events.length - 1].content?.parts[0].text).toContain(
+				"Root → Yes",
+			);
+		});
+
+		it("records custom events yielded by a node before its default output", async () => {
+			agentA.eventsToYield = [
+				new Event({
+					author: "AgentA",
+					content: { parts: [{ text: "preamble" }] },
+				}),
+			];
+			const graph = new LangGraphAgent({
+				name: "CustomEvents",
+				description: "custom yield",
+				nodes: [{ name: "Only", agent: agentA, targets: [] }],
+				rootNode: "Only",
+			});
+
+			const events = await executeGraphAndGetEvents(graph, mockContext);
+			expect(events[0].content?.parts[0].text).toBe("preamble");
+			expect(events[1].content?.parts[0].text).toBe("Output from AgentA");
+			const results = graph.getExecutionResults();
+			expect(results[0].events).toHaveLength(2);
 		});
 	});
 });
