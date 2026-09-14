@@ -170,4 +170,66 @@ describe("BaseSessionService.appendEvent", () => {
 		).toEqual(["b"]);
 		expect(await service.getSession("app", "user", "a")).toBeUndefined();
 	});
+
+	it("ignores non-own stateDelta keys via Object.hasOwn", async () => {
+		const service = new InMemoryStubSessionService();
+		const session = await service.createSession("app", "user", {}, "s1");
+		const proto = { inherited: "nope" };
+		const stateDelta = Object.create(proto) as Record<string, unknown>;
+		stateDelta.own = "yes";
+
+		await service.appendEvent(session, {
+			author: "agent",
+			actions: { stateDelta },
+		} as Event);
+
+		expect(session.state.own).toBe("yes");
+		expect(session.state.inherited).toBeUndefined();
+	});
+
+	it("appendEvent with actions but null stateDelta leaves state untouched", async () => {
+		const service = new InMemoryStubSessionService();
+		const session = await service.createSession("app", "user", { a: 1 }, "s1");
+		await service.appendEvent(session, {
+			author: "agent",
+			actions: { stateDelta: null },
+		} as Event);
+		expect(session.state).toEqual({ a: 1 });
+		expect(session.events).toHaveLength(1);
+	});
+
+	it("partial events return early without pushing to session.events", async () => {
+		const service = new InMemoryStubSessionService();
+		const session = await service.createSession("app", "user", { a: 1 }, "s1");
+		const event = {
+			author: "agent",
+			partial: true,
+			actions: { stateDelta: { a: 2 } },
+		} as Event;
+
+		await expect(service.appendEvent(session, event)).resolves.toBe(event);
+		expect(session.events).toHaveLength(0);
+		expect(session.state.a).toBe(1);
+	});
+
+	it("deletes keys when stateDelta values are null or undefined", async () => {
+		const service = new InMemoryStubSessionService();
+		const session = await service.createSession(
+			"app",
+			"user",
+			{ keep: 1, dropNull: 2, dropUndef: 3 },
+			"s1",
+		);
+		await service.appendEvent(session, {
+			author: "agent",
+			actions: {
+				stateDelta: {
+					dropNull: null,
+					dropUndef: undefined,
+					keep: 9,
+				},
+			},
+		} as Event);
+		expect(session.state).toEqual({ keep: 9 });
+	});
 });

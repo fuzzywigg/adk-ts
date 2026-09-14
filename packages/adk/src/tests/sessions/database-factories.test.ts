@@ -212,4 +212,96 @@ describe("database-factories", () => {
 			max: 3,
 		});
 	});
+
+	it("createDatabaseSessionService forwards options on mysql:// URLs", () => {
+		const createPool = vi.fn().mockReturnValue({
+			end: vi.fn(),
+			query: vi.fn(),
+		});
+		Module.prototype.require = function (
+			this: NodeModule,
+			id: string,
+			...rest: unknown[]
+		) {
+			if (id === "mysql2") {
+				return { createPool };
+			}
+			return originalRequire.apply(this, [id, ...rest] as [string]);
+		} as typeof Module.prototype.require;
+
+		createDatabaseSessionService("mysql://localhost/db", {
+			connectionLimit: 8,
+		});
+		expect(createPool).toHaveBeenCalledWith({
+			uri: "mysql://localhost/db",
+			connectionLimit: 8,
+		});
+	});
+
+	it("strips sqlite:// prefix for relative and absolute filenames", () => {
+		const Database = vi.fn().mockImplementation(() => ({
+			close: vi.fn(),
+			prepare: vi.fn(),
+		}));
+		Module.prototype.require = function (
+			this: NodeModule,
+			id: string,
+			...rest: unknown[]
+		) {
+			if (id === "better-sqlite3") {
+				return Database;
+			}
+			return originalRequire.apply(this, [id, ...rest] as [string]);
+		} as typeof Module.prototype.require;
+
+		createDatabaseSessionService("sqlite://relative.db");
+		expect(Database).toHaveBeenCalledWith("relative.db", undefined);
+
+		Database.mockClear();
+		createDatabaseSessionService("sqlite:////tmp/abs.db", { readonly: true });
+		expect(Database).toHaveBeenCalledWith("//tmp/abs.db", { readonly: true });
+	});
+
+	it("routes .db filenames without a scheme to sqlite", () => {
+		const Database = vi.fn().mockImplementation(() => ({
+			close: vi.fn(),
+			prepare: vi.fn(),
+		}));
+		Module.prototype.require = function (
+			this: NodeModule,
+			id: string,
+			...rest: unknown[]
+		) {
+			if (id === "better-sqlite3") {
+				return Database;
+			}
+			return originalRequire.apply(this, [id, ...rest] as [string]);
+		} as typeof Module.prototype.require;
+
+		createDatabaseSessionService("/var/data/app.db");
+		expect(Database).toHaveBeenCalledWith("/var/data/app.db", undefined);
+	});
+
+	it("routes postgres:// the same as postgresql://", () => {
+		const Pool = vi.fn().mockImplementation(() => ({
+			on: vi.fn(),
+			end: vi.fn(),
+			connect: vi.fn(),
+		}));
+		Module.prototype.require = function (
+			this: NodeModule,
+			id: string,
+			...rest: unknown[]
+		) {
+			if (id === "pg") {
+				return { Pool };
+			}
+			return originalRequire.apply(this, [id, ...rest] as [string]);
+		} as typeof Module.prototype.require;
+
+		createDatabaseSessionService("postgres://localhost/db");
+		expect(Pool).toHaveBeenCalledWith({
+			connectionString: "postgres://localhost/db",
+		});
+	});
 });

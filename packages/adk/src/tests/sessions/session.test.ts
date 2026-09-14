@@ -70,4 +70,31 @@ describe("Session", () => {
 		);
 		expect(session.events.map((e) => e.author)).toEqual(["user", "agent"]);
 	});
+
+	it("allows replacing the entire events array reference", () => {
+		const session: Session = {
+			id: "sess-5",
+			appName: "app",
+			userId: "u",
+			state: {},
+			events: [{ author: "old" } as Session["events"][number]],
+			lastUpdateTime: 1,
+		};
+		session.events = [{ author: "new" } as Session["events"][number]];
+		expect(session.events).toHaveLength(1);
+		expect(session.events[0].author).toBe("new");
+	});
+
+	it("treats lastUpdateTime as a mutable number field", () => {
+		const session: Session = {
+			id: "sess-6",
+			appName: "app",
+			userId: "u",
+			state: {},
+			events: [],
+			lastUpdateTime: 0,
+		};
+		session.lastUpdateTime = Number.MAX_SAFE_INTEGER;
+		expect(session.lastUpdateTime).toBe(Number.MAX_SAFE_INTEGER);
+	});
 });

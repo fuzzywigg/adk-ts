@@ -224,4 +224,74 @@ describe("isArtifactRef", () => {
 			}),
 		).toBe(false);
 	});
+
+	it("parseArtifactUri returns null for non-artifact schemes and partial paths", () => {
+		expect(parseArtifactUri("gs://bucket/obj")).toBeNull();
+		expect(parseArtifactUri("artifact://apps/only")).toBeNull();
+		expect(
+			parseArtifactUri(
+				"artifact://apps/a/users/u/sessions/s/artifacts/f/versions/x",
+			),
+		).toBeNull();
+	});
+
+	it("parseArtifactUri accepts version 0 for session and user scopes", () => {
+		expect(
+			parseArtifactUri(
+				"artifact://apps/a/users/u/sessions/s/artifacts/f/versions/0",
+			),
+		).toEqual({
+			appName: "a",
+			userId: "u",
+			sessionId: "s",
+			filename: "f",
+			version: 0,
+		});
+		expect(
+			parseArtifactUri("artifact://apps/a/users/u/artifacts/f/versions/0"),
+		).toEqual({
+			appName: "a",
+			userId: "u",
+			sessionId: undefined,
+			filename: "f",
+			version: 0,
+		});
+	});
+
+	it("getArtifactUri builds session and user scoped URIs", () => {
+		expect(
+			getArtifactUri({
+				appName: "app",
+				userId: "u",
+				sessionId: "s",
+				filename: "f.txt",
+				version: 3,
+			}),
+		).toBe("artifact://apps/app/users/u/sessions/s/artifacts/f.txt/versions/3");
+		expect(
+			getArtifactUri({
+				appName: "app",
+				userId: "u",
+				filename: "user:f.txt",
+				version: 1,
+			}),
+		).toBe("artifact://apps/app/users/u/artifacts/user:f.txt/versions/1");
+	});
+
+	it("round-trips getArtifactUri through parseArtifactUri", () => {
+		const sessionUri = getArtifactUri({
+			appName: "demo",
+			userId: "alice",
+			sessionId: "s1",
+			filename: "note.txt",
+			version: 2,
+		});
+		expect(parseArtifactUri(sessionUri)).toEqual({
+			appName: "demo",
+			userId: "alice",
+			sessionId: "s1",
+			filename: "note.txt",
+			version: 2,
+		});
+	});
 });

@@ -24,4 +24,26 @@ describe("formatTimestamp", () => {
 		expect(parsed).toBeGreaterThanOrEqual(before);
 		expect(parsed).toBeLessThanOrEqual(after + 5);
 	});
+
+	it("formats epoch 0 as the Unix epoch ISO string", () => {
+		expect(formatTimestamp(0)).toBe(new Date(0).toISOString());
+	});
+
+	it("formats negative epoch milliseconds", () => {
+		expect(formatTimestamp(-1000)).toBe(new Date(-1000).toISOString());
+	});
+
+	it("NaN numbers throw RangeError from Date.toISOString", () => {
+		expect(() => formatTimestamp(Number.NaN)).toThrow(RangeError);
+	});
+
+	it("passes through empty strings unchanged", () => {
+		expect(formatTimestamp("")).toBe("");
+	});
+
+	it("formats Date at a known UTC instant", () => {
+		expect(formatTimestamp(new Date(Date.UTC(1970, 0, 1)))).toBe(
+			"1970-01-01T00:00:00.000Z",
+		);
+	});
 });

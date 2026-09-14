@@ -396,4 +396,141 @@ describe("GcsArtifactService", () => {
 			},
 		});
 	});
+
+	it("surfaces blob.save failures from saveArtifact", async () => {
+		getFilesMock.mockResolvedValueOnce([[]]);
+		saveMock.mockRejectedValueOnce(new Error("precondition failed"));
+		const service = new GcsArtifactService("b");
+		await expect(
+			service.saveArtifact({
+				...base,
+				filename: "fail.txt",
+				artifact: {
+					inlineData: { data: "x", mimeType: "text/plain" },
+				},
+			}),
+		).rejects.toThrow(/precondition failed/);
+	});
+
+	it("surfaces getFiles failures from listVersions", async () => {
+		getFilesMock.mockRejectedValueOnce(new Error("list failed"));
+		const service = new GcsArtifactService("b");
+		await expect(
+			service.listVersions({ ...base, filename: "note.txt" }),
+		).rejects.toThrow(/list failed/);
+	});
+
+	it("surfaces getFiles failures from listArtifactKeys", async () => {
+		getFilesMock.mockRejectedValueOnce(new Error("session list boom"));
+		const service = new GcsArtifactService("b");
+		await expect(service.listArtifactKeys(base)).rejects.toThrow(
+			/session list boom/,
+		);
+	});
+
+	it("rejects deleteArtifact when any version delete fails", async () => {
+		getFilesMock.mockResolvedValue([
+			[
+				{ name: "app/user-1/sess-1/note.txt/0" },
+				{ name: "app/user-1/sess-1/note.txt/1" },
+			],
+		]);
+		deleteMock
+			.mockResolvedValueOnce(undefined)
+			.mockRejectedValueOnce(new Error("delete denied"));
+		const service = new GcsArtifactService("b");
+		await expect(
+			service.deleteArtifact({ ...base, filename: "note.txt" }),
+		).rejects.toThrow(/delete denied/);
+	});
+
+	it("loadArtifact rethrows non-404 errors from getMetadata", async () => {
+		getMetadataMock.mockRejectedValueOnce(
+			Object.assign(new Error("forbidden"), { code: 403 }),
+		);
+		const service = new GcsArtifactService("b");
+		await expect(
+			service.loadArtifact({ ...base, filename: "note.txt", version: 0 }),
+		).rejects.toThrow(/forbidden/);
+	});
+
+	it("loadArtifact rethrows string-coded errors that are not 404", async () => {
+		getMetadataMock.mockRejectedValueOnce(
+			Object.assign(new Error("rate limited"), { code: "RATE_LIMIT" }),
+		);
+		const service = new GcsArtifactService("b");
+		await expect(
+			service.loadArtifact({ ...base, filename: "note.txt", version: 0 }),
+		).rejects.toThrow(/rate limited/);
+	});
+
+	it("listVersions skips blob names that are not 5-segment paths", async () => {
+		getFilesMock.mockResolvedValue([
+			[
+				{ name: "app/user-1/sess-1/note.txt/0" },
+				{ name: "app/user-1/sess-1/note.txt/bad/extra" },
+				{ name: "app/user-1/sess-1/note.txt/not-a-number" },
+				{ name: "app/user-1/sess-1/note.txt/2" },
+			],
+		]);
+		const service = new GcsArtifactService("b");
+		await expect(
+			service.listVersions({ ...base, filename: "note.txt" }),
+		).resolves.toEqual([0, 2]);
+	});
+
+	it("listArtifactKeys ignores blobs that are not exactly 5 path segments", async () => {
+		getFilesMock
+			.mockResolvedValueOnce([
+				[
+					{ name: "app/user-1/sess-1/ok.txt/0" },
+					{ name: "app/user-1/sess-1/short" },
+					{ name: "app/user-1/sess-1/nested/dir/file.txt/0" },
+				],
+			])
+			.mockResolvedValueOnce([[]]);
+		const service = new GcsArtifactService("b");
+		await expect(service.listArtifactKeys(base)).resolves.toEqual(["ok.txt"]);
+	});
+
+	it("saveArtifact propagates listVersions failures before writing", async () => {
+		getFilesMock.mockRejectedValueOnce(new Error("cannot list"));
+		const service = new GcsArtifactService("b");
+		await expect(
+			service.saveArtifact({
+				...base,
+				filename: "blocked.txt",
+				artifact: {
+					inlineData: { data: "x", mimeType: "text/plain" },
+				},
+			}),
+		).rejects.toThrow(/cannot list/);
+		expect(saveMock).not.toHaveBeenCalled();
+	});
+
+	it("loadArtifact returns null when latest list is empty", async () => {
+		getFilesMock.mockResolvedValueOnce([[]]);
+		const service = new GcsArtifactService("b");
+		await expect(
+			service.loadArtifact({ ...base, filename: "missing.txt" }),
+		).resolves.toBeNull();
+		expect(downloadMock).not.toHaveBeenCalled();
+	});
+
+	it("loadArtifact uses application/octet-stream when contentType is missing", async () => {
+		getMetadataMock.mockResolvedValue([{}]);
+		downloadMock.mockResolvedValue([Buffer.from("bin")]);
+		const service = new GcsArtifactService("b");
+		const part = await service.loadArtifact({
+			...base,
+			filename: "bin.dat",
+			version: 0,
+		});
+		expect(part).toEqual({
+			inlineData: {
+				data: "bin",
+				mimeType: "application/octet-stream",
+			},
+		});
+	});
 });

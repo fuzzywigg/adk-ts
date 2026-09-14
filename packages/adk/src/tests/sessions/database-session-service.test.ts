@@ -923,4 +923,205 @@ describe("DatabaseSessionService (sqlite :memory:)", () => {
 			),
 		).rejects.toThrow();
 	});
+
+	it("getSession tolerates corrupt JSON in session/app state columns", async () => {
+		await service.createSession("app", "user", { ok: 1 }, "corrupt");
+		const db = (service as any).db;
+		await db
+			.updateTable("sessions")
+			.set({ state: "{not-json" })
+			.where("id", "=", "corrupt")
+			.execute();
+		await db
+			.updateTable("app_states")
+			.set({ state: "" })
+			.where("app_name", "=", "app")
+			.execute();
+		await db
+			.updateTable("user_states")
+			.set({ state: "{also-bad" })
+			.where("app_name", "=", "app")
+			.where("user_id", "=", "user")
+			.execute();
+
+		const fetched = await service.getSession("app", "user", "corrupt");
+		expect(fetched?.state).toEqual({});
+	});
+
+	it("storageEventToEvent falls back to null when content JSON is corrupt", () => {
+		const event = (service as any).storageEventToEvent({
+			id: "e-bad",
+			app_name: "app",
+			user_id: "user",
+			session_id: "s1",
+			invocation_id: "inv",
+			author: "agent",
+			branch: null,
+			timestamp: new Date(),
+			content: "{bad",
+			actions: "also-bad",
+			long_running_tool_ids_json: null,
+			grounding_metadata: "{nope",
+			partial: false,
+			turn_complete: false,
+			error_code: null,
+			error_message: null,
+			interrupted: false,
+		});
+
+		expect(event.content).toBeNull();
+		expect(event.actions).toBeNull();
+		expect(event.groundingMetadata).toBeNull();
+	});
+
+	it("appendEvent with only session-level delta leaves app/user tables unchanged", async () => {
+		const session = await service.createSession(
+			"app",
+			"user",
+			{},
+			"sess-local",
+		);
+		const db = (service as any).db;
+		const beforeApp = await db
+			.selectFrom("app_states")
+			.selectAll()
+			.where("app_name", "=", "app")
+			.executeTakeFirst();
+		const beforeUser = await db
+			.selectFrom("user_states")
+			.selectAll()
+			.where("app_name", "=", "app")
+			.where("user_id", "=", "user")
+			.executeTakeFirst();
+
+		await service.appendEvent(
+			session,
+			new Event({
+				author: "agent",
+				actions: new EventActions({ stateDelta: { localOnly: true } }),
+				content: { role: "model", parts: [{ text: "x" }] },
+			}),
+		);
+
+		const afterApp = await db
+			.selectFrom("app_states")
+			.selectAll()
+			.where("app_name", "=", "app")
+			.executeTakeFirst();
+		const afterUser = await db
+			.selectFrom("user_states")
+			.selectAll()
+			.where("app_name", "=", "app")
+			.where("user_id", "=", "user")
+			.executeTakeFirst();
+
+		expect(afterApp.state).toBe(beforeApp.state);
+		expect(afterUser.state).toBe(beforeUser.state);
+
+		const fetched = await service.getSession("app", "user", "sess-local");
+		expect(fetched?.state.localOnly).toBe(true);
+	});
+
+	it("lists lastUpdateTime from storage even when state/events are stripped", async () => {
+		const created = await service.createSession(
+			"app",
+			"user",
+			{ a: 1 },
+			"listed",
+		);
+		await service.appendEvent(
+			created,
+			new Event({
+				author: "user",
+				content: { role: "user", parts: [{ text: "hi" }] },
+			}),
+		);
+
+		const listed = await service.listSessions("app", "user");
+		const row = listed.sessions.find((s) => s.id === "listed");
+		expect(row?.events).toEqual([]);
+		expect(row?.state).toEqual({});
+		expect(row?.lastUpdateTime).toBeGreaterThan(0);
+	});
+
+	it("numRecentEvents limits returned events to the requested count", async () => {
+		const session = await service.createSession("app", "user", {}, "recent");
+		for (const text of ["a", "b", "c"]) {
+			await service.appendEvent(
+				session,
+				new Event({
+					author: "user",
+					content: { role: "user", parts: [{ text }] },
+				}),
+			);
+		}
+
+		const fetched = await service.getSession("app", "user", "recent", {
+			numRecentEvents: 2,
+		});
+		expect(fetched?.events).toHaveLength(2);
+		const texts = fetched?.events.map((e) => e.content?.parts?.[0]?.text) ?? [];
+		expect(texts.every((t) => ["a", "b", "c"].includes(t as string))).toBe(
+			true,
+		);
+	});
+
+	it("extractStateDelta splits app/user/session keys and drops TEMP_PREFIX", () => {
+		const result = (service as any).extractStateDelta({
+			[`${State.APP_PREFIX}theme`]: "dark",
+			[`${State.USER_PREFIX}locale`]: "en",
+			[`${State.TEMP_PREFIX}scratch`]: "dropped",
+			local: 1,
+		});
+		expect(result.appStateDelta).toEqual({ theme: "dark" });
+		expect(result.userStateDelta).toEqual({ locale: "en" });
+		expect(result.sessionStateDelta).toEqual({ local: 1 });
+	});
+
+	it("ensureInitialized rethrows when schema init fails after skipTableCreation", async () => {
+		const { DatabaseSessionService } = await import(
+			"../../sessions/database-session-service"
+		);
+		const failingDb = {
+			schema: {
+				createTable: () => {
+					throw new Error("cannot create");
+				},
+			},
+		};
+		const deferred = new DatabaseSessionService({
+			db: failingDb as any,
+			skipTableCreation: true,
+		});
+
+		await expect(
+			deferred.createSession("app", "user", {}, "x"),
+		).rejects.toThrow(/cannot create/);
+	});
+
+	it("deleteSession with events fails FK unless events are removed first", async () => {
+		const session = await service.createSession("app", "user", {}, "with-ev");
+		await service.appendEvent(
+			session,
+			new Event({
+				author: "user",
+				content: { role: "user", parts: [{ text: "bye" }] },
+			}),
+		);
+		await expect(
+			service.deleteSession("app", "user", "with-ev"),
+		).rejects.toThrow(/FOREIGN KEY/i);
+
+		const db = (service as any).db;
+		await db.deleteFrom("events").where("session_id", "=", "with-ev").execute();
+		await service.deleteSession("app", "user", "with-ev");
+		expect(await service.getSession("app", "user", "with-ev")).toBeUndefined();
+	});
+
+	it("createSession without state uses empty session state", async () => {
+		const created = await service.createSession("app", "user");
+		expect(created.state).toEqual({});
+		expect(created.events).toEqual([]);
+		expect(created.id).toMatch(/^session-/);
+	});
 });

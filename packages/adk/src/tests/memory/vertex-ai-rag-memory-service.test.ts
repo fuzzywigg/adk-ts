@@ -791,4 +791,346 @@ describe("VertexAiRagMemoryService.searchMemory retrieval edges", () => {
 			"late",
 		]);
 	});
+
+	it("propagates upload_file failures and still attempts temp file cleanup", async () => {
+		vi.spyOn(rag, "upload_file").mockRejectedValueOnce(
+			new Error("upload exploded"),
+		);
+		const service = new VertexAiRagMemoryService("corpus-1");
+		const session: Session = {
+			id: "s-fail",
+			appName: "demo",
+			userId: "alice",
+			state: {},
+			events: [
+				{
+					author: "user",
+					timestamp: 1,
+					content: { parts: [{ text: "hello" }] },
+				} as Event,
+			],
+			lastUpdateTime: 1,
+		};
+
+		await expect(service.addSessionToMemory(session)).rejects.toThrow(
+			/upload exploded/,
+		);
+		expect(writeFileSync).toHaveBeenCalled();
+		expect(unlinkSync).toHaveBeenCalled();
+	});
+
+	it("propagates retrieval_query failures from searchMemory", async () => {
+		vi.spyOn(rag, "retrieval_query").mockRejectedValueOnce(
+			new Error("retrieval down"),
+		);
+		const service = new VertexAiRagMemoryService("corpus-1");
+		await expect(
+			service.searchMemory({
+				appName: "demo",
+				userId: "alice",
+				query: "q",
+			}),
+		).rejects.toThrow(/retrieval down/);
+	});
+
+	it("warns when unlinkSync fails after a successful upload", async () => {
+		unlinkSync.mockImplementationOnce(() => {
+			throw new Error("EBUSY");
+		});
+		vi.spyOn(rag, "upload_file").mockResolvedValueOnce(undefined);
+		const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+
+		const service = new VertexAiRagMemoryService("corpus-1");
+		await service.addSessionToMemory({
+			id: "s-unlink",
+			appName: "demo",
+			userId: "alice",
+			state: {},
+			events: [
+				{
+					author: "user",
+					timestamp: 1,
+					content: { parts: [{ text: "hi" }] },
+				} as Event,
+			],
+			lastUpdateTime: 1,
+		});
+
+		expect(warn).toHaveBeenCalledWith(
+			"Failed to delete temporary file:",
+			expect.any(String),
+			expect.any(Error),
+		);
+	});
+
+	it("skips events without content.parts when building the upload JSONL", async () => {
+		vi.spyOn(rag, "upload_file").mockResolvedValueOnce(undefined);
+		const service = new VertexAiRagMemoryService("corpus-1");
+		await service.addSessionToMemory({
+			id: "s-skip",
+			appName: "demo",
+			userId: "alice",
+			state: {},
+			events: [
+				{ author: "system", timestamp: 1 } as Event,
+				{
+					author: "user",
+					timestamp: 2,
+					content: { parts: [{ inlineData: { data: "x" } }] },
+				} as Event,
+				{
+					author: "user",
+					timestamp: 3,
+					content: { parts: [{ text: "keep" }] },
+				} as Event,
+			],
+			lastUpdateTime: 3,
+		});
+
+		const written = writeFileSync.mock.calls[0][1] as string;
+		expect(written).toBe(jsonLine("user", 3, "keep"));
+		expect(written).not.toContain("system");
+	});
+
+	it("joins multi-part text with dots and flattens newlines for upload", async () => {
+		vi.spyOn(rag, "upload_file").mockResolvedValueOnce(undefined);
+		const service = new VertexAiRagMemoryService("corpus-1");
+		await service.addSessionToMemory({
+			id: "s-join",
+			appName: "demo",
+			userId: "alice",
+			state: {},
+			events: [
+				{
+					author: "user",
+					timestamp: 1,
+					content: {
+						parts: [{ text: "line\none" }, { text: "two" }],
+					},
+				} as Event,
+			],
+			lastUpdateTime: 1,
+		});
+
+		const written = writeFileSync.mock.calls[0][1] as string;
+		expect(JSON.parse(written)).toEqual({
+			author: "user",
+			timestamp: 1,
+			text: "line one.two",
+		});
+	});
+
+	it("uploads to every configured rag resource", async () => {
+		const upload = vi.spyOn(rag, "upload_file").mockResolvedValue(undefined);
+		const service = new VertexAiRagMemoryService("corpus-a");
+		(service as any)._vertexRagStore.rag_resources = [
+			{ rag_corpus: "corpus-a" },
+			{ rag_corpus: "corpus-b" },
+		];
+
+		await service.addSessionToMemory({
+			id: "s-multi",
+			appName: "demo",
+			userId: "alice",
+			state: {},
+			events: [
+				{
+					author: "user",
+					timestamp: 1,
+					content: { parts: [{ text: "multi" }] },
+				} as Event,
+			],
+			lastUpdateTime: 1,
+		});
+
+		expect(upload).toHaveBeenCalledTimes(2);
+		expect(upload.mock.calls.map((c) => c[0].corpus_name)).toEqual([
+			"corpus-a",
+			"corpus-b",
+		]);
+		expect(upload.mock.calls[0][0].display_name).toBe("demo.alice.s-multi");
+	});
+
+	it("skips blank lines and non-JSON lines inside context text", async () => {
+		vi.spyOn(rag, "retrieval_query").mockResolvedValue({
+			contexts: {
+				contexts: [
+					{
+						source_display_name: "demo.alice.sess-noise",
+						text: ["", "   ", "not-json", jsonLine("user", 1, "ok"), "{"].join(
+							"\n",
+						),
+					},
+				],
+			},
+		});
+
+		const service = new VertexAiRagMemoryService("corpus-1");
+		const result = await service.searchMemory({
+			appName: "demo",
+			userId: "alice",
+			query: "noise",
+		});
+		expect(result.memories.map((m) => m.content.parts?.[0]?.text)).toEqual([
+			"ok",
+		]);
+	});
+
+	it("defaults missing author/timestamp/text fields when parsing JSON lines", async () => {
+		vi.spyOn(rag, "retrieval_query").mockResolvedValue({
+			contexts: {
+				contexts: [
+					{
+						source_display_name: "demo.alice.sess-defaults",
+						text: JSON.stringify({}),
+					},
+				],
+			},
+		});
+
+		const service = new VertexAiRagMemoryService("corpus-1");
+		const result = await service.searchMemory({
+			appName: "demo",
+			userId: "alice",
+			query: "defaults",
+		});
+
+		expect(result.memories).toHaveLength(1);
+		expect(result.memories[0].author).toBe("");
+		expect(result.memories[0].content.parts?.[0]?.text).toBe("");
+		expect(result.memories[0].timestamp).toBe(new Date(0).toISOString());
+	});
+
+	it("filters contexts that share a prefix but not exact app.user.", async () => {
+		vi.spyOn(rag, "retrieval_query").mockResolvedValue({
+			contexts: {
+				contexts: [
+					{
+						source_display_name: "demo.aliceX.sess",
+						text: jsonLine("user", 1, "nope"),
+					},
+					{
+						source_display_name: "demo.alice.sess",
+						text: jsonLine("user", 2, "yes"),
+					},
+				],
+			},
+		});
+
+		const service = new VertexAiRagMemoryService("corpus-1");
+		const result = await service.searchMemory({
+			appName: "demo",
+			userId: "alice",
+			query: "filter",
+		});
+		expect(result.memories.map((m) => m.content.parts?.[0]?.text)).toEqual([
+			"yes",
+		]);
+	});
+
+	it("sorts merged memories by ascending timestamp within a session", async () => {
+		vi.spyOn(rag, "retrieval_query").mockResolvedValue({
+			contexts: {
+				contexts: [
+					{
+						source_display_name: "demo.alice.sess-sort",
+						text: [
+							jsonLine("b", 20, "second"),
+							jsonLine("a", 10, "first"),
+						].join("\n"),
+					},
+				],
+			},
+		});
+
+		const service = new VertexAiRagMemoryService("corpus-1");
+		const result = await service.searchMemory({
+			appName: "demo",
+			userId: "alice",
+			query: "sort",
+		});
+		expect(result.memories.map((m) => m.content.parts?.[0]?.text)).toEqual([
+			"first",
+			"second",
+		]);
+	});
+
+	it("aggregates memories across multiple matching sessions", async () => {
+		vi.spyOn(rag, "retrieval_query").mockResolvedValue({
+			contexts: {
+				contexts: [
+					{
+						source_display_name: "demo.alice.s1",
+						text: jsonLine("user", 1, "from-s1"),
+					},
+					{
+						source_display_name: "demo.alice.s2",
+						text: jsonLine("user", 2, "from-s2"),
+					},
+				],
+			},
+		});
+
+		const service = new VertexAiRagMemoryService("corpus-1");
+		const result = await service.searchMemory({
+			appName: "demo",
+			userId: "alice",
+			query: "multi-session",
+		});
+		expect(result.memories.map((m) => m.content.parts?.[0]?.text)).toEqual([
+			"from-s1",
+			"from-s2",
+		]);
+	});
+
+	it("addSessionToMemory still cleans up when rag resources are empty", async () => {
+		const service = new VertexAiRagMemoryService();
+		await expect(
+			service.addSessionToMemory({
+				id: "s-empty",
+				appName: "demo",
+				userId: "alice",
+				state: {},
+				events: [
+					{
+						author: "user",
+						timestamp: 1,
+						content: { parts: [{ text: "x" }] },
+					} as Event,
+				],
+				lastUpdateTime: 1,
+			}),
+		).rejects.toThrow(/Rag resources must be set/);
+		expect(unlinkSync).toHaveBeenCalled();
+	});
+});
+
+describe("_mergeEventLists additional edges", () => {
+	it("merges three pairwise-overlapping lists into one", () => {
+		const a = [event("a", 1), event("ab", 2)];
+		const b = [event("bc", 2), event("bd", 3)];
+		const c = [event("cd", 3), event("d", 4)];
+		const merged = _mergeEventLists([a, b, c]);
+		expect(merged).toHaveLength(1);
+		expect(merged[0].map((e) => e.timestamp).sort((x, y) => x - y)).toEqual([
+			1, 2, 3, 4,
+		]);
+	});
+
+	it("keeps multiple fully isolated lists separate", () => {
+		const lists = [[event("a", 1)], [event("b", 10)], [event("c", 100)]];
+		expect(_mergeEventLists(lists)).toEqual([
+			[event("a", 1)],
+			[event("b", 10)],
+			[event("c", 100)],
+		]);
+	});
+
+	it("prefers the first list's event when timestamps collide", () => {
+		const first = [event("keep", 5, "first")];
+		const second = [event("drop", 5, "second")];
+		const merged = _mergeEventLists([first, second]);
+		expect(merged).toHaveLength(1);
+		expect(merged[0]).toEqual([event("keep", 5, "first")]);
+	});
 });

@@ -149,4 +149,40 @@ describe("State", () => {
 		const state = State.create({ a: 1, b: 2 }, { b: 9, c: 3 });
 		expect(state.toDict()).toEqual({ a: 1, b: 9, c: 3 });
 	});
+
+	it("get returns undefined when the stored value is explicitly undefined", () => {
+		const state = State.create({ ghost: undefined }, {});
+		expect(state.has("ghost")).toBe(true);
+		expect(state.get("ghost")).toBeUndefined();
+		// has() is true, so the defaultValue branch is skipped
+		expect(state.get("ghost", "fallback")).toBeUndefined();
+	});
+
+	it("proxy get/set/has support symbol keys on the target", () => {
+		const state = State.create({}, {});
+		const sym = Symbol("secret");
+		(state as any)[sym] = "via-proxy";
+		expect((state as any)[sym]).toBe("via-proxy");
+		expect(sym in (state as any)).toBe(true);
+	});
+
+	it("proxy set for underscore-prefixed props writes onto the instance", () => {
+		const state = State.create({}, {});
+		(state as any)._privateScratch = 42;
+		expect((state as any)._privateScratch).toBe(42);
+		expect(state.has("_privateScratch")).toBe(false);
+	});
+
+	it("has is true for keys whose value is null", () => {
+		const state = State.create({ nullable: null }, {});
+		expect(state.has("nullable")).toBe(true);
+		expect(state.get("nullable")).toBeNull();
+	});
+
+	it("update with overlapping keys refreshes both value and delta", () => {
+		const state = State.create({ a: 1 }, { b: 2 });
+		state.update({ a: 10, b: 20, c: 30 });
+		expect(state.toDict()).toEqual({ a: 10, b: 20, c: 30 });
+		expect(state.hasDelta()).toBe(true);
+	});
 });
