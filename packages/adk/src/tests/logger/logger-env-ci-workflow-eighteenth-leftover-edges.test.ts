@@ -3,12 +3,12 @@ import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 
 /**
- * Eighteenth leftover: reversible workflow assertions for the providers /
- * telemetry Vitest slice. Softened after logger/env residual co-owns the
- * eighteenth leftover gate — still pins the shared filter string plus
- * existing ci.yml `pnpm test` / ADK coverage steps.
+ * Eighteenth leftover (logger/env residual): reversible workflow assertions for
+ * the logger/env boolean-true / negzero residual Vitest slice after tip #236.
+ * Keeps focused push gate on eighteenth-leftover-edges (co-owned with
+ * providers/telemetry eighteenth from #236).
  */
-describe("providers/telemetry ci workflow eighteenth leftover edges", () => {
+describe("logger/env residual ci workflow eighteenth leftover edges", () => {
 	const root = resolve(__dirname, "../../../../..");
 
 	it("ci.yml build-and-test still runs pnpm test and ADK coverage", () => {
@@ -20,7 +20,7 @@ describe("providers/telemetry ci workflow eighteenth leftover edges", () => {
 		expect(ci).toContain("continue-on-error: true");
 	});
 
-	it("push.yml still runs shared eighteenth leftover filter then pnpm test", () => {
+	it("push.yml runs focused eighteenth leftover slice then pnpm test", () => {
 		const push = readFileSync(
 			resolve(root, ".github/workflows/push.yml"),
 			"utf8",
