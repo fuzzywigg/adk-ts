@@ -23,53 +23,38 @@ describe("ErrorHandlingUtils path / debug / name leftover edges", () => {
 			{
 				code: "invalid_type",
 				expected: "string",
-				received: "undefined",
 				path: [""],
 				message: "Required",
-			},
+			} as z.ZodIssue,
 			{
 				code: "invalid_type",
 				expected: "string",
-				received: "undefined",
 				path: [0],
 				message: "Required",
-			},
+			} as z.ZodIssue,
 		]);
 		expect(utils.isMissingEnvError(err)).toEqual({ isMissing: false });
 	});
 
 	it("classifies NODE_ENV and adk_foo as optional (case-insensitive)", () => {
 		const utils = new ErrorHandlingUtils({} as never);
-		const err = new z.ZodError([
-			{
-				code: "invalid_type",
-				expected: "string",
-				received: "undefined",
-				path: ["NODE_ENV"],
-				message: "Required",
-			},
-			{
-				code: "invalid_type",
-				expected: "string",
-				received: "undefined",
-				path: ["adk_foo"],
-				message: "Required",
-			},
-			{
-				code: "invalid_type",
-				expected: "string",
-				received: "undefined",
-				path: ["api_key"],
-				message: "Required",
-			},
-		]);
-		const result = utils.isMissingEnvError(err);
-		expect(result.isMissing).toBe(true);
-		expect(result.optionalMissing).toEqual(
-			expect.arrayContaining(["NODE_ENV", "adk_foo"]),
-		);
-		expect(result.requiredMissing).toEqual(["api_key"]);
-		expect(result.hasOnlyOptionalMissing).toBe(false);
+		const schema = z.object({
+			NODE_ENV: z.string(),
+			adk_foo: z.string(),
+			api_key: z.string(),
+		});
+		try {
+			schema.parse({});
+			expect.unreachable("expected ZodError");
+		} catch (error) {
+			const result = utils.isMissingEnvError(error);
+			expect(result.isMissing).toBe(true);
+			expect(result.optionalMissing).toEqual(
+				expect.arrayContaining(["NODE_ENV", "adk_foo"]),
+			);
+			expect(result.requiredMissing).toEqual(["api_key"]);
+			expect(result.hasOnlyOptionalMissing).toBe(false);
+		}
 	});
 
 	it("only ADK_DEBUG_NEST === '1' prints stack (not true/01/1 )", () => {

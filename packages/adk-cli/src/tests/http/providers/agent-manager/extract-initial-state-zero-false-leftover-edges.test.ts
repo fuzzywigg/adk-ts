@@ -33,7 +33,7 @@ describe("extractInitialState zero/false leftover edges", () => {
 									[
 										"s1",
 										{
-											state: new Map([
+											state: new Map<string, unknown>([
 												["n", 0],
 												["s", ""],
 											]),

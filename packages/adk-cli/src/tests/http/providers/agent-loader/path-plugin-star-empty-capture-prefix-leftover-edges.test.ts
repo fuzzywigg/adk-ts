@@ -4,22 +4,28 @@ import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { createPathMappingPlugin } from "../../../../http/providers/agent-loader/path-plugin";
 
-type OnResolve = (args: {
-	path: string;
-	importer?: string;
-}) => { path: string } | undefined;
+function getHandler(plugin: ReturnType<typeof createPathMappingPlugin>) {
+	const onResolve = vi.fn();
+	plugin.setup({ onResolve });
+	return onResolve.mock.calls[0][1] as (args: {
+		path: string;
+		importer: string;
+		namespace: string;
+		resolveDir: string;
+		kind: string;
+		pluginData: Record<string, string | number | boolean>;
+	}) => { path: string } | undefined;
+}
 
-function getOnResolve(plugin: {
-	setup: (build: { onResolve: (opts: unknown, cb: OnResolve) => void }) => void;
-}): OnResolve {
-	let handler: OnResolve | undefined;
-	plugin.setup({
-		onResolve: (_opts, cb) => {
-			handler = cb;
-		},
-	});
-	if (!handler) throw new Error("onResolve not registered");
-	return handler;
+function resolveArgs(path: string, importer = "entry.ts") {
+	return {
+		path,
+		importer,
+		namespace: "file",
+		resolveDir: "/",
+		kind: "import-statement",
+		pluginData: {},
+	};
 }
 
 /**
@@ -48,16 +54,13 @@ describe("path-plugin star empty capture / env case leftover edges", () => {
 			logger: { debug } as never,
 			quiet: false,
 		});
-		const onResolve = getOnResolve(plugin);
+		const handler = getHandler(plugin);
 
-		// "@lib/" → match[1] === "" → falsy → resolvedPath stays "lib/*" → miss
-		expect(onResolve({ path: "@lib/", importer: "" })).toBeUndefined();
+		expect(handler(resolveArgs("@lib/", ""))).toBeUndefined();
 		expect(
 			debug.mock.calls.some((c) => String(c[0]).includes('from "unknown"')),
 		).toBe(true);
-
-		// Non-empty capture still works
-		expect(onResolve({ path: "@lib/x" })?.path).toContain("x.ts");
+		expect(handler(resolveArgs("@lib/x"))?.path).toContain("x.ts");
 	});
 
 	it("ENV is not the case-sensitive env shortcut", () => {
@@ -73,9 +76,9 @@ describe("path-plugin star empty capture / env case leftover edges", () => {
 		);
 
 		const plugin = createPathMappingPlugin(root, { quiet: true });
-		const onResolve = getOnResolve(plugin);
-		expect(onResolve({ path: "ENV" })).toBeUndefined();
-		expect(onResolve({ path: "env" })?.path).toContain("env.ts");
+		const handler = getHandler(plugin);
+		expect(handler(resolveArgs("ENV"))).toBeUndefined();
+		expect(handler(resolveArgs("env"))?.path).toContain("env.ts");
 	});
 
 	it("only strips one ../ prefix for baseUrl relative resolve", () => {
@@ -91,10 +94,10 @@ describe("path-plugin star empty capture / env case leftover edges", () => {
 		);
 
 		const plugin = createPathMappingPlugin(root, { quiet: true });
-		const onResolve = getOnResolve(plugin);
+		const handler = getHandler(plugin);
 
-		expect(onResolve({ path: "../../foo" })).toBeUndefined();
-		expect(onResolve({ path: "../foo" })?.path).toContain("foo.ts");
+		expect(handler(resolveArgs("../../foo"))).toBeUndefined();
+		expect(handler(resolveArgs("../foo"))?.path).toContain("foo.ts");
 	});
 
 	it("empty baseUrl is falsy so resolvedBaseUrl falls back to projectRoot", () => {
@@ -112,7 +115,7 @@ describe("path-plugin star empty capture / env case leftover edges", () => {
 		);
 
 		const plugin = createPathMappingPlugin(root, { quiet: true });
-		const onResolve = getOnResolve(plugin);
-		expect(onResolve({ path: "@lib/util" })?.path).toContain("util.ts");
+		const handler = getHandler(plugin);
+		expect(handler(resolveArgs("@lib/util"))?.path).toContain("util.ts");
 	});
 });
