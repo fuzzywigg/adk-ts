@@ -1,5 +1,5 @@
 import { Type } from "@google/genai";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { TransferToAgentTool } from "../../../tools/common/transfer-to-agent-tool";
 import type { ToolContext } from "../../../tools/tool-context";
 
@@ -79,5 +79,67 @@ describe("TransferToAgentTool", () => {
 		await tool.runAsync({ agent_name: agentName }, context);
 
 		expect(context.actions.transferToAgent).toBe(agentName);
+	});
+
+	it("accepts unicode and whitespace agent names verbatim", async () => {
+		const tool = new TransferToAgentTool();
+		const context = makeContext();
+
+		await tool.runAsync({ agent_name: "  助手-エージェント  " }, context);
+		expect(context.actions.transferToAgent).toBe("  助手-エージェント  ");
+	});
+
+	it("does not set escalate or skipSummarization", async () => {
+		const tool = new TransferToAgentTool();
+		const context = makeContext();
+
+		await tool.runAsync({ agent_name: "helper" }, context);
+
+		expect(context.actions.transferToAgent).toBe("helper");
+		expect(context.actions.escalate).toBeUndefined();
+		expect(context.actions.skipSummarization).toBeUndefined();
+	});
+
+	it("logs the target agent name via the tool logger", async () => {
+		const tool = new TransferToAgentTool();
+		const debug = vi
+			.spyOn((tool as any).logger, "debug")
+			.mockImplementation(() => {});
+		const context = makeContext();
+
+		await tool.runAsync({ agent_name: "logged_agent" }, context);
+
+		expect(debug).toHaveBeenCalledWith(expect.stringContaining("logged_agent"));
+		expect(context.actions.transferToAgent).toBe("logged_agent");
+	});
+
+	it("can transfer repeatedly to different agents on the same context", async () => {
+		const tool = new TransferToAgentTool();
+		const context = makeContext();
+
+		await tool.runAsync({ agent_name: "first" }, context);
+		await tool.runAsync({ agent_name: "second" }, context);
+		await tool.runAsync({ agent_name: "third" }, context);
+
+		expect(context.actions.transferToAgent).toBe("third");
+	});
+
+	it("returns undefined and only mutates transferToAgent", async () => {
+		const tool = new TransferToAgentTool();
+		const context = makeContext({ escalate: false });
+
+		const result = await tool.runAsync({ agent_name: "only" }, context);
+
+		expect(result).toBeUndefined();
+		expect(Object.keys(context.actions).sort()).toEqual([
+			"escalate",
+			"transferToAgent",
+		]);
+	});
+
+	it("does not retry by default", () => {
+		const tool = new TransferToAgentTool();
+		expect(tool.shouldRetryOnFailure).toBe(false);
+		expect(tool.maxRetryAttempts).toBe(3);
 	});
 });
