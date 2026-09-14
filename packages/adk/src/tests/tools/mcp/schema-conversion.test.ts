@@ -452,4 +452,79 @@ describe("schema-conversion", () => {
 			},
 		});
 	});
+
+	it("normalizes object schemas that declare required without properties", () => {
+		expect(
+			normalizeJsonSchema({
+				type: "object",
+				required: ["must"],
+			}),
+		).toEqual({
+			type: Type.OBJECT,
+			properties: {},
+			required: ["must"],
+		});
+	});
+
+	it("infers OBJECT from additionalProperties true and keeps the flag on Type enum path", () => {
+		expect(
+			normalizeJsonSchema({
+				additionalProperties: true,
+			}),
+		).toEqual({
+			type: Type.OBJECT,
+			additionalProperties: true,
+		});
+
+		expect(
+			normalizeJsonSchema({
+				type: "object",
+				additionalProperties: true,
+			}),
+		).toEqual({
+			type: Type.OBJECT,
+			properties: {},
+		});
+	});
+
+	it("normalizes nested array items that themselves nest objects", () => {
+		expect(
+			normalizeJsonSchema({
+				type: "array",
+				items: {
+					type: "object",
+					required: ["id"],
+					properties: {
+						id: { type: "string" },
+						kids: {
+							type: "array",
+							items: { type: "string", minLength: 1 },
+						},
+					},
+				},
+				minItems: 0,
+			}),
+		).toEqual({
+			type: Type.ARRAY,
+			minItems: 0,
+			items: {
+				type: Type.OBJECT,
+				required: ["id"],
+				properties: {
+					id: { type: Type.STRING },
+					kids: {
+						type: Type.ARRAY,
+						items: { type: Type.STRING, minLength: 1 },
+					},
+				},
+			},
+		});
+	});
+
+	it("jsonSchemaToDeclaration wraps empty property maps as empty object schemas", () => {
+		expect(jsonSchemaToDeclaration("empty_props", "d", {}).parameters).toEqual({
+			type: Type.OBJECT,
+			properties: {},
+		});
+	});
 });
