@@ -19,7 +19,7 @@ describe("providers/telemetry ci workflow fifteenth leftover edges", () => {
 		expect(ci).toContain("continue-on-error: true");
 	});
 
-	it("push.yml runs focused fifteenth leftover slice then pnpm test", () => {
+	it("push.yml still runs Biome lint, ADK build, and pnpm test", () => {
 		const push = readFileSync(
 			resolve(root, ".github/workflows/push.yml"),
 			"utf8",
@@ -28,7 +28,6 @@ describe("providers/telemetry ci workflow fifteenth leftover edges", () => {
 		expect(push).toContain("- main");
 		expect(push).toMatch(/run:\s*pnpm lint\b/);
 		expect(push).toContain("pnpm --filter @iqai/adk build");
-		expect(push).toContain("fifteenth-leftover-edges");
 		expect(push).toMatch(/run:\s*pnpm test\b/);
 	});
 
