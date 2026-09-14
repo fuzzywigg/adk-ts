@@ -512,4 +512,38 @@ describe("McpSamplingHandler", () => {
 		);
 		expect(response.model).toBe("gemini-2.0-flash");
 	});
+
+	it('logs content type "unknown" when message content has no type', async () => {
+		const handler = new McpSamplingHandler(async () => "ok");
+		const debug = vi.fn();
+		(handler as any).logger = { debug, warn: vi.fn(), error: vi.fn() };
+
+		const content = await (handler as any).convertSingleMcpMessageToADK({
+			role: "user",
+			content: { text: "no-type-field" },
+		});
+
+		expect(content.role).toBe("user");
+		expect(debug).toHaveBeenCalledWith(
+			expect.stringContaining("content type: unknown"),
+		);
+	});
+
+	it("logs content type array when message content is an array", async () => {
+		const handler = new McpSamplingHandler(async () => "ok");
+		const debug = vi.fn();
+		(handler as any).logger = { debug, warn: vi.fn(), error: vi.fn() };
+
+		await (handler as any).convertSingleMcpMessageToADK({
+			role: "assistant",
+			content: [
+				{ type: "text", text: "a" },
+				{ type: "text", text: "b" },
+			],
+		});
+
+		expect(debug).toHaveBeenCalledWith(
+			expect.stringContaining("content type: array"),
+		);
+	});
 });

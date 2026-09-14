@@ -218,4 +218,13 @@ describe("retryOnClosedResource", () => {
 		expect(reinit).toHaveBeenCalledTimes(1);
 		warn.mockRestore();
 	});
+
+	it("withRetry throws Unexpected end of retry loop when maxRetries is negative", async () => {
+		const reinit = vi.fn(async () => undefined);
+		const fn = vi.fn(async () => "never");
+		const wrapped = withRetry(fn, {}, reinit, -1);
+		await expect(wrapped()).rejects.toThrow("Unexpected end of retry loop");
+		expect(fn).not.toHaveBeenCalled();
+		expect(reinit).not.toHaveBeenCalled();
+	});
 });

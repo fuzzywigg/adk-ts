@@ -457,4 +457,51 @@ describe("instructions requestProcessor leftover edges", () => {
 		);
 		expect(llmRequest.getSystemInstructionText()).toBeUndefined();
 	});
+
+	it("swallows toJSONSchema failures and still finishes without schema text", async () => {
+		const agent = {
+			name: "bad-schema",
+			canonicalModel: "gpt-4o",
+			instruction: "keep going",
+			rootAgent: { name: "root" },
+			outputSchema: {
+				toJSONSchema() {
+					throw new Error("schema boom");
+				},
+			},
+			canonicalInstruction: async () =>
+				["keep going", true] as [string, boolean],
+		};
+		const llmRequest = new LlmRequest();
+		await drain(
+			requestProcessor.runAsync(
+				{ agent } as unknown as InvocationContext,
+				llmRequest,
+			),
+		);
+		const text = llmRequest.getSystemInstructionText() ?? "";
+		expect(text).toContain("keep going");
+		expect(text).not.toContain("application/json");
+	});
+
+	it("strips $schema from real Zod toJSONSchema output", async () => {
+		const agent = {
+			name: "schema-strip",
+			canonicalModel: "gpt-4o",
+			rootAgent: { name: "root" },
+			outputSchema: z.object({ ok: z.boolean() }),
+			canonicalInstruction: async () => ["", true] as [string, boolean],
+		};
+		const llmRequest = new LlmRequest();
+		await drain(
+			requestProcessor.runAsync(
+				{ agent } as unknown as InvocationContext,
+				llmRequest,
+			),
+		);
+		const text = llmRequest.getSystemInstructionText() ?? "";
+		expect(text).toContain('"ok"');
+		expect(text).toContain("boolean");
+		expect(text).not.toContain("$schema");
+	});
 });

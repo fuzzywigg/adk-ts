@@ -1438,3 +1438,79 @@ describe("BaseLlmFlow leftover edges", () => {
 		expect(new Set(ids).size).toBe(2);
 	});
 });
+
+describe("BaseLlmFlow leftover toolsDict/parts/callback edges", () => {
+	it("_postprocessHandleFunctionCallsAsync defaults toolsDict to {} when missing", async () => {
+		const flow = new InspectableFlow();
+		const llmRequest = new LlmRequest();
+		delete (llmRequest as any).toolsDict;
+		handleFunctionCallsAsyncMock.mockResolvedValue(null);
+
+		await collect(
+			flow._postprocessHandleFunctionCallsAsync(
+				mockContext,
+				new Event({ author: "agent" }),
+				llmRequest,
+			),
+		);
+
+		expect(handleFunctionCallsAsyncMock).toHaveBeenCalledWith(
+			mockContext,
+			expect.any(Event),
+			{},
+		);
+	});
+
+	it("_callLlmAsync treats missing content.parts as zero function calls", async () => {
+		const flow = new InspectableFlow();
+		flow.requestProcessors = [];
+		flow.responseProcessors = [];
+		const agent = {
+			name: "no-parts",
+			canonicalTools: async () => [],
+			canonicalModel: {
+				model: "fake",
+				generateContentAsync: vi.fn(async function* () {
+					yield {
+						content: { role: "model" },
+						usageMetadata: { totalTokenCount: 1 },
+					};
+				}),
+			},
+		};
+
+		const responses = await collect(
+			flow._callLlmAsync(
+				makeCtx({ agent }),
+				new LlmRequest(),
+				new Event({ id: "me", author: "no-parts" }),
+			),
+		);
+		expect(responses).toHaveLength(1);
+		expect((flow as any).logger.debugStructured).toHaveBeenCalled();
+	});
+
+	it("_handleBeforeModelCallback continues when earlier callbacks return falsy", async () => {
+		const flow = new InspectableFlow();
+		const llmRequest = new LlmRequest();
+		const modelEvent = new Event({ id: "me", author: "agent" });
+		const agent = {
+			name: "cb-agent",
+			canonicalBeforeModelCallbacks: [
+				() => undefined,
+				async () => null,
+				() =>
+					({
+						content: { role: "model", parts: [{ text: "from-third" }] },
+					}) as LlmResponse,
+			],
+		};
+
+		const result = await flow._handleBeforeModelCallback(
+			makeCtx({ agent }),
+			llmRequest,
+			modelEvent,
+		);
+		expect(result?.content?.parts?.[0]).toEqual({ text: "from-third" });
+	});
+});

@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { FunctionTool } from "../../../tools/function/function-tool";
 import type { ToolContext } from "../../../tools/tool-context";
 
@@ -695,5 +695,90 @@ describe("FunctionTool", () => {
 			maxRetryAttempts: 0,
 		});
 		expect(tool.maxRetryAttempts).toBe(3);
+	});
+});
+
+describe("FunctionTool leftover parsing and type edges", () => {
+	it("returns empty mandatory args when toString has no parameter list", async () => {
+		function weird() {
+			return { ok: true };
+		}
+		Object.defineProperty(weird, "toString", {
+			value: () => "function weird /* no parens */ { return { ok: true }; }",
+		});
+
+		const tool = new FunctionTool(weird, { description: "no param match" });
+		expect((tool as any).mandatoryArgs).toEqual([]);
+		expect((tool as any).getFunctionParameters()).toEqual([]);
+		await expect(tool.runAsync({} as any, makeContext())).resolves.toEqual({
+			ok: true,
+		});
+	});
+
+	it("keeps raw param text when nameMatch fails for destructuring/rest", async () => {
+		function bag(_payload: unknown) {
+			return { got: true };
+		}
+		Object.defineProperty(bag, "toString", {
+			value: () => "function bag({a}, ...rest) { return { got: true }; }",
+		});
+
+		const tool = new FunctionTool(bag, { description: "destructure params" });
+		expect((tool as any).mandatoryArgs).toEqual(["{a}", "...rest"]);
+		expect((tool as any).getFunctionParameters()).toEqual(["{a}", "...rest"]);
+	});
+
+	it("defaults convertArgumentType to string when declaration property has no type", async () => {
+		function wrap(value: unknown) {
+			return { value, type: typeof value };
+		}
+		Object.defineProperty(wrap, "toString", {
+			value: () =>
+				"function wrap(value) { return { value, type: typeof value }; }",
+		});
+
+		const tool = new FunctionTool(wrap, {
+			description: "typeless schema property",
+		});
+		vi.spyOn(tool, "getDeclaration").mockReturnValue({
+			name: "wrap",
+			description: "typeless",
+			parameters: {
+				type: "OBJECT",
+				properties: {
+					value: { description: "no type field" } as any,
+				},
+			},
+		} as any);
+
+		await expect(
+			tool.runAsync({ value: 9 } as any, makeContext()),
+		).resolves.toEqual({ value: "9", type: "string" });
+	});
+
+	it("defaults convertArgumentType to string when declaration omits the property", async () => {
+		function wrap(value: unknown) {
+			return { value, type: typeof value };
+		}
+		Object.defineProperty(wrap, "toString", {
+			value: () =>
+				"function wrap(value) { return { value, type: typeof value }; }",
+		});
+
+		const tool = new FunctionTool(wrap, {
+			description: "missing schema property",
+		});
+		vi.spyOn(tool, "getDeclaration").mockReturnValue({
+			name: "wrap",
+			description: "missing prop",
+			parameters: {
+				type: "OBJECT",
+				properties: {},
+			},
+		} as any);
+
+		await expect(
+			tool.runAsync({ value: true } as any, makeContext()),
+		).resolves.toEqual({ value: "true", type: "string" });
 	});
 });

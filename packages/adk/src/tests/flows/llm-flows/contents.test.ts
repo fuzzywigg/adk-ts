@@ -1765,4 +1765,57 @@ describe("contents requestProcessor leftover edges", () => {
 		expect(llmRequest.contents[0].role).toBe("user");
 		expect(llmRequest.contents[0].parts?.[1]?.text).toContain("peer-agent");
 	});
+
+	it("preserves foreign non-text fallback parts and skips empty-part auth-shaped events", async () => {
+		const llmRequest = new LlmRequest();
+		const foreign = new Event({
+			author: "peer",
+			content: {
+				role: "model",
+				parts: [
+					{ inlineData: { mimeType: "image/png", data: "abc" } },
+					{ functionCall: { id: "fc1", name: "lookup", args: { q: 1 } } },
+					{
+						functionResponse: {
+							id: "fc1",
+							name: "lookup",
+							response: { ok: true },
+						},
+					},
+				],
+			},
+		});
+		const authShapedNoParts = new Event({
+			author: "user",
+			content: { role: "user", parts: [] },
+		});
+		(authShapedNoParts.content as { parts?: unknown }).parts = undefined;
+
+		await drain(
+			requestProcessor.runAsync(
+				ctx(duckAgent("assistant", "default"), [
+					foreign,
+					authShapedNoParts,
+					userEvent("go"),
+				]),
+				llmRequest,
+			),
+		);
+
+		const rewritten = llmRequest.contents[0];
+		expect(rewritten.role).toBe("user");
+		expect(rewritten.parts?.[0]).toEqual({ text: "For context:" });
+		expect(
+			rewritten.parts?.some((p) => p.inlineData?.mimeType === "image/png"),
+		).toBe(true);
+		expect(
+			rewritten.parts?.some((p) => p.text?.includes("called tool `lookup`")),
+		).toBe(true);
+		expect(
+			rewritten.parts?.some((p) =>
+				p.text?.includes("`lookup` tool returned result"),
+			),
+		).toBe(true);
+		expect(llmRequest.contents.map((c) => c.parts?.[0]?.text)).toContain("go");
+	});
 });

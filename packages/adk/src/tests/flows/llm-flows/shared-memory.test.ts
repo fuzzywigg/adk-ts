@@ -398,3 +398,69 @@ describe("sharedMemoryRequestProcessor", () => {
 		);
 	});
 });
+
+describe("sharedMemoryRequestProcessor leftover coalescing edges", () => {
+	it("coalesces falsy part text on the user query and memory text", async () => {
+		const searchMemory = vi.fn(async () => ({
+			memories: [
+				{
+					author: "past",
+					content: {
+						role: "user",
+						parts: [{ text: "" }, {}],
+					},
+				},
+			],
+		}));
+		const { context, llmRequest } = makeContext({
+			memoryService: { searchMemory } as any,
+			events: [
+				new Event({
+					author: "user",
+					content: {
+						role: "user",
+						parts: [{ text: "" }, { text: "keep" }, {}],
+					},
+				}),
+			],
+			contents: [{ role: "user", parts: undefined as any }],
+		});
+
+		await drain(sharedMemoryRequestProcessor.runAsync(context, llmRequest));
+		expect(searchMemory).toHaveBeenCalledWith(
+			expect.objectContaining({ query: " keep " }),
+		);
+		expect(llmRequest.contents?.at(-1)?.parts?.[0]?.text).toBe(
+			"[past] said:  ",
+		);
+	});
+
+	it("treats contents entries without parts as empty session texts for dedupe", async () => {
+		const searchMemory = vi.fn(async () => ({
+			memories: [
+				{
+					author: "past",
+					content: { role: "user", parts: [{ text: "fresh" }] },
+				},
+			],
+		}));
+		const { context, llmRequest } = makeContext({
+			memoryService: { searchMemory } as any,
+			events: [
+				new Event({
+					author: "user",
+					content: { role: "user", parts: [{ text: "q" }] },
+				}),
+			],
+			contents: [
+				{ role: "user" } as any,
+				{ role: "model", parts: null as any },
+			],
+		});
+
+		await drain(sharedMemoryRequestProcessor.runAsync(context, llmRequest));
+		expect(llmRequest.contents?.at(-1)?.parts?.[0]?.text).toBe(
+			"[past] said: fresh",
+		);
+	});
+});

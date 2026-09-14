@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { FileOperationsTool } from "../../../tools/common/file-operations-tool";
 import type { ToolContext } from "../../../tools/tool-context";
 
@@ -672,6 +672,95 @@ describe("FileOperationsTool", () => {
 		expect(result).toEqual({
 			success: false,
 			error: "Unsupported operation: chmod",
+		});
+	});
+});
+
+describe("FileOperationsTool inner catch String(error) leftovers", () => {
+	let basePath: string;
+	let tool: FileOperationsTool;
+
+	beforeEach(async () => {
+		basePath = await fs.mkdtemp(path.join(os.tmpdir(), "adk-file-ops-inner-"));
+		tool = new FileOperationsTool({ basePath });
+	});
+
+	afterEach(async () => {
+		vi.restoreAllMocks();
+		await fs.rm(basePath, { recursive: true, force: true });
+	});
+
+	it("stringifies non-Error readFile rejections inside the private catch", async () => {
+		vi.spyOn(fs, "readFile").mockRejectedValue("disk-gone");
+		const result = await tool.runAsync(
+			{ operation: "read", filepath: "x.txt" },
+			makeContext(),
+		);
+		expect(result).toEqual({
+			success: false,
+			error: "Failed to read file: disk-gone",
+		});
+	});
+
+	it("stringifies non-Error writeFile rejections inside the private catch", async () => {
+		vi.spyOn(fs, "mkdir").mockResolvedValue(undefined as any);
+		vi.spyOn(fs, "writeFile").mockRejectedValue({ code: "EIO" });
+		const result = await tool.runAsync(
+			{ operation: "write", filepath: "x.txt", content: "hi" },
+			makeContext(),
+		);
+		expect(result).toEqual({
+			success: false,
+			error: "Failed to write to file: [object Object]",
+		});
+	});
+
+	it("stringifies non-Error appendFile rejections inside the private catch", async () => {
+		vi.spyOn(fs, "mkdir").mockResolvedValue(undefined as any);
+		vi.spyOn(fs, "appendFile").mockRejectedValue(404);
+		const result = await tool.runAsync(
+			{ operation: "append", filepath: "x.txt", content: "more" },
+			makeContext(),
+		);
+		expect(result).toEqual({
+			success: false,
+			error: "Failed to append to file: 404",
+		});
+	});
+
+	it("stringifies non-Error unlink rejections inside the private catch", async () => {
+		vi.spyOn(fs, "unlink").mockRejectedValue("unlink-blocked");
+		const result = await tool.runAsync(
+			{ operation: "delete", filepath: "x.txt" },
+			makeContext(),
+		);
+		expect(result).toEqual({
+			success: false,
+			error: "Failed to delete file: unlink-blocked",
+		});
+	});
+
+	it("stringifies non-Error readdir rejections inside the private catch", async () => {
+		vi.spyOn(fs, "readdir").mockRejectedValue("not-a-dir");
+		const result = await tool.runAsync(
+			{ operation: "list", filepath: "." },
+			makeContext(),
+		);
+		expect(result).toEqual({
+			success: false,
+			error: "Failed to list directory: not-a-dir",
+		});
+	});
+
+	it("stringifies non-Error mkdir rejections inside the private catch", async () => {
+		vi.spyOn(fs, "mkdir").mockRejectedValue("mkdir-blocked");
+		const result = await tool.runAsync(
+			{ operation: "mkdir", filepath: "new-dir" },
+			makeContext(),
+		);
+		expect(result).toEqual({
+			success: false,
+			error: "Failed to create directory: mkdir-blocked",
 		});
 	});
 });

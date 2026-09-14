@@ -674,3 +674,108 @@ describe("McpClientService non-Error throws and SSE header edges", () => {
 		expect(caught?.originalError).toBe(root);
 	});
 });
+
+describe("McpClientService sampling wrap and setSamplingHandler leftovers", () => {
+	it("wraps non-McpError throws from handleSamplingRequest via String()", async () => {
+		const service = new McpClientService(
+			stdioConfig({ samplingHandler: async () => "ok" }),
+		);
+		await service.initialize();
+
+		(service as any).mcpSamplingHandler.handleSamplingRequest = async () => {
+			throw "raw-string-fail";
+		};
+
+		const registered = setRequestHandler.mock.calls[0][1];
+		let caught: McpError | undefined;
+		try {
+			await registered({
+				method: "sampling/createMessage",
+				params: {
+					messages: [{ role: "user", content: { type: "text", text: "x" } }],
+					maxTokens: 4,
+				},
+			});
+		} catch (error) {
+			caught = error as McpError;
+		}
+
+		expect(caught?.type).toBe(McpErrorType.SAMPLING_ERROR);
+		expect(caught?.message).toContain("raw-string-fail");
+		expect(caught?.originalError).toBeUndefined();
+	});
+
+	it("re-throws McpError from handleSamplingRequest without wrapping", async () => {
+		const service = new McpClientService(
+			stdioConfig({ samplingHandler: async () => "ok" }),
+		);
+		await service.initialize();
+
+		const original = new McpError("already mcp", McpErrorType.SAMPLING_ERROR);
+		(service as any).mcpSamplingHandler.handleSamplingRequest = async () => {
+			throw original;
+		};
+
+		const registered = setRequestHandler.mock.calls[0][1];
+		await expect(
+			registered({
+				method: "sampling/createMessage",
+				params: {
+					messages: [{ role: "user", content: { type: "text", text: "x" } }],
+					maxTokens: 4,
+				},
+			}),
+		).rejects.toBe(original);
+	});
+
+	it("logs when setSamplingHandler update rejects after client is connected", async () => {
+		const service = new McpClientService(stdioConfig());
+		await service.initialize();
+
+		const errorSpy = vi
+			.spyOn((service as any).logger, "error")
+			.mockImplementation(() => {});
+		(service as any).setupSamplingHandler = async () => {
+			throw new Error("update-fail");
+		};
+
+		service.setSamplingHandler(async () => "ok");
+		await new Promise((resolve) => setTimeout(resolve, 0));
+
+		expect(errorSpy).toHaveBeenCalledWith(
+			"Failed to update ADK sampling handler:",
+			expect.any(Error),
+		);
+		errorSpy.mockRestore();
+	});
+
+	it("wraps Error throws from handleSamplingRequest preserving originalError", async () => {
+		const service = new McpClientService(
+			stdioConfig({ samplingHandler: async () => "ok" }),
+		);
+		await service.initialize();
+
+		const root = new Error("handler-impl-boom");
+		(service as any).mcpSamplingHandler.handleSamplingRequest = async () => {
+			throw root;
+		};
+
+		const registered = setRequestHandler.mock.calls[0][1];
+		let caught: McpError | undefined;
+		try {
+			await registered({
+				method: "sampling/createMessage",
+				params: {
+					messages: [{ role: "user", content: { type: "text", text: "x" } }],
+					maxTokens: 4,
+				},
+			});
+		} catch (error) {
+			caught = error as McpError;
+		}
+
+		expect(caught?.type).toBe(McpErrorType.SAMPLING_ERROR);
+		expect(caught?.message).toContain("handler-impl-boom");
+		expect(caught?.originalError).toBe(root);
+	});
+});
