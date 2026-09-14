@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { LlmAgent } from "../agents/llm-agent";
+import { getArtifactUri } from "../artifacts/artifact-util";
 import { InMemoryArtifactService } from "../artifacts/in-memory-artifact-service";
 import { Event } from "../events/event";
 import { EventActions } from "../events/event-actions";
@@ -541,5 +542,577 @@ describe("Runner.rewind", () => {
 				args.artifact?.inlineData?.mimeType === "application/octet-stream",
 		);
 		expect(emptyBlobCall).toBeTruthy();
+	});
+
+	it("treats undefined stateDelta values as deletions when computing rewind point", async () => {
+		const session = await runner.sessionService.createSession(
+			runner.appName,
+			userId,
+			{},
+			sessionId,
+		);
+
+		await runner.sessionService.appendEvent(
+			session,
+			new Event({
+				invocationId: "invocation1",
+				author: "agent",
+				content: { role: "model", parts: [{ text: "one" }] },
+				actions: new EventActions({
+					stateDelta: { keep: "a", gone: "b" },
+				}),
+			}),
+		);
+		await runner.sessionService.appendEvent(
+			session,
+			new Event({
+				invocationId: "invocation2",
+				author: "agent",
+				content: { role: "model", parts: [{ text: "two" }] },
+				actions: new EventActions({
+					stateDelta: { gone: undefined, keep: "a2" },
+				}),
+			}),
+		);
+		await runner.sessionService.appendEvent(
+			session,
+			new Event({
+				invocationId: "invocation3",
+				author: "agent",
+				content: { role: "model", parts: [{ text: "three" }] },
+				actions: new EventActions({
+					stateDelta: { keep: "a3", extra: "x" },
+				}),
+			}),
+		);
+
+		await runner.rewind({
+			userId,
+			sessionId,
+			rewindBeforeInvocationId: "invocation3",
+		});
+
+		const updated = await runner.sessionService.getSession(
+			runner.appName,
+			userId,
+			sessionId,
+		);
+		expect(updated?.state.keep).toBe("a2");
+		expect(updated?.state.gone).toBeUndefined();
+		expect(updated?.state.extra).toBeUndefined();
+	});
+
+	it("omits state keys whose rewind-point value already matches current state", async () => {
+		const session = await runner.sessionService.createSession(
+			runner.appName,
+			userId,
+			{},
+			sessionId,
+		);
+
+		await runner.sessionService.appendEvent(
+			session,
+			new Event({
+				invocationId: "invocation1",
+				author: "agent",
+				content: { role: "model", parts: [{ text: "one" }] },
+				actions: new EventActions({
+					stateDelta: { stable: "same", changing: "v1" },
+				}),
+			}),
+		);
+		await runner.sessionService.appendEvent(
+			session,
+			new Event({
+				invocationId: "invocation2",
+				author: "agent",
+				content: { role: "model", parts: [{ text: "two" }] },
+				actions: new EventActions({
+					stateDelta: { changing: "v2" },
+				}),
+			}),
+		);
+
+		await runner.rewind({
+			userId,
+			sessionId,
+			rewindBeforeInvocationId: "invocation2",
+		});
+
+		const updated = await runner.sessionService.getSession(
+			runner.appName,
+			userId,
+			sessionId,
+		);
+		const rewindDelta = updated?.events.at(-1)?.actions?.stateDelta ?? {};
+		expect(rewindDelta.changing).toBe("v1");
+		expect(Object.keys(rewindDelta)).not.toContain("stable");
+		expect(updated?.state.stable).toBe("same");
+		expect(updated?.state.changing).toBe("v1");
+	});
+
+	it("nulls all session-scoped state when rewinding before the first event", async () => {
+		const session = await runner.sessionService.createSession(
+			runner.appName,
+			userId,
+			{},
+			sessionId,
+		);
+
+		await runner.sessionService.appendEvent(
+			session,
+			new Event({
+				invocationId: "invocation1",
+				author: "agent",
+				content: { role: "model", parts: [{ text: "one" }] },
+				actions: new EventActions({
+					stateDelta: {
+						local: "v1",
+						"app:theme": "dark",
+						"user:locale": "en",
+					},
+				}),
+			}),
+		);
+
+		await runner.rewind({
+			userId,
+			sessionId,
+			rewindBeforeInvocationId: "invocation1",
+		});
+
+		const updated = await runner.sessionService.getSession(
+			runner.appName,
+			userId,
+			sessionId,
+		);
+		expect(updated?.state.local).toBeUndefined();
+		expect(updated?.state["app:theme"]).toBe("dark");
+		expect(updated?.state["user:locale"]).toBe("en");
+		expect(updated?.events.at(-1)?.actions?.stateDelta).toEqual({
+			local: null,
+		});
+	});
+
+	it("uses the first matching invocation id when duplicates exist", async () => {
+		const session = await runner.sessionService.createSession(
+			runner.appName,
+			userId,
+			{},
+			sessionId,
+		);
+
+		await runner.sessionService.appendEvent(
+			session,
+			new Event({
+				invocationId: "dup",
+				author: "agent",
+				content: { role: "model", parts: [{ text: "first" }] },
+				actions: new EventActions({
+					stateDelta: { marker: "at-first" },
+				}),
+			}),
+		);
+		await runner.sessionService.appendEvent(
+			session,
+			new Event({
+				invocationId: "middle",
+				author: "agent",
+				content: { role: "model", parts: [{ text: "middle" }] },
+				actions: new EventActions({
+					stateDelta: { marker: "at-middle" },
+				}),
+			}),
+		);
+		await runner.sessionService.appendEvent(
+			session,
+			new Event({
+				invocationId: "dup",
+				author: "agent",
+				content: { role: "model", parts: [{ text: "second-dup" }] },
+				actions: new EventActions({
+					stateDelta: { marker: "at-second-dup", later: "x" },
+				}),
+			}),
+		);
+
+		await runner.rewind({
+			userId,
+			sessionId,
+			rewindBeforeInvocationId: "dup",
+		});
+
+		const updated = await runner.sessionService.getSession(
+			runner.appName,
+			userId,
+			sessionId,
+		);
+		expect(updated?.state.marker).toBeUndefined();
+		expect(updated?.state.later).toBeUndefined();
+		expect(updated?.events.at(-1)?.actions?.stateDelta).toEqual({
+			marker: null,
+			later: null,
+		});
+	});
+
+	it("skips events without actions while computing rewind deltas", async () => {
+		const session = await runner.sessionService.createSession(
+			runner.appName,
+			userId,
+			{},
+			sessionId,
+		);
+
+		await runner.sessionService.appendEvent(
+			session,
+			new Event({
+				invocationId: "invocation1",
+				author: "agent",
+				content: { role: "model", parts: [{ text: "bare" }] },
+			}),
+		);
+		await runner.sessionService.appendEvent(
+			session,
+			new Event({
+				invocationId: "invocation2",
+				author: "agent",
+				content: { role: "model", parts: [{ text: "with-state" }] },
+				actions: new EventActions({
+					stateDelta: { k: "v2" },
+				}),
+			}),
+		);
+
+		await expect(
+			runner.rewind({
+				userId,
+				sessionId,
+				rewindBeforeInvocationId: "invocation2",
+			}),
+		).resolves.toBeUndefined();
+
+		const updated = await runner.sessionService.getSession(
+			runner.appName,
+			userId,
+			sessionId,
+		);
+		expect(updated?.state.k).toBeUndefined();
+	});
+
+	it("appends a user rewind event with metadata and logs the invocation id", async () => {
+		const session = await runner.sessionService.createSession(
+			runner.appName,
+			userId,
+			{},
+			sessionId,
+		);
+		await runner.sessionService.appendEvent(
+			session,
+			new Event({
+				invocationId: "invocation1",
+				author: "agent",
+				content: { role: "model", parts: [{ text: "one" }] },
+				actions: new EventActions({
+					stateDelta: { k: "v1" },
+				}),
+			}),
+		);
+		await runner.sessionService.appendEvent(
+			session,
+			new Event({
+				invocationId: "invocation2",
+				author: "agent",
+				content: { role: "model", parts: [{ text: "two" }] },
+				actions: new EventActions({
+					stateDelta: { k: "v2" },
+				}),
+			}),
+		);
+
+		const infoSpy = vi
+			.spyOn((runner as any).logger, "info")
+			.mockImplementation(() => {});
+
+		await runner.rewind({
+			userId,
+			sessionId,
+			rewindBeforeInvocationId: "invocation2",
+		});
+
+		expect(infoSpy).toHaveBeenCalledWith(
+			"Rewinding session to invocation:",
+			"invocation2",
+		);
+
+		const updated = await runner.sessionService.getSession(
+			runner.appName,
+			userId,
+			sessionId,
+		);
+		const rewindEvent = updated?.events.at(-1);
+		expect(rewindEvent?.author).toBe("user");
+		expect(rewindEvent?.actions?.rewindBeforeInvocationId).toBe("invocation2");
+		expect(rewindEvent?.actions?.stateDelta).toEqual({ k: "v1" });
+		expect(rewindEvent?.invocationId).toBeTruthy();
+		expect(rewindEvent?.invocationId).not.toBe("invocation2");
+	});
+
+	it("skips artifact saves when version at rewind point equals current version", async () => {
+		const session = await runner.sessionService.createSession(
+			runner.appName,
+			userId,
+			{},
+			sessionId,
+		);
+
+		await runner.artifactService?.saveArtifact({
+			appName: runner.appName,
+			userId,
+			sessionId,
+			filename: "stable",
+			artifact: { text: "v0" },
+		});
+		await runner.artifactService?.saveArtifact({
+			appName: runner.appName,
+			userId,
+			sessionId,
+			filename: "changing",
+			artifact: { text: "c0" },
+		});
+
+		await runner.sessionService.appendEvent(
+			session,
+			new Event({
+				invocationId: "invocation1",
+				author: "agent",
+				content: { role: "model", parts: [{ text: "one" }] },
+				actions: new EventActions({
+					artifactDelta: { stable: 0, changing: 0 },
+				}),
+			}),
+		);
+
+		await runner.artifactService?.saveArtifact({
+			appName: runner.appName,
+			userId,
+			sessionId,
+			filename: "changing",
+			artifact: { text: "c1" },
+		});
+
+		await runner.sessionService.appendEvent(
+			session,
+			new Event({
+				invocationId: "invocation2",
+				author: "agent",
+				content: { role: "model", parts: [{ text: "two" }] },
+				actions: new EventActions({
+					artifactDelta: { changing: 1 },
+				}),
+			}),
+		);
+
+		const saveSpy = vi.spyOn(runner.artifactService!, "saveArtifact");
+
+		await runner.rewind({
+			userId,
+			sessionId,
+			rewindBeforeInvocationId: "invocation2",
+		});
+
+		const savedFilenames = saveSpy.mock.calls.map(([args]) => args.filename);
+		expect(savedFilenames).toContain("changing");
+		expect(savedFilenames).not.toContain("stable");
+
+		const rewindDelta =
+			(
+				await runner.sessionService.getSession(
+					runner.appName,
+					userId,
+					sessionId,
+				)
+			)?.events.at(-1)?.actions?.artifactDelta ?? {};
+		expect(Object.keys(rewindDelta)).toEqual(["changing"]);
+		expect(Object.keys(rewindDelta)).not.toContain("stable");
+	});
+
+	it("restores prior artifact versions via fileData artifact URIs", async () => {
+		const session = await runner.sessionService.createSession(
+			runner.appName,
+			userId,
+			{},
+			sessionId,
+		);
+
+		await runner.artifactService?.saveArtifact({
+			appName: runner.appName,
+			userId,
+			sessionId,
+			filename: "doc",
+			artifact: { text: "v0" },
+		});
+
+		await runner.sessionService.appendEvent(
+			session,
+			new Event({
+				invocationId: "invocation1",
+				author: "agent",
+				content: { role: "model", parts: [{ text: "one" }] },
+				actions: new EventActions({
+					artifactDelta: { doc: 0 },
+				}),
+			}),
+		);
+
+		await runner.artifactService?.saveArtifact({
+			appName: runner.appName,
+			userId,
+			sessionId,
+			filename: "doc",
+			artifact: { text: "v1" },
+		});
+
+		await runner.sessionService.appendEvent(
+			session,
+			new Event({
+				invocationId: "invocation2",
+				author: "agent",
+				content: { role: "model", parts: [{ text: "two" }] },
+				actions: new EventActions({
+					artifactDelta: { doc: 1 },
+				}),
+			}),
+		);
+
+		const saveSpy = vi.spyOn(runner.artifactService!, "saveArtifact");
+		const expectedUri = getArtifactUri({
+			appName: runner.appName,
+			userId,
+			sessionId,
+			filename: "doc",
+			version: 0,
+		});
+
+		await runner.rewind({
+			userId,
+			sessionId,
+			rewindBeforeInvocationId: "invocation2",
+		});
+
+		const fileDataCall = saveSpy.mock.calls.find(
+			([args]) =>
+				args.filename === "doc" &&
+				args.artifact?.fileData?.fileUri === expectedUri,
+		);
+		expect(fileDataCall).toBeTruthy();
+
+		const loaded = await runner.artifactService?.loadArtifact({
+			appName: runner.appName,
+			userId,
+			sessionId,
+			filename: "doc",
+		});
+		expect(loaded).toEqual({ text: "v0" });
+	});
+
+	it("mixes unchanged, empty-blob, and fileData artifact restores in one rewind", async () => {
+		const session = await runner.sessionService.createSession(
+			runner.appName,
+			userId,
+			{},
+			sessionId,
+		);
+
+		await runner.artifactService?.saveArtifact({
+			appName: runner.appName,
+			userId,
+			sessionId,
+			filename: "keep",
+			artifact: { text: "keep-v0" },
+		});
+		await runner.artifactService?.saveArtifact({
+			appName: runner.appName,
+			userId,
+			sessionId,
+			filename: "restore",
+			artifact: { text: "restore-v0" },
+		});
+
+		await runner.sessionService.appendEvent(
+			session,
+			new Event({
+				invocationId: "invocation1",
+				author: "agent",
+				content: { role: "model", parts: [{ text: "one" }] },
+				actions: new EventActions({
+					artifactDelta: { keep: 0, restore: 0 },
+				}),
+			}),
+		);
+
+		await runner.artifactService?.saveArtifact({
+			appName: runner.appName,
+			userId,
+			sessionId,
+			filename: "restore",
+			artifact: { text: "restore-v1" },
+		});
+		await runner.artifactService?.saveArtifact({
+			appName: runner.appName,
+			userId,
+			sessionId,
+			filename: "brand-new",
+			artifact: { text: "new-v0" },
+		});
+
+		await runner.sessionService.appendEvent(
+			session,
+			new Event({
+				invocationId: "invocation2",
+				author: "agent",
+				content: { role: "model", parts: [{ text: "two" }] },
+				actions: new EventActions({
+					artifactDelta: { restore: 1, "brand-new": 0 },
+				}),
+			}),
+		);
+
+		const saveSpy = vi.spyOn(runner.artifactService!, "saveArtifact");
+
+		await runner.rewind({
+			userId,
+			sessionId,
+			rewindBeforeInvocationId: "invocation2",
+		});
+
+		const savedByName = Object.fromEntries(
+			saveSpy.mock.calls.map(([args]) => [args.filename, args.artifact]),
+		);
+		expect(savedByName.keep).toBeUndefined();
+		expect(savedByName.restore?.fileData?.fileUri).toBe(
+			getArtifactUri({
+				appName: runner.appName,
+				userId,
+				sessionId,
+				filename: "restore",
+				version: 0,
+			}),
+		);
+		expect(savedByName["brand-new"]?.inlineData).toEqual({
+			mimeType: "application/octet-stream",
+			data: "",
+		});
+
+		const rewindDelta =
+			(
+				await runner.sessionService.getSession(
+					runner.appName,
+					userId,
+					sessionId,
+				)
+			)?.events.at(-1)?.actions?.artifactDelta ?? {};
+		expect(Object.keys(rewindDelta).sort()).toEqual(
+			["brand-new", "restore"].sort(),
+		);
 	});
 });

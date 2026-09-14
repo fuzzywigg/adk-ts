@@ -84,4 +84,89 @@ describe("LLMRegistry", () => {
 		LLMRegistry.registerModel("named", fakeModel);
 		expect(() => LLMRegistry.logRegisteredModels()).not.toThrow();
 	});
+
+	it("resolve returns the first registered pattern that matches", () => {
+		class Early {
+			constructor(public model: string) {}
+			static supportedModels(): string[] {
+				return ["^shared-.*$"];
+			}
+		}
+		class Late {
+			constructor(public model: string) {}
+			static supportedModels(): string[] {
+				return ["^shared-.*$"];
+			}
+		}
+
+		LLMRegistry.registerLLM(Early as unknown as LlmClassLike);
+		LLMRegistry.registerLLM(Late as unknown as LlmClassLike);
+
+		expect(LLMRegistry.resolve("shared-1")?.name).toBe("Early");
+		expect(LLMRegistry.newLLM("shared-1")).toBeInstanceOf(Early);
+	});
+
+	it("keeps the first Map entry when the same regex string is registered twice", () => {
+		class First {
+			constructor(public model: string) {}
+			static supportedModels(): string[] {
+				return ["^exact$"];
+			}
+		}
+		class Second {
+			constructor(public model: string) {}
+			static supportedModels(): string[] {
+				return ["^exact$"];
+			}
+		}
+
+		// Map keys are distinct RegExp instances, so duplicate pattern strings do not
+		// overwrite — resolve returns the earliest matching registration.
+		LLMRegistry.register("^exact$", First as unknown as LlmClassLike);
+		LLMRegistry.register("^exact$", Second as unknown as LlmClassLike);
+
+		expect(LLMRegistry.resolve("exact")?.name).toBe("First");
+	});
+
+	it("getModelOrCreate prefers named instances over class patterns", () => {
+		LLMRegistry.registerLLM(FakeLlmClass);
+		LLMRegistry.registerModel("fake-1", fakeModel);
+
+		expect(LLMRegistry.getModelOrCreate("fake-1")).toBe(fakeModel);
+		expect(LLMRegistry.getModelOrCreate("fake-2")).toBeInstanceOf(FakeLlm);
+	});
+
+	it("unregisterModel is a no-op for unknown names", () => {
+		expect(() => LLMRegistry.unregisterModel("missing")).not.toThrow();
+		expect(LLMRegistry.hasModel("missing")).toBe(false);
+	});
+
+	it("clear wipes both class patterns and named instances", () => {
+		LLMRegistry.registerLLM(FakeLlmClass);
+		LLMRegistry.registerModel("named", fakeModel);
+
+		LLMRegistry.clear();
+
+		expect(LLMRegistry.resolve("fake-1")).toBeNull();
+		expect(LLMRegistry.hasModel("named")).toBe(false);
+		expect(() => LLMRegistry.newLLM("fake-1")).toThrow(
+			"No LLM class found for model: fake-1",
+		);
+	});
+
+	it("registerLLM registers every supportedModels pattern", () => {
+		class Multi {
+			constructor(public model: string) {}
+			static supportedModels(): string[] {
+				return ["^alpha-.*$", "^beta-.*$", "^gamma$"];
+			}
+		}
+
+		LLMRegistry.registerLLM(Multi as unknown as LlmClassLike);
+
+		expect(LLMRegistry.resolve("alpha-1")?.name).toBe("Multi");
+		expect(LLMRegistry.resolve("beta-9")?.name).toBe("Multi");
+		expect(LLMRegistry.resolve("gamma")?.name).toBe("Multi");
+		expect(LLMRegistry.resolve("delta")).toBeNull();
+	});
 });

@@ -229,4 +229,95 @@ describe("BaseTool", () => {
 		});
 		expect(tool.validateArguments({})).toBe(true);
 	});
+
+	it("exposes default apiVariant google for subclasses", () => {
+		class VariantTool extends BaseTool {
+			getDeclaration() {
+				return null;
+			}
+			peekVariant() {
+				return this.apiVariant;
+			}
+		}
+
+		const tool = new VariantTool({
+			name: "variant_tool",
+			description: "Exposes api variant",
+		});
+		expect(tool.peekVariant()).toBe("google");
+	});
+
+	it("processLlmRequest appends a new functionDeclarations entry when tools lack declarations", async () => {
+		const tool = new StubTool({
+			name: "search_tool",
+			description: "Searches things",
+		});
+		const request = new LlmRequest({
+			config: {
+				tools: [{ googleSearch: {} } as any],
+			},
+		});
+
+		await tool.processLlmRequest(makeContext(), request);
+
+		expect(request.toolsDict.search_tool).toBe(tool);
+		expect(request.config?.tools).toHaveLength(2);
+		expect(
+			(request.config?.tools?.[1] as any).functionDeclarations[0].name,
+		).toBe("search_tool");
+	});
+
+	it("safeExecute wraps non-Error throws into the exhaustion envelope", async () => {
+		const tool = new StubTool(
+			{
+				name: "string_fail",
+				description: "Throws a string",
+			},
+			async () => {
+				throw "plain boom";
+			},
+		);
+		vi.spyOn(console, "error").mockImplementation(() => {});
+
+		await expect(
+			tool.safeExecute({ query: "x" }, makeContext()),
+		).resolves.toEqual({
+			error: "Execution failed",
+			message: "plain boom",
+			tool: "string_fail",
+		});
+	});
+
+	it("safeExecute succeeds on first attempt without retry delay when retries disabled", async () => {
+		const tool = new StubTool(
+			{
+				name: "once_tool",
+				description: "Runs once",
+			},
+			async (args) => ({ echoed: args.query }),
+		);
+
+		await expect(
+			tool.safeExecute({ query: "hello" }, makeContext()),
+		).resolves.toEqual({
+			result: { echoed: "hello" },
+		});
+	});
+
+	it("accepts alphanumeric and underscore tool names including leading digits", () => {
+		expect(
+			() =>
+				new StubTool({
+					name: "tool_1",
+					description: "Valid name",
+				}),
+		).not.toThrow();
+		expect(
+			() =>
+				new StubTool({
+					name: "9lives",
+					description: "Leading digit allowed",
+				}),
+		).not.toThrow();
+	});
 });
