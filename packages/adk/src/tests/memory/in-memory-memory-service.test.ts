@@ -806,4 +806,27 @@ describe("InMemoryMemoryService", () => {
 		});
 		expect(hits.memories.map((m) => m.author)).toEqual(["a", "b"]);
 	});
+
+	it("searchMemory continues past events lacking content/parts when map is mutated", async () => {
+		const service = new InMemoryMemoryService();
+		await service.addSessionToMemory(makeSession({ events: [] }));
+		const userKey = "app/user";
+		(service as any)._sessionEvents.get(userKey).set("session-1", [
+			{ author: "user", timestamp: 1 },
+			{ author: "user", timestamp: 2, content: {} },
+			{
+				author: "user",
+				timestamp: 3,
+				content: { parts: [{ text: "Keep Lisbon warm" }] },
+			},
+		]);
+
+		const hits = await service.searchMemory({
+			appName: "app",
+			userId: "user",
+			query: "lisbon",
+		});
+		expect(hits.memories).toHaveLength(1);
+		expect(hits.memories[0].content?.parts?.[0]?.text).toContain("Lisbon");
+	});
 });

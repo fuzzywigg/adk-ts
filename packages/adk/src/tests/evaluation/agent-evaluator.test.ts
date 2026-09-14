@@ -979,6 +979,29 @@ describe("AgentEvaluator._loadEvalSetFromFile and _loadDataset edges", () => {
 			),
 		).rejects.toThrow(/Failed to process eval set file/);
 	});
+
+	it("wraps non-array JSON objects when loading a directory dataset", async () => {
+		const dir = await makeTempDir();
+		await fs.writeFile(
+			path.join(dir, "obj.test.json"),
+			JSON.stringify({
+				query: "solo",
+				reference: "r",
+				expected_tool_use: [],
+			}),
+		);
+
+		const loaded = await (AgentEvaluator as any)._loadDataset(dir);
+		expect(loaded).toEqual([
+			[
+				{
+					query: "solo",
+					reference: "r",
+					expected_tool_use: [],
+				},
+			],
+		]);
+	});
 });
 
 describe("AgentEvaluator._validateInput ALLOWED_CRITERIA edges", () => {

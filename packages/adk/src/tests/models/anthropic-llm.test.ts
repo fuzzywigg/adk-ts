@@ -696,5 +696,31 @@ describe("AnthropicLlm", () => {
 				}),
 			);
 		});
+
+		it("asserts instance model fallback and maps null contents via || []", async () => {
+			const req = {
+				contents: null,
+				config: {},
+				getSystemInstructionText: () => "",
+			} as unknown as LlmRequest;
+
+			await anthropicLlm["generateContentAsyncImpl"](req).next();
+
+			expect(mockMessagesCreate).toHaveBeenCalledWith(
+				expect.objectContaining({
+					model: "claude-3-5-sonnet-20241022",
+					messages: [],
+				}),
+			);
+		});
+
+		it("contentToAnthropicMessage maps missing parts to []", () => {
+			expect(
+				anthropicLlm["contentToAnthropicMessage"]({ role: "user" }),
+			).toEqual({
+				role: "user",
+				content: [],
+			});
+		});
 	});
 });

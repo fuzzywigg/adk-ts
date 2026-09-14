@@ -1293,4 +1293,172 @@ describe("OpenAiLlm", () => {
 			);
 		});
 	});
+
+	describe("leftover deepen (post #126 TOKENMAXX)", () => {
+		function baseRequest(
+			overrides: Partial<LlmRequest> & Record<string, unknown> = {},
+		): LlmRequest {
+			return new LlmRequest({
+				contents: [{ role: "user", parts: [{ text: "hi" }] }],
+				config: {},
+				...overrides,
+			});
+		}
+
+		it("falls back to instance model and maps null contents via || []", async () => {
+			mockCreate.mockResolvedValue({
+				choices: [{ message: { content: "x" }, finish_reason: "stop" }],
+			});
+
+			const req = {
+				contents: null,
+				config: {},
+				getSystemInstructionText: () => "",
+			} as any;
+
+			for await (const _ of (llm as any).generateContentAsyncImpl(req, false)) {
+				// drain
+			}
+
+			expect(mockCreate).toHaveBeenCalledWith(
+				expect.objectContaining({
+					model: "gpt-4o-mini",
+					messages: [],
+				}),
+			);
+		});
+
+		it("emits buffered thoughtText on finish_reason without prior merge clear", async () => {
+			mockCreate.mockResolvedValue(
+				(async function* () {
+					yield {
+						choices: [
+							{
+								delta: { content: "[thinking] plan" },
+								finish_reason: null,
+							},
+						],
+					};
+					yield {
+						choices: [
+							{
+								delta: { content: "answer" },
+								finish_reason: "stop",
+							},
+						],
+						usage: {
+							prompt_tokens: 1,
+							completion_tokens: 2,
+							total_tokens: 3,
+						},
+					};
+				})(),
+			);
+
+			const responses: LlmResponse[] = [];
+			for await (const response of (llm as any).generateContentAsyncImpl(
+				baseRequest(),
+				true,
+			)) {
+				responses.push(response);
+			}
+
+			const finished = responses.find((r) => r.finishReason === "STOP");
+			expect(finished?.content?.parts).toEqual([
+				{ text: "[thinking] plan", thought: true },
+				{ text: "answer" },
+			]);
+			expect(finished?.usageMetadata?.totalTokenCount).toBe(3);
+		});
+
+		it("parses missing tool-call arguments as {} on stream finish", async () => {
+			mockCreate.mockResolvedValue(
+				(async function* () {
+					yield {
+						choices: [
+							{
+								delta: {
+									tool_calls: [
+										{
+											index: 0,
+											id: "tc-empty",
+											type: "function",
+											function: { name: "lookup" },
+										},
+									],
+								},
+								finish_reason: null,
+							},
+						],
+					};
+					yield {
+						choices: [{ delta: {}, finish_reason: "tool_calls" }],
+						usage: {
+							prompt_tokens: 1,
+							completion_tokens: 1,
+							total_tokens: 2,
+						},
+					};
+				})(),
+			);
+
+			const responses: LlmResponse[] = [];
+			for await (const response of (llm as any).generateContentAsyncImpl(
+				baseRequest(),
+				true,
+			)) {
+				responses.push(response);
+			}
+
+			const finished = responses.find((r) => r.finishReason === "STOP");
+			expect(finished?.content?.parts).toEqual([
+				{
+					functionCall: {
+						id: "tc-empty",
+						name: "lookup",
+						args: {},
+					},
+				},
+			]);
+		});
+
+		it("yields leftover thought-only buffer after stream when usage arrived", async () => {
+			mockCreate.mockResolvedValue(
+				(async function* () {
+					yield {
+						choices: [
+							{
+								delta: { content: "[thinking] only" },
+								finish_reason: null,
+							},
+						],
+						usage: {
+							prompt_tokens: 4,
+							completion_tokens: 1,
+							total_tokens: 5,
+						},
+					};
+				})(),
+			);
+
+			const responses: LlmResponse[] = [];
+			for await (const response of (llm as any).generateContentAsyncImpl(
+				baseRequest(),
+				true,
+			)) {
+				responses.push(response);
+			}
+
+			const leftover = responses.find(
+				(r) =>
+					!r.partial &&
+					!r.finishReason &&
+					r.content?.parts?.length === 1 &&
+					(r.content.parts[0] as any).thought === true &&
+					r.content.parts[0].text === "[thinking] only",
+			);
+			expect(leftover).toBeTruthy();
+			expect(leftover?.usageMetadata?.totalTokenCount).toBe(5);
+		});
+	});
 });

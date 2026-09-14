@@ -400,4 +400,22 @@ describe("PluginManager", () => {
 		);
 		expect(values).toHaveLength(12);
 	});
+
+	it("skips duck plugins that lack the callback property entirely (!method)", async () => {
+		const answering = new TestPlugin("answering", { hit: true });
+		const bare = { name: "bare" } as any;
+		const manager = new PluginManager({ plugins: [bare, answering] });
+
+		await expect(
+			manager.runBeforeRunCallback({ invocationContext: {} as any }),
+		).resolves.toEqual({ hit: true });
+	});
+
+	it("close continues when close is missing on a duck plugin (!closeMethod)", async () => {
+		const manager = new PluginManager({
+			plugins: [{ name: "no-close" } as any],
+			closeTimeout: 1000,
+		});
+		await expect(manager.close()).resolves.toBeUndefined();
+	});
 });

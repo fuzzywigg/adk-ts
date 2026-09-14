@@ -2285,6 +2285,17 @@ describe("Runner.runAsync", () => {
 		await expect(gen.next()).rejects.toBe("string-boom");
 		expect(debugSpy).toHaveBeenCalled();
 	});
+
+	it("_findAgentToRun treats missing session.events as empty via || []", () => {
+		const session = { id: "s", userId: "u", events: undefined } as any;
+		expect((runner as any)._findAgentToRun(session, agent)).toBe(agent);
+	});
+
+	it("_newInvocationContext nulls omitted newMessage via || null", () => {
+		const session = { id: "s", userId: "u", events: [] } as any;
+		const ctx = (runner as any)._newInvocationContext(session, {});
+		expect(ctx.userContent).toBeNull();
+	});
 });
 
 describe("_findFunctionCallEventIfLastEventIsFunctionResponse leftovers", () => {
