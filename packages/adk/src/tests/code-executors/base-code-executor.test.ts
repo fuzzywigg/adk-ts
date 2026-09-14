@@ -134,4 +134,11 @@ describe("BaseCodeExecutor", () => {
 		const executor = new StubCodeExecutor({ errorRetryAttempts });
 		expect(executor.errorRetryAttempts).toBe(errorRetryAttempts);
 	});
+
+	it("accepts empty config object as all defaults", () => {
+		const executor = new StubCodeExecutor({});
+		expect(executor.optimizeDataFile).toBe(false);
+		expect(executor.stateful).toBe(false);
+		expect(executor.errorRetryAttempts).toBe(2);
+	});
 });

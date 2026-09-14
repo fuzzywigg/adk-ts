@@ -146,4 +146,11 @@ describe("BuiltInCodeExecutor", () => {
 		expect(a.config?.tools).toHaveLength(1);
 		expect(b.config?.tools).toHaveLength(1);
 	});
+
+	it("rejects gemini-3 style models that are not gemini-2", () => {
+		const executor = new BuiltInCodeExecutor();
+		expect(() =>
+			executor.processLlmRequest(new LlmRequest({ model: "gemini-3.0-pro" })),
+		).toThrow(/not supported for model gemini-3.0-pro/);
+	});
 });

@@ -331,4 +331,54 @@ describe("auth credentials leftover edges", () => {
 		const credential = new ApiKeyCredential("k");
 		await expect(credential.refresh()).rejects.toThrow(/not supported/i);
 	});
+
+	it("refresh with nullish result throws Failed to refresh token", async () => {
+		const credential = new OAuth2Credential({
+			accessToken: "access",
+			refreshToken: "refresh",
+			refreshFunction: async () => null as any,
+		});
+		await expect(credential.refresh()).rejects.toThrow(
+			/Failed to refresh token/,
+		);
+	});
+
+	it("ApiKeyCredential header scheme with empty api key still emits header", () => {
+		const credential = new ApiKeyCredential("");
+		const config = new AuthConfig({
+			authScheme: new ApiKeyScheme({ in: "header", name: "X-Empty" }),
+		});
+		expect(credential.getHeaders(config)).toEqual({ "X-Empty": "" });
+		expect(credential.getToken()).toBe("");
+	});
+
+	it("OAuth2Credential refresh updates expiresAt when expiresIn is positive", async () => {
+		vi.useFakeTimers();
+		vi.setSystemTime(new Date("2024-06-01T00:00:00.000Z"));
+		const credential = new OAuth2Credential({
+			accessToken: "access",
+			refreshToken: "refresh",
+			expiresIn: 10,
+			refreshFunction: async () => ({
+				accessToken: "next",
+				expiresIn: 3600,
+			}),
+		});
+		await credential.refresh();
+		expect(credential.getToken()).toBe("next");
+		expect(credential.expiresAt?.toISOString()).toBe(
+			"2024-06-01T01:00:00.000Z",
+		);
+		expect(credential.isExpired()).toBe(false);
+		vi.useRealTimers();
+	});
+
+	it("BasicAuthCredential encodes unicode username and password", () => {
+		const credential = new BasicAuthCredential("üser", "päss");
+		const expected = Buffer.from("üser:päss").toString("base64");
+		expect(credential.getToken()).toBe(expected);
+		expect(credential.getHeaders()).toEqual({
+			Authorization: `Basic ${expected}`,
+		});
+	});
 });

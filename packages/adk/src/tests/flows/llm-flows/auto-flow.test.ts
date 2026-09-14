@@ -53,4 +53,22 @@ describe("AutoFlow", () => {
 		expect(a.requestProcessors.at(-1)).toBe(agentTransferRequestProcessor);
 		expect(b.requestProcessors.at(-1)).toBe(agentTransferRequestProcessor);
 	});
+
+	it("extends SingleFlow and keeps response processors identical", () => {
+		const auto = new AutoFlow();
+		const single = new SingleFlow();
+		expect(auto).toBeInstanceOf(SingleFlow);
+		expect(auto.responseProcessors).toEqual(single.responseProcessors);
+		expect(auto.requestProcessors.length).toBeGreaterThan(
+			single.requestProcessors.length,
+		);
+	});
+
+	it("agent transfer is appended exactly once", () => {
+		const auto = new AutoFlow();
+		const transferCount = auto.requestProcessors.filter(
+			(p) => p === agentTransferRequestProcessor,
+		).length;
+		expect(transferCount).toBe(1);
+	});
 });

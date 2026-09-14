@@ -30,4 +30,25 @@ describe("llm-flows barrel exports", () => {
 		expect(flowsBarrel.SingleFlow).toBe(flows.SingleFlow);
 		expect(flowsBarrel.AutoFlow).toBe(flows.AutoFlow);
 	});
+
+	it("instantiates SingleFlow and AutoFlow from barrel exports", () => {
+		const single = new flows.SingleFlow();
+		const auto = new flows.AutoFlow();
+		expect(single.requestProcessors.length).toBe(8);
+		expect(auto.requestProcessors.length).toBe(9);
+		expect(auto.requestProcessors.at(-1)).toBe(
+			flows.agentTransferRequestProcessor,
+		);
+	});
+
+	it("exposes processor instances with runAsync methods", () => {
+		expect(typeof flows.basicRequestProcessor.runAsync).toBe("function");
+		expect(typeof flows.identityRequestProcessor.runAsync).toBe("function");
+		expect(typeof flows.instructionsRequestProcessor.runAsync).toBe("function");
+		expect(typeof flows.nlPlanningRequestProcessor.runAsync).toBe("function");
+		expect(typeof flows.nlPlanningResponseProcessor.runAsync).toBe("function");
+		expect(typeof flows.agentTransferRequestProcessor.runAsync).toBe(
+			"function",
+		);
+	});
 });

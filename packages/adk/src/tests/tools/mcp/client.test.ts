@@ -479,3 +479,198 @@ describe("McpClientService.reinitialize / close / sampling handlers", () => {
 		});
 	});
 });
+
+describe("McpClientService non-Error throws and SSE header edges", () => {
+	it("initialize wraps non-Error connect rejection via String() without originalError", async () => {
+		connect.mockRejectedValue("spawn-string-fail");
+		const service = new McpClientService(stdioConfig());
+
+		let caught: McpError | undefined;
+		try {
+			await service.initialize();
+		} catch (error) {
+			caught = error as McpError;
+		}
+
+		expect(caught).toBeInstanceOf(McpError);
+		expect(caught?.type).toBe(McpErrorType.CONNECTION_ERROR);
+		expect(caught?.message).toContain("spawn-string-fail");
+		expect(caught?.originalError).toBeUndefined();
+		expect(service.isConnected()).toBe(false);
+	});
+
+	it("createTransport wraps non-Error construction throws via String()", async () => {
+		StreamableHTTPClientTransport.mockImplementation(function Boom() {
+			throw "bad-url-string";
+		});
+		const service = new McpClientService(sseConfig());
+
+		let caught: McpError | undefined;
+		try {
+			await service.initialize();
+		} catch (error) {
+			caught = error as McpError;
+		}
+
+		expect(caught?.type).toBe(McpErrorType.CONNECTION_ERROR);
+		expect(caught?.message).toContain("Failed to create transport");
+		expect(caught?.message).toContain("bad-url-string");
+		expect(caught?.originalError).toBeUndefined();
+	});
+
+	it("callTool wraps non-Error tool failures via String() without originalError", async () => {
+		callTool.mockRejectedValue(42);
+		const service = new McpClientService(
+			stdioConfig({ retryOptions: { maxRetries: 0 } }),
+		);
+
+		let caught: McpError | undefined;
+		try {
+			await service.callTool("echo", {});
+		} catch (error) {
+			caught = error as McpError;
+		}
+
+		expect(caught?.type).toBe(McpErrorType.TOOL_EXECUTION_ERROR);
+		expect(caught?.message).toContain('Error calling tool "echo"');
+		expect(caught?.message).toContain("42");
+		expect(caught?.originalError).toBeUndefined();
+	});
+
+	it("SSE transport uses empty headers when transport.headers is omitted", async () => {
+		const service = new McpClientService({
+			name: "sse-bare",
+			description: "sse without transport headers for headers||{} path",
+			transport: {
+				mode: "sse" as const,
+				serverUrl: "https://mcp.example.com/sse",
+			},
+		});
+
+		await service.initialize();
+
+		const [, opts] = StreamableHTTPClientTransport.mock.calls[0];
+		expect(opts).toEqual({
+			requestInit: {
+				headers: {},
+			},
+		});
+	});
+
+	it("SSE transport merges config.headers when transport.headers is undefined", async () => {
+		const service = new McpClientService({
+			name: "sse-cfg-headers",
+			description: "sse merges top-level headers when transport headers absent",
+			headers: { "X-App": "adk" },
+			transport: {
+				mode: "sse" as const,
+				serverUrl: "https://mcp.example.com/sse",
+			},
+		});
+
+		await service.initialize();
+
+		const [, opts] = StreamableHTTPClientTransport.mock.calls[0];
+		expect(opts.requestInit.headers).toEqual({ "X-App": "adk" });
+	});
+
+	it("sampling callback wraps raw Error with originalError set", async () => {
+		const root = new Error("raw-handler-error");
+		const handler = vi.fn().mockRejectedValue(root);
+		const service = new McpClientService(
+			stdioConfig({ samplingHandler: handler }),
+		);
+		await service.initialize();
+
+		const registered = setRequestHandler.mock.calls[0][1];
+		let caught: McpError | undefined;
+		try {
+			await registered({
+				method: "sampling/createMessage",
+				params: {
+					messages: [{ role: "user", content: { type: "text", text: "ping" } }],
+					maxTokens: 8,
+				},
+			});
+		} catch (error) {
+			caught = error as McpError;
+		}
+
+		expect(caught?.type).toBe(McpErrorType.SAMPLING_ERROR);
+		expect(caught?.message).toContain("raw-handler-error");
+		expect(caught?.originalError).toBe(root);
+	});
+
+	it("sampling callback wraps non-Error rejection without originalError", async () => {
+		const handler = vi.fn().mockRejectedValue({ reason: "plain-object" });
+		const service = new McpClientService(
+			stdioConfig({ samplingHandler: handler }),
+		);
+		await service.initialize();
+
+		const registered = setRequestHandler.mock.calls[0][1];
+		let caught: McpError | undefined;
+		try {
+			await registered({
+				method: "sampling/createMessage",
+				params: {
+					messages: [{ role: "user", content: { type: "text", text: "ping" } }],
+					maxTokens: 4,
+				},
+			});
+		} catch (error) {
+			caught = error as McpError;
+		}
+
+		expect(caught?.type).toBe(McpErrorType.SAMPLING_ERROR);
+		expect(caught?.message).toContain("[object Object]");
+		expect(caught?.originalError).toBeUndefined();
+	});
+
+	it("initialize wraps Error connect failures with originalError preserved", async () => {
+		const root = new Error("spawn errno");
+		connect.mockRejectedValue(root);
+		const service = new McpClientService(stdioConfig());
+
+		let caught: McpError | undefined;
+		try {
+			await service.initialize();
+		} catch (error) {
+			caught = error as McpError;
+		}
+
+		expect(caught?.type).toBe(McpErrorType.CONNECTION_ERROR);
+		expect(caught?.originalError).toBe(root);
+	});
+
+	it("stdio transport construction non-Error throw uses String()", async () => {
+		StdioClientTransport.mockImplementation(function Boom() {
+			throw Symbol.for("stdio-fail");
+		});
+		const service = new McpClientService(stdioConfig());
+
+		await expect(service.initialize()).rejects.toMatchObject({
+			type: McpErrorType.CONNECTION_ERROR,
+			message: expect.stringContaining("Failed to create transport"),
+			originalError: undefined,
+		});
+	});
+
+	it("callTool preserves originalError for Error rejections", async () => {
+		const root = new Error("tool boom");
+		callTool.mockRejectedValue(root);
+		const service = new McpClientService(
+			stdioConfig({ retryOptions: { maxRetries: 0 } }),
+		);
+
+		let caught: McpError | undefined;
+		try {
+			await service.callTool("echo", { a: 1 });
+		} catch (error) {
+			caught = error as McpError;
+		}
+
+		expect(caught?.type).toBe(McpErrorType.TOOL_EXECUTION_ERROR);
+		expect(caught?.originalError).toBe(root);
+	});
+});

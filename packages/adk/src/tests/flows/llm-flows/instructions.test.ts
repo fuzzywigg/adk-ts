@@ -390,4 +390,71 @@ describe("instructions requestProcessor leftover edges", () => {
 		expect(text).toContain("Answer briefly");
 		expect(text).toContain("IMPORTANT: After any tool calls");
 	});
+
+	it("skips global instruction when rootAgent is not an LlmAgent", async () => {
+		const agent = {
+			name: "child",
+			canonicalModel: "gpt-4o",
+			instruction: "local only",
+			rootAgent: {
+				name: "sequential-root",
+				globalInstruction: "should-not-apply",
+			},
+			canonicalInstruction: async () =>
+				["local only", true] as [string, boolean],
+		};
+		const llmRequest = new LlmRequest();
+		await drain(
+			requestProcessor.runAsync(
+				{ agent } as unknown as InvocationContext,
+				llmRequest,
+			),
+		);
+		const text = llmRequest.getSystemInstructionText() ?? "";
+		expect(text).toContain("local only");
+		expect(text).not.toContain("should-not-apply");
+	});
+
+	it("combines instruction and output schema guidance in one pass", async () => {
+		const schema = z.object({ value: z.string(), count: z.number() });
+		const agent = {
+			name: "combo",
+			canonicalModel: "gpt-4o",
+			instruction: "Be precise",
+			rootAgent: { name: "root" },
+			outputSchema: schema,
+			canonicalInstruction: async () =>
+				["Be precise", true] as [string, boolean],
+		};
+		const llmRequest = new LlmRequest();
+		await drain(
+			requestProcessor.runAsync(
+				{ agent } as unknown as InvocationContext,
+				llmRequest,
+			),
+		);
+		const text = llmRequest.getSystemInstructionText() ?? "";
+		expect(text).toContain("Be precise");
+		expect(text).toContain("application/json");
+		expect(text).toContain("value");
+		expect(text).toContain("count");
+		expect(text).toContain("IMPORTANT: After any tool calls");
+	});
+
+	it("returns early for agents without canonicalModel", async () => {
+		const llmRequest = new LlmRequest();
+		await drain(
+			requestProcessor.runAsync(
+				{
+					agent: {
+						name: "loop",
+						instruction: "ignored",
+						rootAgent: { name: "root" },
+					},
+				} as unknown as InvocationContext,
+				llmRequest,
+			),
+		);
+		expect(llmRequest.getSystemInstructionText()).toBeUndefined();
+	});
 });

@@ -558,4 +558,70 @@ describe("output-schema responseProcessor leftover edges", () => {
 		);
 		expect(events).toEqual([]);
 	});
+
+	it("repairs trailing commas in JSON via jsonrepair", async () => {
+		const schema = z.object({ n: z.number(), label: z.string() });
+		const response = new LlmResponse({
+			content: {
+				role: "model",
+				parts: [{ text: '{"n": 3, "label": "ok",}' }],
+			},
+		});
+		const events = await collect(
+			responseProcessor.runAsync(
+				makeContext({ name: "repair-agent", outputSchema: schema }),
+				response,
+			),
+		);
+		expect(events).toEqual([]);
+		expect(JSON.parse(response.content?.parts?.[0]?.text ?? "{}")).toEqual({
+			n: 3,
+			label: "ok",
+		});
+	});
+
+	it("leaves non-text parts unchanged while rewriting text parts", async () => {
+		const schema = z.object({ ok: z.boolean() });
+		const response = new LlmResponse({
+			content: {
+				role: "model",
+				parts: [
+					{ functionCall: { name: "noop", args: {} } } as any,
+					{ text: '{"ok":true}' },
+				],
+			},
+		});
+		await collect(
+			responseProcessor.runAsync(
+				makeContext({ name: "mixed-parts", outputSchema: schema }),
+				response,
+			),
+		);
+		expect((response.content?.parts?.[0] as any).functionCall).toEqual({
+			name: "noop",
+			args: {},
+		});
+		expect(JSON.parse(response.content?.parts?.[1]?.text ?? "{}")).toEqual({
+			ok: true,
+		});
+	});
+
+	it("strips prose before JSON when no fences are present", async () => {
+		const schema = z.object({ answer: z.string() });
+		const response = new LlmResponse({
+			content: {
+				role: "model",
+				parts: [{ text: 'Here is the result:\n{"answer":"yes"}' }],
+			},
+		});
+		await collect(
+			responseProcessor.runAsync(
+				makeContext({ name: "prose-agent", outputSchema: schema }),
+				response,
+			),
+		);
+		expect(JSON.parse(response.content?.parts?.[0]?.text ?? "{}")).toEqual({
+			answer: "yes",
+		});
+	});
 });

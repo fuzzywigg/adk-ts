@@ -256,4 +256,23 @@ describe("CodeExecutorContext", () => {
 		context.setExecutionId("second");
 		expect(context.getExecutionId()).toBe("second");
 	});
+
+	it("incrementErrorCount and resetErrorCount round-trip", () => {
+		const state = State.create({}, {});
+		const context = new CodeExecutorContext(state);
+		expect(context.getErrorCount("inv-a")).toBe(0);
+		context.incrementErrorCount("inv-a");
+		context.incrementErrorCount("inv-a");
+		expect(context.getErrorCount("inv-a")).toBe(2);
+		context.resetErrorCount("inv-a");
+		expect(context.getErrorCount("inv-a")).toBe(0);
+	});
+
+	it("getInputFileNames returns empty until files are recorded", () => {
+		const state = State.create({}, {});
+		const context = new CodeExecutorContext(state);
+		expect(context.getProcessedFileNames()).toEqual([]);
+		context.addProcessedFileNames(["a.py"]);
+		expect(context.getProcessedFileNames()).toEqual(["a.py"]);
+	});
 });

@@ -4,7 +4,11 @@ import {
 	AuthCredentialType,
 	ApiKeyCredential,
 } from "../../auth/auth-credential";
-import { ApiKeyScheme, HttpScheme } from "../../auth/auth-schemes";
+import {
+	ApiKeyScheme,
+	HttpScheme,
+	OAuth2Scheme,
+} from "../../auth/auth-schemes";
 import {
 	AuthTool,
 	createAuthToolArguments,
@@ -239,5 +243,67 @@ describe("AuthTool leftover edges", () => {
 			rawAuthCredential: new ApiKeyCredential("k"),
 		};
 		expect(isEnhancedAuthConfig(lookalike as any)).toBe(false);
+	});
+
+	it("generateCredentialKey uses oauth2 scheme and oauth2 credential types", () => {
+		const config = new EnhancedAuthConfig({
+			authScheme: new OAuth2Scheme({
+				flows: {
+					authorizationCode: {
+						authorizationUrl: "https://example.com/auth",
+						tokenUrl: "https://example.com/token",
+						scopes: {},
+					},
+				},
+			}),
+			rawAuthCredential: {
+				type: AuthCredentialType.OAUTH2,
+				getToken: () => "t",
+				getHeaders: () => ({}),
+				canRefresh: () => false,
+				refresh: async () => undefined,
+			} as any,
+		});
+		expect(config.getCredentialKey()).toMatch(/^adk_oauth2_oauth2_\d+$/);
+	});
+
+	it("processAuthRequest returns failed status for throwing plain AuthConfig access", async () => {
+		const authConfig = new AuthConfig({
+			authScheme: new HttpScheme({ scheme: "bearer" }),
+		});
+		Object.defineProperty(authConfig, "authScheme", {
+			get() {
+				throw new Error("scheme boom");
+			},
+		});
+		await expect(
+			AuthTool.processAuthRequest({
+				function_call_id: "fc-throw",
+				auth_config: authConfig,
+			}),
+		).resolves.toEqual({ status: "auth_request_failed" });
+	});
+
+	it("getCredentialKey regenerates distinct keys after clearing credentialKey", () => {
+		const config = new EnhancedAuthConfig({
+			authScheme: new ApiKeyScheme({ in: "header", name: "x" }),
+			rawAuthCredential: new ApiKeyCredential("k"),
+		});
+		config.credentialKey = undefined;
+		const first = config.getCredentialKey();
+		config.credentialKey = undefined;
+		const second = config.getCredentialKey();
+		expect(first).toMatch(/^adk_apiKey_api_key_\d+$/);
+		expect(second).toMatch(/^adk_apiKey_api_key_\d+$/);
+	});
+
+	it("validateAuthArguments accepts EnhancedAuthConfig instances", () => {
+		const args = createAuthToolArguments(
+			"fc-valid",
+			new EnhancedAuthConfig({
+				authScheme: new HttpScheme({ scheme: "basic" }),
+			}),
+		);
+		expect(AuthTool.validateAuthArguments(args)).toBe(true);
 	});
 });

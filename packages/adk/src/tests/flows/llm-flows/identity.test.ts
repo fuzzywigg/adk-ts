@@ -89,4 +89,37 @@ describe("identity requestProcessor", () => {
 		);
 		expect(events).toEqual([]);
 	});
+
+	it("includes description with special characters and quotes", async () => {
+		const llmRequest = new LlmRequest();
+		await collect(
+			requestProcessor.runAsync(
+				{
+					agent: {
+						name: "quoted",
+						description: 'Says "hello" & <bye>',
+					},
+				} as InvocationContext,
+				llmRequest,
+			),
+		);
+		const text = llmRequest.getSystemInstructionText() ?? "";
+		expect(text).toContain('Your internal name is "quoted"');
+		expect(text).toContain(
+			'The description about you is "Says "hello" & <bye>"',
+		);
+	});
+
+	it("handles agent names with underscores and numbers", async () => {
+		const llmRequest = new LlmRequest();
+		await collect(
+			requestProcessor.runAsync(
+				{ agent: { name: "agent_v2" } } as InvocationContext,
+				llmRequest,
+			),
+		);
+		expect(llmRequest.getSystemInstructionText()).toContain(
+			'Your internal name is "agent_v2"',
+		);
+	});
 });

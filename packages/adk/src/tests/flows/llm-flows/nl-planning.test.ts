@@ -566,4 +566,65 @@ describe("nl-planning leftover edges", () => {
 				.every((p) => !p.thought),
 		).toBe(true);
 	});
+
+	it("requestProcessor is a no-op when contents is null", async () => {
+		const llmRequest = new LlmRequest();
+		(llmRequest as any).contents = null;
+		await drain(
+			requestProcessor.runAsync(
+				makeContext({
+					agent: {
+						name: "null-contents",
+						planner: new PlanReActPlanner(),
+					},
+				}),
+				llmRequest,
+			),
+		);
+		expect(llmRequest.contents).toBeNull();
+		expect(llmRequest.config?.systemInstruction).toBeTruthy();
+	});
+
+	it("requestProcessor skips contents entries without parts", async () => {
+		const llmRequest = new LlmRequest({
+			contents: [
+				{ role: "user" } as any,
+				{
+					role: "user",
+					parts: [{ text: "keep", thought: true } as any],
+				},
+			],
+		});
+		await drain(
+			requestProcessor.runAsync(
+				makeContext({
+					agent: {
+						name: "sparse-parts",
+						planner: new PlanReActPlanner(),
+					},
+				}),
+				llmRequest,
+			),
+		);
+		expect((llmRequest.contents?.[0] as any).parts).toBeUndefined();
+		expect(llmRequest.contents?.[1].parts?.[0].thought).toBeUndefined();
+	});
+
+	it("falls back to PlanReActPlanner when planner lacks planning methods", async () => {
+		const llmRequest = new LlmRequest();
+		await drain(
+			requestProcessor.runAsync(
+				makeContext({
+					agent: {
+						name: "duck-fail",
+						planner: { notAPlanner: true },
+					},
+				}),
+				llmRequest,
+			),
+		);
+		expect(String(llmRequest.config?.systemInstruction ?? "")).toContain(
+			"PLANNING",
+		);
+	});
 });
