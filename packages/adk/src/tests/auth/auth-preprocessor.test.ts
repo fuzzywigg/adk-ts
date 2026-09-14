@@ -1800,6 +1800,89 @@ describe("auth requestProcessor null-author leftover", () => {
 		);
 		warn.mockRestore();
 	});
+
+	it("continues past trailing non-user authors before reading the user EUC response", async () => {
+		const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+		handleFunctionCallsAsyncMock.mockResolvedValue(null);
+
+		const originalCall = new Event({
+			author: "auth-agent",
+			content: {
+				role: "model",
+				parts: [
+					{
+						functionCall: {
+							id: "tool-trailing-nonuser",
+							name: "secure_api",
+							args: {},
+						},
+					},
+				],
+			},
+		});
+		const eucCall = new Event({
+			author: "auth-agent",
+			content: {
+				role: "model",
+				parts: [
+					{
+						functionCall: {
+							id: "euc-trailing-nonuser",
+							name: REQUEST_EUC_FUNCTION_CALL_NAME,
+							args: JSON.stringify({
+								function_call_id: "tool-trailing-nonuser",
+							}) as any,
+						},
+					},
+				],
+			},
+		});
+		const eucResponse = new Event({
+			author: "user",
+			content: {
+				role: "user",
+				parts: [
+					{
+						functionResponse: {
+							id: "euc-trailing-nonuser",
+							name: REQUEST_EUC_FUNCTION_CALL_NAME,
+							response: JSON.stringify({
+								authScheme: { type: "apiKey" },
+								rawAuthCredential: { apiKey: "k" },
+							}),
+						},
+					},
+				],
+			},
+		});
+		const trailingAssistant = new Event({
+			author: "auth-agent",
+			content: { role: "model", parts: [{ text: "after user" }] },
+		});
+
+		const tool = { name: "secure_api" };
+		const events = await collect(
+			requestProcessor.runAsync(
+				baseCtx({
+					agent: {
+						name: "auth-agent",
+						canonicalTools: async () => [tool],
+					},
+					events: [originalCall, eucCall, eucResponse, trailingAssistant],
+				}),
+				new LlmRequest(),
+			),
+		);
+
+		expect(events).toEqual([]);
+		expect(handleFunctionCallsAsyncMock).toHaveBeenCalledWith(
+			expect.anything(),
+			originalCall,
+			{ secure_api: tool },
+			new Set(["tool-trailing-nonuser"]),
+		);
+		warn.mockRestore();
+	});
 });
 
 describe("auth requestProcessor author-continue leftover edges", () => {

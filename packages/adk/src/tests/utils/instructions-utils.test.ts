@@ -845,5 +845,47 @@ describe("injectSessionState", () => {
 			const result = await injectSessionState("{temp:$tmp}", readonlyContext);
 			expect(result).toBe("ok");
 		});
+
+		it("returns empty for optional vars when formatValue throws", async () => {
+			mockContext.session.state = {
+				weird: {
+					toJSON() {
+						throw new Error("toJSON boom");
+					},
+				},
+			};
+			const result = await injectSessionState("X={weird?}", readonlyContext);
+			expect(result).toBe("X=");
+		});
+
+		it("rethrows formatValue errors for required vars", async () => {
+			mockContext.session.state = {
+				weird: {
+					toJSON() {
+						throw new Error("toJSON boom");
+					},
+				},
+			};
+			await expect(
+				injectSessionState("X={weird}", readonlyContext),
+			).rejects.toThrow("toJSON boom");
+		});
+
+		it("returns empty for optional nested vars when JSON.stringify throws", async () => {
+			mockContext.session.state = {
+				basket: {
+					item: {
+						toJSON() {
+							throw new Error("nested boom");
+						},
+					},
+				},
+			};
+			const result = await injectSessionState(
+				"V={basket.item?}",
+				readonlyContext,
+			);
+			expect(result).toBe("V=");
+		});
 	});
 });

@@ -1932,4 +1932,116 @@ describe("contents requestProcessor leftover edges", () => {
 			),
 		).rejects.toThrow("There should be at least one function_response part.");
 	});
+
+	it("returns foreign events unchanged when parts disappear after filtering", async () => {
+		let partsReads = 0;
+		const liveParts = [{ text: "foreign context" }];
+		const content: Record<string, unknown> = { role: "model" };
+		Object.defineProperty(content, "parts", {
+			configurable: true,
+			enumerable: true,
+			get() {
+				partsReads++;
+				// Filter touches parts three times (!parts, .length, .some).
+				// isAuthEvent and convertForeignEvent then see undefined parts.
+				if (partsReads <= 3) {
+					return liveParts;
+				}
+				return undefined;
+			},
+		});
+		const foreign = new Event({ author: "other-agent", content });
+		const llmRequest = new LlmRequest();
+
+		await drain(
+			requestProcessor.runAsync(
+				ctx(duckAgent("assistant", "default"), [
+					foreign,
+					userEvent("continue"),
+				]),
+				llmRequest,
+			),
+		);
+
+		expect(partsReads).toBeGreaterThanOrEqual(5);
+		expect(llmRequest.contents[0]).toEqual({ role: "model" });
+		expect(llmRequest.contents[1].parts?.[0]).toEqual({ text: "continue" });
+		expect(
+			llmRequest.contents.some((c) =>
+				c.parts?.some((p) => p.text === "For context:"),
+			),
+		).toBe(false);
+	});
+
+	it("throws when mergeFunctionResponseEvents receives an empty list", async () => {
+		const call = new Event({
+			author: "assistant",
+			content: {
+				role: "model",
+				parts: [
+					{ functionCall: { id: "c1", name: "tool_a", args: {} } },
+					{ functionCall: { id: "c2", name: "tool_b", args: {} } },
+				],
+			},
+		});
+		const fr1 = new Event({
+			author: "user",
+			content: {
+				role: "user",
+				parts: [
+					{
+						functionResponse: {
+							id: "c1",
+							name: "tool_a",
+							response: { a: 1 },
+						},
+					},
+				],
+			},
+		});
+		const fr2 = new Event({
+			author: "user",
+			content: {
+				role: "user",
+				parts: [
+					{
+						functionResponse: {
+							id: "c2",
+							name: "tool_b",
+							response: { b: 2 },
+						},
+					},
+				],
+			},
+		});
+
+		const originalFrom = Array.from;
+		Array.from = ((
+			...args: Parameters<typeof Array.from>
+		): ReturnType<typeof Array.from> => {
+			const source = args[0];
+			if (source instanceof Set && source.size > 1) {
+				return [];
+			}
+			return originalFrom.apply(Array, args as [Iterable<unknown>]);
+		}) as typeof Array.from;
+
+		try {
+			await expect(
+				drain(
+					requestProcessor.runAsync(
+						ctx(duckAgent("assistant", "default"), [
+							call,
+							fr1,
+							fr2,
+							userEvent("after tools"),
+						]),
+						new LlmRequest(),
+					),
+				),
+			).rejects.toThrow("At least one function_response event is required.");
+		} finally {
+			Array.from = originalFrom;
+		}
+	});
 });

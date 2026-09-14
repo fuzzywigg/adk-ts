@@ -504,4 +504,56 @@ describe("instructions requestProcessor leftover edges", () => {
 		expect(text).toContain("boolean");
 		expect(text).not.toContain("$schema");
 	});
+
+	it("strips $schema when schema object includes draft metadata", async () => {
+		const schema = z.object({ only: z.string() });
+		const agent = {
+			name: "schema-draft",
+			canonicalModel: "gpt-4o",
+			rootAgent: { name: "root" },
+			outputSchema: schema,
+		};
+		const llmRequest = new LlmRequest();
+		await drain(
+			requestProcessor.runAsync(
+				{ agent } as unknown as InvocationContext,
+				llmRequest,
+			),
+		);
+		const text = llmRequest.getSystemInstructionText() ?? "";
+		const raw = z.toJSONSchema(schema) as Record<string, unknown>;
+		expect(raw).toHaveProperty("$schema");
+		expect(text).toContain('"only"');
+		expect(text).not.toContain("$schema");
+		expect(text).toContain("application/json");
+	});
+
+	it("swallows outputSchema errors from throwing schema proxies after instructions", async () => {
+		const agent = {
+			name: "schema-catch",
+			canonicalModel: "gpt-4o",
+			instruction: "still here",
+			rootAgent: { name: "root" },
+			outputSchema: new Proxy(
+				{},
+				{
+					get() {
+						throw new Error("schema convert failed");
+					},
+				},
+			),
+			canonicalInstruction: async () =>
+				["still here", true] as [string, boolean],
+		};
+		const llmRequest = new LlmRequest();
+		await drain(
+			requestProcessor.runAsync(
+				{ agent } as unknown as InvocationContext,
+				llmRequest,
+			),
+		);
+		const text = llmRequest.getSystemInstructionText() ?? "";
+		expect(text).toContain("still here");
+		expect(text).not.toContain("application/json");
+	});
 });

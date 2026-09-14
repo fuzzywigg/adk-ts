@@ -582,4 +582,49 @@ describe("AgentTool", () => {
 			"chosen",
 		);
 	});
+
+	it("uses tool description for a non-Llm BaseAgent stub without string instruction", () => {
+		const nonLlmAgent = {
+			name: "sequential_stub",
+			description: "BaseAgent sequential stub",
+		} as unknown as LlmAgent;
+		const tool = new AgentTool({
+			name: "seq_as_tool",
+			description: "Wraps a non-Llm agent",
+			agent: nonLlmAgent,
+		});
+
+		expect(tool.description).toBe("Wraps a non-Llm agent");
+		expect(tool.getDeclaration().description).toBe("Wraps a non-Llm agent");
+	});
+
+	it("falls back to BaseAgent description when tool description is omitted", () => {
+		const nonLlmAgent = {
+			name: "loop_stub",
+			description: "BaseAgent loop stub",
+		} as unknown as LlmAgent;
+		const tool = new AgentTool({
+			name: "loop_as_tool",
+			agent: nonLlmAgent,
+		});
+
+		expect(tool.description).toBe("BaseAgent loop stub");
+		expect(tool.getDeclaration().description).toBe("BaseAgent loop stub");
+	});
+
+	it("wraps execution failure when a non-Llm BaseAgent stub cannot run as a tool", async () => {
+		const nonLlmAgent = {
+			name: "parallel_stub",
+			description: "BaseAgent parallel stub",
+		} as unknown as LlmAgent;
+		const tool = new AgentTool({
+			name: "parallel_as_tool",
+			agent: nonLlmAgent,
+		});
+		const { context } = makeToolContext(makeStubAgent());
+
+		await expect(tool.runAsync({ input: "go" }, context)).rejects.toThrow(
+			/Agent tool execution failed:/,
+		);
+	});
 });
