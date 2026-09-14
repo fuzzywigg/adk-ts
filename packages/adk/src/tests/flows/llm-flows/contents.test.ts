@@ -1533,4 +1533,706 @@ describe("contents requestProcessor", () => {
 			expect.arrayContaining(["hello", "after-auth"]),
 		);
 	});
+
+	it("converts foreign multi-part event with text, functionCall, functionResponse, and inlineData", async () => {
+		const llmRequest = new LlmRequest();
+		const foreign = new Event({
+			author: "other-agent",
+			content: {
+				role: "model",
+				parts: [
+					{ text: "analysis" },
+					{
+						functionCall: {
+							id: "fc-mix",
+							name: "search",
+							args: { q: "docs" },
+						},
+					},
+					{
+						functionResponse: {
+							id: "fc-mix",
+							name: "search",
+							response: { hits: 2 },
+						},
+					},
+					{
+						inlineData: {
+							mimeType: "image/jpeg",
+							data: "deadbeef",
+						},
+					},
+				],
+			},
+		});
+
+		await drain(
+			requestProcessor.runAsync(
+				ctx(duckAgent("assistant", "default"), [
+					foreign,
+					userEvent("summarize"),
+				]),
+				llmRequest,
+			),
+		);
+
+		const rewritten = llmRequest.contents[0];
+		expect(rewritten.role).toBe("user");
+		expect(rewritten.parts?.[0]).toEqual({ text: "For context:" });
+		expect(rewritten.parts?.[1]).toEqual({
+			text: "[other-agent] said: analysis",
+		});
+		expect(rewritten.parts?.[2]?.text).toContain(
+			"[other-agent] called tool `search`",
+		);
+		expect(rewritten.parts?.[2]?.text).toContain('"q":"docs"');
+		expect(rewritten.parts?.[3]?.text).toContain(
+			"[other-agent] `search` tool returned result:",
+		);
+		expect(rewritten.parts?.[3]?.text).toContain('"hits":2');
+		expect(rewritten.parts?.[4]).toEqual({
+			inlineData: { mimeType: "image/jpeg", data: "deadbeef" },
+		});
+		expect(llmRequest.contents[1].parts?.[0]).toEqual({ text: "summarize" });
+	});
+
+	it("skips whole event when EUC functionCall is mixed with text parts", async () => {
+		const llmRequest = new LlmRequest();
+		const mixedAuth = new Event({
+			author: "assistant",
+			content: {
+				role: "model",
+				parts: [
+					{ text: "need credentials" },
+					{
+						functionCall: {
+							id: "euc-mix",
+							name: REQUEST_EUC_FUNCTION_CALL_NAME,
+							args: { scope: "drive" },
+						},
+					},
+				],
+			},
+		});
+
+		await drain(
+			requestProcessor.runAsync(
+				ctx(duckAgent("assistant", "default"), [
+					userEvent("before-auth"),
+					mixedAuth,
+					userEvent("after-auth"),
+				]),
+				llmRequest,
+			),
+		);
+
+		expect(llmRequest.contents.map((c) => c.parts?.[0]?.text)).toEqual([
+			"before-auth",
+			"after-auth",
+		]);
+		expect(
+			llmRequest.contents.some((c) =>
+				c.parts?.some((p) => p.text === "need credentials"),
+			),
+		).toBe(false);
+	});
+
+	it("skips EUC functionResponse-only events even when adjacent to real turns", async () => {
+		const llmRequest = new LlmRequest();
+		const eucFrOnly = new Event({
+			author: "user",
+			content: {
+				role: "user",
+				parts: [
+					{
+						functionResponse: {
+							id: "euc-fr-only",
+							name: REQUEST_EUC_FUNCTION_CALL_NAME,
+							response: { token: "secret" },
+						},
+					},
+				],
+			},
+		});
+
+		await drain(
+			requestProcessor.runAsync(
+				ctx(duckAgent("assistant", "default"), [
+					userEvent("ask"),
+					eucFrOnly,
+					agentEvent("assistant", "reply"),
+				]),
+				llmRequest,
+			),
+		);
+
+		expect(llmRequest.contents.map((c) => c.parts?.[0]?.text)).toEqual([
+			"ask",
+			"reply",
+		]);
+		expect(
+			llmRequest.contents.some((c) =>
+				c.parts?.some(
+					(p) => p.functionResponse?.name === REQUEST_EUC_FUNCTION_CALL_NAME,
+				),
+			),
+		).toBe(false);
+	});
+
+	it("applies branch prefix matrix for root.a.b invocation", async () => {
+		const llmRequest = new LlmRequest();
+		const events = [
+			userEvent("keep-ancestor", { branch: "root.a" }),
+			userEvent("drop-deeper", { branch: "root.a.b.c" }),
+			userEvent("keep-exact", { branch: "root.a.b" }),
+			userEvent("keep-unbranched"),
+		];
+
+		await drain(
+			requestProcessor.runAsync(
+				ctx(duckAgent("assistant", "default"), events, "root.a.b"),
+				llmRequest,
+			),
+		);
+
+		expect(llmRequest.contents.map((c) => c.parts?.[0]?.text)).toEqual([
+			"keep-ancestor",
+			"keep-exact",
+			"keep-unbranched",
+		]);
+	});
+
+	it("keeps events when both invocation and event branches are undefined", async () => {
+		const llmRequest = new LlmRequest();
+		const events = [
+			userEvent("alpha"),
+			agentEvent("assistant", "beta"),
+			userEvent("gamma"),
+		];
+
+		await drain(
+			requestProcessor.runAsync(
+				ctx(duckAgent("assistant", "default"), events),
+				llmRequest,
+			),
+		);
+
+		expect(llmRequest.contents.map((c) => c.parts?.[0]?.text)).toEqual([
+			"alpha",
+			"beta",
+			"gamma",
+		]);
+	});
+
+	it("applies rewind then compaction so discarded range never reappears", async () => {
+		const llmRequest = new LlmRequest();
+		const events = [
+			userEvent("pre-rewind", { invocationId: "inv-keep", timestamp: 1 }),
+			agentEvent("assistant", "pre-rewind-reply", {
+				invocationId: "inv-keep",
+				timestamp: 2,
+			}),
+			userEvent("to-discard", { invocationId: "inv-gone", timestamp: 3 }),
+			agentEvent("assistant", "to-discard-reply", {
+				invocationId: "inv-gone",
+				timestamp: 4,
+			}),
+			new Event({
+				author: "user",
+				invocationId: "inv-rewind",
+				timestamp: 5,
+				content: { role: "user", parts: [{ text: "rewind-marker" }] },
+				actions: new EventActions({
+					rewindBeforeInvocationId: "inv-gone",
+				}),
+			}),
+			userEvent("post-rewind", { invocationId: "inv-new", timestamp: 6 }),
+			agentEvent("assistant", "post-rewind-reply", {
+				invocationId: "inv-new",
+				timestamp: 7,
+			}),
+			new Event({
+				author: "assistant",
+				invocationId: "inv-compact",
+				timestamp: 8,
+				content: {
+					role: "model",
+					parts: [{ text: "compaction-marker" }],
+				},
+				actions: new EventActions({
+					compaction: {
+						startTimestamp: 1,
+						endTimestamp: 6.5,
+						compactedContent: {
+							role: "model",
+							parts: [{ text: "compacted after rewind" }],
+						},
+					},
+				}),
+			}),
+			userEvent("tail", { invocationId: "inv-tail", timestamp: 9 }),
+		];
+
+		await drain(
+			requestProcessor.runAsync(
+				ctx(duckAgent("assistant", "default"), events),
+				llmRequest,
+			),
+		);
+
+		const texts = llmRequest.contents.map((c) => c.parts?.[0]?.text);
+		expect(texts).toEqual(["compacted after rewind", "tail"]);
+		expect(texts).not.toContain("to-discard");
+		expect(texts).not.toContain("to-discard-reply");
+		expect(texts).not.toContain("rewind-marker");
+		expect(texts).not.toContain("pre-rewind");
+		expect(texts).not.toContain("post-rewind");
+		expect(texts).not.toContain("post-rewind-reply");
+		expect(texts).not.toContain("compaction-marker");
+	});
+
+	it("keeps a single shared FR event when two FC ids map to the same response event", async () => {
+		const llmRequest = new LlmRequest();
+		const events = [
+			userEvent("prompt"),
+			new Event({
+				author: "assistant",
+				content: {
+					role: "model",
+					parts: [
+						{ functionCall: { id: "same-a", name: "tool_a", args: {} } },
+						{ functionCall: { id: "same-b", name: "tool_b", args: {} } },
+					],
+				},
+			}),
+			new Event({
+				author: "user",
+				content: {
+					role: "user",
+					parts: [
+						{
+							functionResponse: {
+								id: "same-a",
+								name: "tool_a",
+								response: { a: 1 },
+							},
+						},
+						{
+							functionResponse: {
+								id: "same-b",
+								name: "tool_b",
+								response: { b: 2 },
+							},
+						},
+					],
+				},
+			}),
+			userEvent("done"),
+		];
+
+		await drain(
+			requestProcessor.runAsync(
+				ctx(duckAgent("assistant", "default"), events),
+				llmRequest,
+			),
+		);
+
+		const frEvents = llmRequest.contents.filter((c) =>
+			c.parts?.some((p) => p.functionResponse),
+		);
+		expect(frEvents).toHaveLength(1);
+		expect(
+			frEvents[0].parts
+				?.map((p) => p.functionResponse?.id)
+				.filter(Boolean)
+				.sort(),
+		).toEqual(["same-a", "same-b"]);
+		expect(llmRequest.contents.at(-1)?.parts?.[0]).toEqual({ text: "done" });
+	});
+
+	it("merges intermediate FR for b with late FR for a trailing the functionCall", async () => {
+		const llmRequest = new LlmRequest();
+		const events = [
+			new Event({
+				author: "assistant",
+				content: {
+					role: "model",
+					parts: [
+						{ functionCall: { id: "a", name: "tool_a", args: {} } },
+						{ functionCall: { id: "b", name: "tool_b", args: {} } },
+					],
+				},
+			}),
+			new Event({
+				author: "user",
+				content: {
+					role: "user",
+					parts: [
+						{
+							functionResponse: {
+								id: "b",
+								name: "tool_b",
+								response: { b: "early" },
+							},
+						},
+					],
+				},
+			}),
+			agentEvent("assistant", "noise-between"),
+			new Event({
+				author: "user",
+				content: {
+					role: "user",
+					parts: [
+						{
+							functionResponse: {
+								id: "a",
+								name: "tool_a",
+								response: { a: "late" },
+							},
+						},
+					],
+				},
+			}),
+		];
+
+		await drain(
+			requestProcessor.runAsync(
+				ctx(duckAgent("assistant", "default"), events),
+				llmRequest,
+			),
+		);
+
+		const texts = llmRequest.contents.flatMap(
+			(c) => c.parts?.map((p) => p.text).filter(Boolean) ?? [],
+		);
+		expect(texts).not.toContain("noise-between");
+		const merged = llmRequest.contents.find((c) =>
+			c.parts?.some((p) => p.functionResponse),
+		);
+		const byId = Object.fromEntries(
+			(merged?.parts ?? [])
+				.filter((p) => p.functionResponse?.id)
+				.map((p) => [p.functionResponse!.id, p.functionResponse!.response]),
+		);
+		expect(byId.a).toEqual({ a: "late" });
+		expect(byId.b).toEqual({ b: "early" });
+		expect(
+			llmRequest.contents[0].parts?.map((p) => p.functionCall?.id),
+		).toEqual(["a", "b"]);
+		expect(llmRequest.contents).toHaveLength(2);
+	});
+
+	it('builds current-turn only when includeContents is ""', async () => {
+		const llmRequest = new LlmRequest();
+		const events = [
+			userEvent("old", { invocationId: "inv-1", timestamp: 1 }),
+			agentEvent("assistant", "old-reply", {
+				invocationId: "inv-1",
+				timestamp: 2,
+			}),
+			userEvent("fresh", { invocationId: "inv-2", timestamp: 3 }),
+		];
+
+		await drain(
+			requestProcessor.runAsync(
+				ctx(
+					{
+						name: "assistant",
+						canonicalModel: "gpt-4o",
+						includeContents: "",
+					},
+					events,
+				),
+				llmRequest,
+			),
+		);
+
+		const texts = llmRequest.contents.map((c) => c.parts?.[0]?.text);
+		expect(texts).toEqual(["fresh"]);
+	});
+
+	it("builds current-turn only when includeContents is omitted", async () => {
+		const llmRequest = new LlmRequest();
+		const events = [
+			userEvent("history", { timestamp: 1 }),
+			agentEvent("assistant", "history-reply", { timestamp: 2 }),
+			userEvent("now", { timestamp: 3 }),
+			agentEvent("assistant", "now-reply", { timestamp: 4 }),
+		];
+
+		await drain(
+			requestProcessor.runAsync(
+				ctx(
+					{
+						name: "assistant",
+						canonicalModel: "gpt-4o",
+					},
+					events,
+				),
+				llmRequest,
+			),
+		);
+
+		const texts = llmRequest.contents.map((c) => c.parts?.[0]?.text);
+		expect(texts).toEqual(["now", "now-reply"]);
+		expect(texts).not.toContain("history");
+	});
+
+	it("does not rewrite foreign authors when agent name is empty", async () => {
+		const llmRequest = new LlmRequest();
+		const foreign = new Event({
+			author: "other-agent",
+			content: {
+				role: "model",
+				parts: [{ text: "peer message" }],
+			},
+		});
+
+		await drain(
+			requestProcessor.runAsync(
+				ctx(
+					{
+						name: "",
+						canonicalModel: "gpt-4o",
+						includeContents: "default",
+					},
+					[foreign, userEvent("continue")],
+				),
+				llmRequest,
+			),
+		);
+
+		expect(llmRequest.contents[0].role).toBe("model");
+		expect(llmRequest.contents[0].parts?.[0]).toEqual({
+			text: "peer message",
+		});
+		expect(
+			llmRequest.contents.some((c) =>
+				c.parts?.some((p) => p.text?.startsWith("For context:")),
+			),
+		).toBe(false);
+	});
+
+	it("starts current_turn from mid-history user and keeps in-turn tool pair", async () => {
+		const llmRequest = new LlmRequest();
+		const events = [
+			userEvent("ancient", { timestamp: 1 }),
+			agentEvent("assistant", "ancient-reply", { timestamp: 2 }),
+			userEvent("turn-start", { timestamp: 3 }),
+			new Event({
+				author: "assistant",
+				timestamp: 4,
+				content: {
+					role: "model",
+					parts: [
+						{
+							functionCall: {
+								id: "turn-fc",
+								name: "lookup",
+								args: { q: "now" },
+							},
+						},
+					],
+				},
+			}),
+			new Event({
+				author: "user",
+				timestamp: 5,
+				content: {
+					role: "user",
+					parts: [
+						{
+							functionResponse: {
+								id: "turn-fc",
+								name: "lookup",
+								response: { value: 42 },
+							},
+						},
+					],
+				},
+			}),
+			agentEvent("assistant", "turn-answer", { timestamp: 6 }),
+		];
+
+		await drain(
+			requestProcessor.runAsync(
+				ctx(
+					{
+						name: "assistant",
+						canonicalModel: "gpt-4o",
+						includeContents: "current_turn",
+					},
+					events,
+				),
+				llmRequest,
+			),
+		);
+
+		const texts = llmRequest.contents.flatMap(
+			(c) => c.parts?.map((p) => p.text).filter(Boolean) ?? [],
+		);
+		expect(texts).toContain("turn-start");
+		expect(texts).toContain("turn-answer");
+		expect(texts).not.toContain("ancient");
+		expect(texts).not.toContain("ancient-reply");
+		expect(
+			llmRequest.contents.some((c) =>
+				c.parts?.some((p) => p.functionCall?.id === "turn-fc"),
+			),
+		).toBe(true);
+		expect(
+			llmRequest.contents.some((c) =>
+				c.parts?.some((p) => p.functionResponse?.id === "turn-fc"),
+			),
+		).toBe(true);
+	});
+
+	it("strips only adk- prefixed ids and preserves provider ids", async () => {
+		const llmRequest = new LlmRequest();
+		const events = [
+			new Event({
+				author: "assistant",
+				content: {
+					role: "model",
+					parts: [
+						{
+							functionCall: {
+								id: "adk-uuid-fc",
+								name: "client_tool",
+								args: {},
+							},
+						},
+						{
+							functionCall: {
+								id: "provider-fc-9",
+								name: "server_tool",
+								args: { n: 1 },
+							},
+						},
+					],
+				},
+			}),
+			new Event({
+				author: "user",
+				content: {
+					role: "user",
+					parts: [
+						{
+							functionResponse: {
+								id: "adk-uuid-fc",
+								name: "client_tool",
+								response: { ok: true },
+							},
+						},
+						{
+							functionResponse: {
+								id: "provider-fc-9",
+								name: "server_tool",
+								response: { n: 1 },
+							},
+						},
+					],
+				},
+			}),
+		];
+
+		await drain(
+			requestProcessor.runAsync(
+				ctx(duckAgent("assistant", "default"), events),
+				llmRequest,
+			),
+		);
+
+		const fcParts = llmRequest.contents[0].parts ?? [];
+		expect(fcParts[0]?.functionCall?.id).toBeUndefined();
+		expect(fcParts[0]?.functionCall?.name).toBe("client_tool");
+		expect(fcParts[1]?.functionCall?.id).toBe("provider-fc-9");
+
+		const frParts = llmRequest.contents[1].parts ?? [];
+		expect(frParts[0]?.functionResponse?.id).toBeUndefined();
+		expect(frParts[0]?.functionResponse?.name).toBe("client_tool");
+		expect(frParts[1]?.functionResponse?.id).toBe("provider-fc-9");
+	});
+
+	it("strips adk- id from functionCall-only content without responses", async () => {
+		const llmRequest = new LlmRequest();
+		await drain(
+			requestProcessor.runAsync(
+				ctx(duckAgent("assistant", "default"), [
+					new Event({
+						author: "assistant",
+						content: {
+							role: "model",
+							parts: [
+								{
+									functionCall: {
+										id: "adk-orphan-call",
+										name: "pending",
+										args: { x: 1 },
+									},
+								},
+							],
+						},
+					}),
+					userEvent("continue"),
+				]),
+				llmRequest,
+			),
+		);
+
+		expect(llmRequest.contents[0].parts?.[0]?.functionCall).toEqual({
+			id: undefined,
+			name: "pending",
+			args: { x: 1 },
+		});
+	});
+
+	it("compacts only surviving rewind-filtered events when ranges overlap rewind boundary", async () => {
+		const llmRequest = new LlmRequest();
+		const events = [
+			userEvent("keep-early", { invocationId: "inv-a", timestamp: 1 }),
+			userEvent("discard-mid", { invocationId: "inv-b", timestamp: 2 }),
+			new Event({
+				author: "user",
+				invocationId: "inv-rewind",
+				timestamp: 3,
+				content: { role: "user", parts: [{ text: "rewind" }] },
+				actions: new EventActions({
+					rewindBeforeInvocationId: "inv-b",
+				}),
+			}),
+			userEvent("after", { invocationId: "inv-c", timestamp: 4 }),
+			new Event({
+				author: "assistant",
+				invocationId: "inv-compact",
+				timestamp: 5,
+				content: { role: "model", parts: [{ text: "c-marker" }] },
+				actions: new EventActions({
+					compaction: {
+						startTimestamp: 1,
+						endTimestamp: 4.5,
+						compactedContent: {
+							role: "model",
+							parts: [{ text: "summary-of-survivors" }],
+						},
+					},
+				}),
+			}),
+			userEvent("final", { invocationId: "inv-d", timestamp: 6 }),
+		];
+
+		await drain(
+			requestProcessor.runAsync(
+				ctx(duckAgent("assistant", "default"), events),
+				llmRequest,
+			),
+		);
+
+		const texts = llmRequest.contents.map((c) => c.parts?.[0]?.text);
+		expect(texts).toEqual(["summary-of-survivors", "final"]);
+		expect(texts).not.toContain("discard-mid");
+		expect(texts).not.toContain("keep-early");
+		expect(texts).not.toContain("after");
+	});
 });
