@@ -968,4 +968,27 @@ describe("BaseTool", () => {
 		});
 		expect(tool.validateArguments({ anything: true })).toBe(true);
 	});
+
+	it("safeExecute returns Unknown error when maxRetryAttempts is -1 and retries enabled", async () => {
+		const tool = new StubTool(
+			{
+				name: "never_loop",
+				description: "Retry loop never entered",
+				shouldRetryOnFailure: true,
+				maxRetryAttempts: -1,
+			},
+			async () => {
+				throw new Error("should not run");
+			},
+		);
+		vi.spyOn(console, "error").mockImplementation(() => {});
+
+		await expect(
+			tool.safeExecute({ query: "x" }, makeContext()),
+		).resolves.toEqual({
+			error: "Execution failed",
+			message: "Unknown error occurred",
+			tool: "never_loop",
+		});
+	});
 });

@@ -696,4 +696,33 @@ describe("FunctionTool", () => {
 		});
 		expect(tool.maxRetryAttempts).toBe(3);
 	});
+
+	it("treats toString without parentheses as empty parameter list", () => {
+		function weird() {
+			return "ok";
+		}
+		Object.defineProperty(weird, "toString", {
+			value: () => "function weird /* no paren */ { return 'ok'; }",
+		});
+
+		const tool = new FunctionTool(weird, {
+			description: "no paren toString",
+		});
+		expect(tool.getDeclaration().parameters?.properties).toEqual({});
+	});
+
+	it("arrow function without parentheses yields empty params from toString parse", () => {
+		const arrow = (x: string) => ({ x });
+		Object.defineProperty(arrow, "toString", {
+			value: () => "x => ({ x })",
+		});
+		Object.defineProperty(arrow, "name", { value: "arrow_no_paren" });
+
+		const tool = new FunctionTool(arrow, {
+			description: "arrow without parens",
+			name: "arrow_no_paren",
+		});
+		expect(tool.getDeclaration().parameters?.properties).toEqual({});
+		expect(tool.name).toBe("arrow_no_paren");
+	});
 });

@@ -1298,3 +1298,374 @@ describe("BaseLlmFlow leftover edges (post #98 llm-flows deepen)", () => {
 		expect(agent.canonicalModel.generateContentAsync).not.toHaveBeenCalled();
 	});
 });
+
+describe("BaseLlmFlow leftover branches (deepen)", () => {
+	it("_postprocessHandleFunctionCallsAsync uses {} when toolsDict is undefined", async () => {
+		const flow = new InspectableFlow();
+		handleFunctionCallsAsyncMock.mockResolvedValue(null);
+		const llmRequest = new LlmRequest();
+		delete (llmRequest as any).toolsDict;
+
+		await collect(
+			flow._postprocessHandleFunctionCallsAsync(
+				mockContext,
+				new Event({
+					author: "agent",
+					content: {
+						parts: [{ functionCall: { name: "t", args: {}, id: "c1" } }],
+					},
+				}),
+				llmRequest,
+			),
+		);
+
+		expect(handleFunctionCallsAsyncMock).toHaveBeenCalledWith(
+			mockContext,
+			expect.any(Event),
+			{},
+		);
+	});
+
+	it("_postprocessAsync passes {} when toolsDict is null", async () => {
+		const flow = new InspectableFlow();
+		flow.responseProcessors = [];
+		handleFunctionCallsAsyncMock.mockResolvedValue(null);
+		generateAuthEventMock.mockReturnValue(null);
+		const llmRequest = new LlmRequest();
+		(llmRequest as any).toolsDict = null;
+
+		await collect(
+			flow._postprocessAsync(
+				mockContext,
+				llmRequest,
+				{
+					content: {
+						parts: [{ functionCall: { name: "t", args: {}, id: "c1" } }],
+					},
+				} as LlmResponse,
+				new Event({ id: "m", author: "agent" }),
+			),
+		);
+
+		expect(handleFunctionCallsAsyncMock).toHaveBeenCalledWith(
+			mockContext,
+			expect.any(Event),
+			{},
+		);
+	});
+
+	it("_callLlmAsync handles LLM response content without parts (filter || [])", async () => {
+		const flow = new InspectableFlow();
+		const llmResponse = {
+			content: { role: "model" },
+			finishReason: "STOP",
+		} as LlmResponse;
+		const agent = {
+			name: "no-parts",
+			canonicalModel: {
+				model: "fake",
+				generateContentAsync: vi.fn(async function* () {
+					yield llmResponse;
+				}),
+			},
+		};
+
+		const responses = await collect(
+			flow._callLlmAsync(
+				makeCtx({ agent }),
+				new LlmRequest(),
+				new Event({ id: "np", author: "no-parts" }),
+			),
+		);
+
+		expect(responses).toEqual([llmResponse]);
+		expect(agent.canonicalModel.generateContentAsync).toHaveBeenCalled();
+	});
+
+	it("before-model callbacks all falsy still call the model", async () => {
+		const flow = new InspectableFlow();
+		const generateContentAsync = vi.fn(async function* () {
+			yield { content: { role: "model", parts: [{ text: "from-model" }] } };
+		});
+		const agent = {
+			name: "falsy-before",
+			canonicalBeforeModelCallbacks: [() => null, () => undefined, () => false],
+			canonicalModel: { model: "fake", generateContentAsync },
+		};
+
+		const responses = await collect(
+			flow._callLlmAsync(
+				makeCtx({ agent }),
+				new LlmRequest(),
+				new Event({ author: "falsy-before" }),
+			),
+		);
+
+		expect(generateContentAsync).toHaveBeenCalled();
+		expect((responses[0] as LlmResponse).content?.parts?.[0]).toEqual({
+			text: "from-model",
+		});
+	});
+
+	it("preprocess skips empty-name tools during dedup and keeps named ones", async () => {
+		const flow = new InspectableFlow();
+		flow.requestProcessors = [];
+		const processNamed = vi.fn(async () => undefined);
+		const processEmpty = vi.fn(async () => undefined);
+		const processMissing = vi.fn(async () => undefined);
+		const agent = {
+			name: "empty-name-agent",
+			canonicalTools: async () => [
+				{ name: "", description: "empty", processLlmRequest: processEmpty },
+				{
+					description: "missing name",
+					processLlmRequest: processMissing,
+				},
+				{
+					name: "keep",
+					description: "kept",
+					processLlmRequest: processNamed,
+				},
+			],
+		};
+
+		await collect(flow._preprocessAsync(makeCtx({ agent }), new LlmRequest()));
+		expect(processNamed).toHaveBeenCalledTimes(1);
+		expect(processEmpty).not.toHaveBeenCalled();
+		expect(processMissing).not.toHaveBeenCalled();
+	});
+
+	it("preprocess with exactly one tool skips multi-tool dedup and truncates long descriptions", async () => {
+		const flow = new InspectableFlow();
+		flow.requestProcessors = [];
+		const processOne = vi.fn(async () => undefined);
+		const longDesc = "d".repeat(60);
+		const agent = {
+			name: "single-tool",
+			canonicalTools: async () => [
+				{
+					name: "only",
+					description: longDesc,
+					isLongRunning: false,
+					processLlmRequest: processOne,
+				},
+			],
+		};
+
+		await collect(flow._preprocessAsync(makeCtx({ agent }), new LlmRequest()));
+		expect(processOne).toHaveBeenCalledTimes(1);
+		expect((flow as any).logger.debugArray).toHaveBeenCalledWith(
+			"🛠️ Available Tools",
+			[
+				expect.objectContaining({
+					Name: "only",
+					Description: `${"d".repeat(50)}...`,
+					"Long Running": "No",
+				}),
+			],
+		);
+	});
+
+	it("truncates function-call args longer than 100 chars in debugArray", async () => {
+		const flow = new InspectableFlow();
+		flow.responseProcessors = [];
+		handleFunctionCallsAsyncMock.mockResolvedValue(null);
+		generateAuthEventMock.mockReturnValue(null);
+		const longArgs = { payload: "x".repeat(120) };
+
+		await collect(
+			flow._postprocessAsync(
+				mockContext,
+				new LlmRequest(),
+				{
+					content: {
+						parts: [
+							{
+								functionCall: {
+									name: "big",
+									args: longArgs,
+									id: "fc-big",
+								},
+							},
+						],
+					},
+				} as LlmResponse,
+				new Event({ id: "m", author: "agent" }),
+			),
+		);
+
+		const serialized = JSON.stringify(longArgs);
+		expect((flow as any).logger.debugArray).toHaveBeenCalledWith(
+			"🔧 Function Calls",
+			[
+				expect.objectContaining({
+					Name: "big",
+					Arguments: `${serialized.substring(0, 100)}...`,
+					ID: "fc-big",
+				}),
+			],
+		);
+	});
+
+	it("after-model callbacks all returning null yield the original response", async () => {
+		const flow = new InspectableFlow();
+		const original = {
+			content: { role: "model", parts: [{ text: "original" }] },
+		};
+		const agent = {
+			name: "null-after",
+			canonicalAfterModelCallbacks: [
+				() => null,
+				async () => null,
+				() => undefined,
+			],
+			canonicalModel: {
+				model: "fake",
+				generateContentAsync: vi.fn(async function* () {
+					yield original;
+				}),
+			},
+		};
+
+		const responses = await collect(
+			flow._callLlmAsync(
+				makeCtx({ agent }),
+				new LlmRequest(),
+				new Event({ author: "null-after" }),
+			),
+		);
+
+		expect(responses).toEqual([original]);
+	});
+
+	it("dedup drops tool entry when all functionDeclarations are duplicate names", async () => {
+		const flow = new InspectableFlow();
+		const llmResponse = { content: { parts: [{ text: "ok" }] } };
+		const agent = {
+			name: "all-dup",
+			canonicalModel: {
+				model: "fake",
+				generateContentAsync: vi.fn(async function* () {
+					yield llmResponse;
+				}),
+			},
+		};
+		const llmRequest = new LlmRequest();
+		llmRequest.config = {
+			tools: [
+				{ functionDeclarations: [{ name: "keep" }, { name: "dup" }] },
+				{
+					functionDeclarations: [{ name: "dup" }, { name: "dup" }],
+				},
+			],
+		} as any;
+
+		await collect(
+			flow._callLlmAsync(
+				makeCtx({ agent }),
+				llmRequest,
+				new Event({ id: "d1", author: "all-dup" }),
+			),
+		);
+
+		const tools = llmRequest.config?.tools as any[];
+		expect(tools).toHaveLength(1);
+		expect(tools[0].functionDeclarations).toEqual([
+			{ name: "keep" },
+			{ name: "dup" },
+		]);
+	});
+
+	it("_postprocessLive skips handle when getFunctionCalls returns undefined", async () => {
+		const flow = new InspectableFlow();
+		flow.responseProcessors = [];
+		const modelEvent = new Event({
+			id: "live-undef",
+			author: "agent",
+			content: { role: "model", parts: [{ text: "plain" }] },
+		});
+		const spy = vi
+			.spyOn(Event.prototype, "getFunctionCalls")
+			.mockReturnValue(undefined as any);
+
+		try {
+			const events = await collect(
+				flow._postprocessLive(
+					mockContext,
+					new LlmRequest(),
+					{
+						content: { role: "model", parts: [{ text: "plain" }] },
+					} as LlmResponse,
+					modelEvent,
+				),
+			);
+
+			expect(events).toHaveLength(1);
+			expect(handleFunctionCallsAsyncMock).not.toHaveBeenCalled();
+		} finally {
+			spy.mockRestore();
+		}
+	});
+
+	it("_postprocessLive enters handle path when getFunctionCalls returns empty array", async () => {
+		const flow = new InspectableFlow();
+		flow.responseProcessors = [];
+		handleFunctionCallsAsyncMock.mockResolvedValue(null);
+		const modelEvent = new Event({
+			id: "live-empty",
+			author: "agent",
+			content: { role: "model", parts: [{ text: "plain" }] },
+		});
+		const spy = vi
+			.spyOn(Event.prototype, "getFunctionCalls")
+			.mockReturnValue([]);
+
+		try {
+			const events = await collect(
+				flow._postprocessLive(
+					mockContext,
+					new LlmRequest(),
+					{
+						content: { role: "model", parts: [{ text: "plain" }] },
+					} as LlmResponse,
+					modelEvent,
+				),
+			);
+
+			expect(events).toHaveLength(1);
+			expect(handleFunctionCallsAsyncMock).toHaveBeenCalled();
+		} finally {
+			spy.mockRestore();
+		}
+	});
+
+	it("runAsync multi-step: non-final function-response then final text", async () => {
+		const flow = new TestLlmFlow();
+		const functionResponse = new Event({
+			author: "agent",
+			content: {
+				role: "user",
+				parts: [{ functionResponse: { name: "tool", response: { ok: true } } }],
+			},
+		});
+		vi.spyOn(functionResponse, "isFinalResponse").mockReturnValue(false);
+
+		const finalText = new Event({
+			author: "agent",
+			content: { role: "model", parts: [{ text: "done" }] },
+		});
+		vi.spyOn(finalText, "isFinalResponse").mockReturnValue(true);
+
+		flow._runOneStepAsync
+			.mockImplementationOnce(async function* () {
+				yield functionResponse;
+			})
+			.mockImplementationOnce(async function* () {
+				yield finalText;
+			});
+
+		const yielded = await collect(flow.runAsync(mockContext));
+		expect(yielded).toEqual([functionResponse, finalText]);
+		expect(flow._runOneStepAsync).toHaveBeenCalledTimes(2);
+	});
+});

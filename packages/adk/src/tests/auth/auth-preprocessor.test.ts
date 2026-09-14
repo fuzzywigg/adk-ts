@@ -1702,3 +1702,108 @@ describe("auth requestProcessor.parseAndStoreAuthResponse leftover edges", () =>
 		expect(state["temp:http-cred"]).toEqual({ token: "bearer-x" });
 	});
 });
+
+describe("auth requestProcessor reverse-scan continue on non-user after user", () => {
+	it("continues past trailing assistant noise to process earlier user EUC response", async () => {
+		const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+		const resumed = new Event({
+			author: "auth-agent",
+			content: {
+				role: "user",
+				parts: [
+					{
+						functionResponse: {
+							id: "tool-1",
+							name: "secure_api",
+							response: { ok: true },
+						},
+					},
+				],
+			},
+		});
+		handleFunctionCallsAsyncMock.mockResolvedValue(resumed);
+
+		const originalCall = new Event({
+			author: "auth-agent",
+			content: {
+				role: "model",
+				parts: [
+					{
+						functionCall: {
+							id: "tool-1",
+							name: "secure_api",
+							args: { q: "x" },
+						},
+					},
+				],
+			},
+		});
+		const eucCall = new Event({
+			author: "auth-agent",
+			content: {
+				role: "model",
+				parts: [
+					{
+						functionCall: {
+							id: "euc-1",
+							name: REQUEST_EUC_FUNCTION_CALL_NAME,
+							args: JSON.stringify({
+								function_call_id: "tool-1",
+								auth_config: { authScheme: { type: "apiKey" } },
+							}) as any,
+						},
+					},
+				],
+			},
+		});
+		const userEucResponse = new Event({
+			author: "user",
+			content: {
+				role: "user",
+				parts: [
+					{
+						functionResponse: {
+							id: "euc-1",
+							name: REQUEST_EUC_FUNCTION_CALL_NAME,
+							response: JSON.stringify({
+								authScheme: { type: "oauth2" },
+								rawAuthCredential: { accessToken: "t" },
+								context: { credentialKey: "temp:cred-noise" },
+							}),
+						},
+					},
+				],
+			},
+		});
+		const assistantNoise = new Event({
+			author: "assistant",
+			content: {
+				role: "model",
+				parts: [{ text: "noise after user euc" }],
+			},
+		});
+
+		const tool = { name: "secure_api" };
+		const events = await collect(
+			requestProcessor.runAsync(
+				baseCtx({
+					agent: {
+						name: "auth-agent",
+						canonicalTools: async () => [tool],
+					},
+					events: [originalCall, eucCall, userEucResponse, assistantNoise],
+				}),
+				new LlmRequest(),
+			),
+		);
+
+		expect(events).toEqual([resumed]);
+		expect(handleFunctionCallsAsyncMock).toHaveBeenCalledWith(
+			expect.anything(),
+			originalCall,
+			{ secure_api: tool },
+			new Set(["tool-1"]),
+		);
+		warn.mockRestore();
+	});
+});
