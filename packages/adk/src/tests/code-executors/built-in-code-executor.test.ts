@@ -85,4 +85,65 @@ describe("BuiltInCodeExecutor", () => {
 			{ codeExecution: {} },
 		]);
 	});
+
+	it.each([
+		"gemini-2.0-flash",
+		"gemini-2.0-pro",
+		"gemini-2.5-flash",
+		"gemini-2.5-pro",
+		"gemini-2-experimental",
+	])("accepts gemini-2 family model %s", (model) => {
+		const executor = new BuiltInCodeExecutor();
+		const req = new LlmRequest({ model });
+		executor.processLlmRequest(req);
+		expect(req.config?.tools?.[0]).toEqual({ codeExecution: {} });
+	});
+
+	it.each([
+		"gemini-1.5-flash",
+		"gemini-1.5-pro",
+		"claude-3-opus",
+		"gpt-4.1",
+		"gemini",
+	])("rejects non-gemini-2 model %s", (model) => {
+		const executor = new BuiltInCodeExecutor();
+		expect(() => executor.processLlmRequest(new LlmRequest({ model }))).toThrow(
+			new RegExp(`not supported for model ${model}`),
+		);
+	});
+
+	it("preserves unrelated config fields while adding tools", () => {
+		const executor = new BuiltInCodeExecutor();
+		const req = new LlmRequest({
+			model: "gemini-2.0-flash",
+			config: { temperature: 0.2, topP: 0.9 } as any,
+		});
+		executor.processLlmRequest(req);
+		expect((req.config as any).temperature).toBe(0.2);
+		expect((req.config as any).topP).toBe(0.9);
+		expect(req.config?.tools).toEqual([{ codeExecution: {} }]);
+	});
+
+	it("initializes tools when config exists without tools array", () => {
+		const executor = new BuiltInCodeExecutor();
+		const req = new LlmRequest({
+			model: "gemini-2.0-flash",
+			config: { maxOutputTokens: 128 } as any,
+		});
+		expect(req.config?.tools).toBeUndefined();
+		executor.processLlmRequest(req);
+		expect(req.config?.tools).toEqual([{ codeExecution: {} }]);
+		expect((req.config as any).maxOutputTokens).toBe(128);
+	});
+
+	it("does not mutate other requests when processing one", () => {
+		const executor = new BuiltInCodeExecutor();
+		const a = new LlmRequest({ model: "gemini-2.0-flash" });
+		const b = new LlmRequest({ model: "gemini-2.0-flash" });
+		executor.processLlmRequest(a);
+		expect(b.config).toBeUndefined();
+		executor.processLlmRequest(b);
+		expect(a.config?.tools).toHaveLength(1);
+		expect(b.config?.tools).toHaveLength(1);
+	});
 });

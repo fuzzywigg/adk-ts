@@ -101,4 +101,159 @@ describe("CodeExecutorContext", () => {
 		expect(context.getExecutionId()).toBe("exec-clone");
 		expect(context.getProcessedFileNames()).toEqual(["a.py"]);
 	});
+
+	it("reuses existing _code_execution_context from session state", () => {
+		const state = State.create({}, {});
+		// Underscore keys are stored on the State instance via the proxy path
+		// used by CodeExecutorContext (not via State.create value dict).
+		state["_code_execution_context"] = {
+			execution_session_id: "preexisting",
+			processed_input_files: ["seed.py"],
+		};
+		const context = new CodeExecutorContext(state);
+		expect(context.getExecutionId()).toBe("preexisting");
+		expect(context.getProcessedFileNames()).toEqual(["seed.py"]);
+		context.addProcessedFileNames(["more.py"]);
+		expect(context.getProcessedFileNames()).toEqual(["seed.py", "more.py"]);
+	});
+
+	it("tracks error counts independently across invocation ids", () => {
+		const state = State.create({}, {});
+		const context = new CodeExecutorContext(state);
+		context.incrementErrorCount("a");
+		context.incrementErrorCount("b");
+		context.incrementErrorCount("b");
+		expect(context.getErrorCount("a")).toBe(1);
+		expect(context.getErrorCount("b")).toBe(2);
+		expect(context.getErrorCount("c")).toBe(0);
+		context.resetErrorCount("b");
+		expect(context.getErrorCount("b")).toBe(0);
+		expect(context.getErrorCount("a")).toBe(1);
+	});
+
+	it("resetErrorCount is a no-op for unknown ids when map exists", () => {
+		const state = State.create({}, {});
+		const context = new CodeExecutorContext(state);
+		context.incrementErrorCount("known");
+		context.resetErrorCount("unknown");
+		expect(context.getErrorCount("known")).toBe(1);
+		expect(context.getErrorCount("unknown")).toBe(0);
+	});
+
+	it("appends multiple input files and preserves mime metadata", () => {
+		const state = State.create({}, {});
+		const context = new CodeExecutorContext(state);
+		context.addInputFiles([
+			{ name: "a.csv", content: "YQ==", mimeType: "text/csv" },
+			{ name: "b.json", content: "e30=", mimeType: "application/json" },
+		]);
+		context.addInputFiles([
+			{ name: "c.txt", content: "Yw==", mimeType: "text/plain" },
+		]);
+		expect(context.getInputFiles()).toEqual([
+			{ name: "a.csv", content: "YQ==", mimeType: "text/csv" },
+			{ name: "b.json", content: "e30=", mimeType: "application/json" },
+			{ name: "c.txt", content: "Yw==", mimeType: "text/plain" },
+		]);
+	});
+
+	it("clearInputFiles clears processed names only when present", () => {
+		const state = State.create({}, {});
+		const context = new CodeExecutorContext(state);
+		context.addInputFiles([
+			{ name: "x.py", content: "eA==", mimeType: "text/x-python" },
+		]);
+		context.clearInputFiles();
+		expect(context.getInputFiles()).toEqual([]);
+		expect(context.getProcessedFileNames()).toEqual([]);
+
+		context.addProcessedFileNames(["only-processed.py"]);
+		context.clearInputFiles();
+		expect(context.getProcessedFileNames()).toEqual([]);
+	});
+
+	it("updateCodeExecutionResult records stderr and wall-clock timestamps", () => {
+		vi.spyOn(Date, "now").mockReturnValue(1_720_000_000_500);
+		const state = State.create({}, {});
+		const context = new CodeExecutorContext(state);
+		context.updateCodeExecutionResult("inv", "raise", "", "Traceback");
+		expect(state["_code_execution_results"]["inv"][0]).toEqual({
+			code: "raise",
+			resultStdout: "",
+			resultStderr: "Traceback",
+			timestamp: 1_720_000_000,
+		});
+	});
+
+	it("shares mutable session state across context instances", () => {
+		const state = State.create({}, {});
+		const first = new CodeExecutorContext(state);
+		first.setExecutionId("shared");
+		first.addInputFiles([
+			{ name: "s.py", content: "cw==", mimeType: "text/x-python" },
+		]);
+		const second = new CodeExecutorContext(state);
+		expect(second.getExecutionId()).toBe("shared");
+		expect(second.getInputFiles()).toHaveLength(1);
+		second.incrementErrorCount("inv-shared");
+		expect(first.getErrorCount("inv-shared")).toBe(1);
+	});
+
+	it("getStateDelta includes nested processed file names snapshot", () => {
+		const state = State.create({}, {});
+		const context = new CodeExecutorContext(state);
+		context.setExecutionId("delta-id");
+		context.addProcessedFileNames(["one.py", "two.py"]);
+		const delta = context.getStateDelta();
+		expect(delta).toEqual({
+			_code_execution_context: {
+				execution_session_id: "delta-id",
+				processed_input_files: ["one.py", "two.py"],
+			},
+		});
+	});
+
+	it("addProcessedFileNames spreads empty arrays without changing state", () => {
+		const state = State.create({}, {});
+		const context = new CodeExecutorContext(state);
+		context.addProcessedFileNames([]);
+		expect(context.getProcessedFileNames()).toEqual([]);
+		context.addProcessedFileNames(["a.py"]);
+		context.addProcessedFileNames([]);
+		expect(context.getProcessedFileNames()).toEqual(["a.py"]);
+	});
+
+	it("getErrorCount returns 0 for missing invocation when map is empty object", () => {
+		const state = State.create({}, {});
+		state["_code_executor_error_counts"] = {};
+		const context = new CodeExecutorContext(state);
+		expect(context.getErrorCount("missing")).toBe(0);
+	});
+
+	it("updateCodeExecutionResult appends under existing invocation key", () => {
+		vi.spyOn(Date, "now").mockReturnValue(1_000);
+		const state = State.create({}, {});
+		state["_code_execution_results"] = {
+			inv: [
+				{
+					code: "old",
+					resultStdout: "0",
+					resultStderr: "",
+					timestamp: 1,
+				},
+			],
+		};
+		const context = new CodeExecutorContext(state);
+		context.updateCodeExecutionResult("inv", "new", "1", "");
+		expect(state["_code_execution_results"]["inv"]).toHaveLength(2);
+		expect(state["_code_execution_results"]["inv"][1].code).toBe("new");
+	});
+
+	it("setExecutionId overwrites previous session id", () => {
+		const state = State.create({}, {});
+		const context = new CodeExecutorContext(state);
+		context.setExecutionId("first");
+		context.setExecutionId("second");
+		expect(context.getExecutionId()).toBe("second");
+	});
 });
