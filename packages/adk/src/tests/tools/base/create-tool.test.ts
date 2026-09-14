@@ -189,4 +189,124 @@ describe("createTool", () => {
 			error: "Error executing string_boom: plain failure",
 		});
 	});
+
+	it("wraps Promise.reject failures from async fn", async () => {
+		const tool = createTool({
+			name: "reject_tool",
+			description: "Rejects",
+			fn: async () => {
+				await Promise.reject(new Error("async-nope"));
+			},
+		});
+		await expect(tool.runAsync({}, makeContext())).resolves.toEqual({
+			error: "Error executing reject_tool: async-nope",
+		});
+	});
+
+	it("stringifies non-Error Promise.reject reasons", async () => {
+		const tool = createTool({
+			name: "reject_obj",
+			description: "Rejects object",
+			fn: async () => Promise.reject({ reason: "x" }),
+		});
+		const result = await tool.runAsync({}, makeContext());
+		expect(result.error).toContain("Error executing reject_obj:");
+		expect(result.error).toContain("[object Object]");
+	});
+
+	it("returns richer Zod schemas in declarations and multi-issue validation errors", async () => {
+		const tool = createTool({
+			name: "rich_schema",
+			description: "Rich zod",
+			schema: z.object({
+				tags: z.array(z.string()).describe("Tag list"),
+				mode: z.enum(["fast", "safe"]).describe("Run mode"),
+				count: z.number().optional().default(1),
+				payload: z.union([
+					z.object({ kind: z.literal("a"), a: z.string() }),
+					z.object({ kind: z.literal("b"), b: z.number() }),
+				]),
+			}),
+			fn: (args) => args,
+		});
+
+		const parameters = tool.getDeclaration()?.parameters as Record<string, any>;
+		expect(parameters.$schema).toBeUndefined();
+		expect(parameters.properties.tags).toMatchObject({
+			type: "array",
+			description: "Tag list",
+		});
+		expect(
+			parameters.properties.mode.enum || parameters.properties.mode.anyOf,
+		).toBeTruthy();
+
+		const invalid = await tool.runAsync(
+			{ tags: "nope", mode: "other", payload: { kind: "a" } },
+			makeContext(),
+		);
+		expect(invalid.error).toContain("Invalid arguments for rich_schema");
+
+		const valid = await tool.runAsync(
+			{
+				tags: ["x"],
+				mode: "fast",
+				payload: { kind: "b", b: 2 },
+			},
+			makeContext(),
+		);
+		expect(valid).toMatchObject({
+			tags: ["x"],
+			mode: "fast",
+			count: 1,
+			payload: { kind: "b", b: 2 },
+		});
+	});
+
+	it("caches getDeclaration identity across calls", () => {
+		const tool = createTool({
+			name: "cached_decl",
+			description: "Same object",
+			schema: z.object({ n: z.number() }),
+			fn: ({ n }) => ({ n }),
+		});
+		expect(tool.getDeclaration()).toBe(tool.getDeclaration());
+	});
+
+	it("combines long-running and retry flags with a schema tool", async () => {
+		const tool = createTool({
+			name: "schema_retry",
+			description: "Schema + retries",
+			schema: z.object({ value: z.string() }),
+			fn: ({ value }) => ({ value }),
+			isLongRunning: true,
+			shouldRetryOnFailure: true,
+			maxRetryAttempts: 4,
+		});
+
+		expect(tool.isLongRunning).toBe(true);
+		expect(tool.shouldRetryOnFailure).toBe(true);
+		expect(tool.maxRetryAttempts).toBe(4);
+		await expect(
+			tool.runAsync({ value: "ok" }, makeContext()),
+		).resolves.toEqual({ value: "ok" });
+		expect(tool.getDeclaration()?.parameters).toMatchObject({
+			type: "object",
+			properties: { value: { type: "string" } },
+		});
+	});
+
+	it("includes top-level enum describe metadata in JSON schema", () => {
+		const tool = createTool({
+			name: "enum_tool",
+			description: "Enum top-level",
+			schema: z.object({
+				color: z.enum(["red", "blue"]).describe("Favorite color"),
+			}),
+			fn: (args) => args,
+		});
+		const parameters = tool.getDeclaration()?.parameters as Record<string, any>;
+		expect(parameters.$schema).toBeUndefined();
+		expect(parameters.properties.color.description).toBe("Favorite color");
+		expect(parameters.properties.color.enum).toEqual(["red", "blue"]);
+	});
 });

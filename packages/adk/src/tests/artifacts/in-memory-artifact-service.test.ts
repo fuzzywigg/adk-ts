@@ -486,4 +486,43 @@ describe("InMemoryArtifactService", () => {
 			inlineData: { data: "", mimeType: "text/plain" },
 		});
 	});
+
+	it("returns null when a stored version slot is undefined", async () => {
+		const service = new InMemoryArtifactService();
+		await service.saveArtifact({
+			...base,
+			filename: "hole.txt",
+			artifact: { text: "v0" },
+		});
+		const artifactsMap = (service as any).artifacts as Map<string, unknown[]>;
+		expect(artifactsMap.size).toBe(1);
+		const [path, versions] = Array.from(artifactsMap.entries())[0];
+		expect(path).toContain("hole.txt");
+		versions[0] = undefined;
+		expect(
+			await service.loadArtifact({ ...base, filename: "hole.txt", version: 0 }),
+		).toBeNull();
+	});
+
+	it("listVersions returns dense indices even after sparse saves", async () => {
+		const service = new InMemoryArtifactService();
+		await service.saveArtifact({
+			...base,
+			filename: "dense.txt",
+			artifact: { text: "a" },
+		});
+		await service.saveArtifact({
+			...base,
+			filename: "dense.txt",
+			artifact: { text: "b" },
+		});
+		await service.saveArtifact({
+			...base,
+			filename: "dense.txt",
+			artifact: { text: "c" },
+		});
+		expect(
+			await service.listVersions({ ...base, filename: "dense.txt" }),
+		).toEqual([0, 1, 2]);
+	});
 });

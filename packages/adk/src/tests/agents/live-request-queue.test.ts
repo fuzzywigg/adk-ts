@@ -10,6 +10,26 @@ describe("LiveRequest", () => {
 		expect(request.close).toBe(false);
 		expect(request.blob).toBeUndefined();
 	});
+
+	it("accepts blob-only and explicit close options", () => {
+		const blob = { data: "YQ==", mimeType: "text/plain" };
+		const withBlob = new LiveRequest({ blob });
+		expect(withBlob.blob).toEqual(blob);
+		expect(withBlob.content).toBeUndefined();
+		expect(withBlob.close).toBe(false);
+
+		const closed = new LiveRequest({ close: true });
+		expect(closed.close).toBe(true);
+		expect(closed.content).toBeUndefined();
+		expect(closed.blob).toBeUndefined();
+	});
+
+	it("defaults all fields when constructed without options", () => {
+		const request = new LiveRequest();
+		expect(request.content).toBeUndefined();
+		expect(request.blob).toBeUndefined();
+		expect(request.close).toBe(false);
+	});
 });
 
 describe("LiveRequestQueue", () => {

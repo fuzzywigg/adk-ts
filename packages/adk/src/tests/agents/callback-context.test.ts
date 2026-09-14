@@ -108,4 +108,46 @@ describe("CallbackContext", () => {
 		expect(ctx.eventActions).toBe(actions);
 		expect(ctx.invocationContext).toBe(invocation);
 	});
+
+	it("creates default EventActions when omitted", () => {
+		const ctx = new CallbackContext(makeInvocationContext());
+		expect(ctx.eventActions).toBeInstanceOf(EventActions);
+		expect(ctx.eventActions.stateDelta).toEqual({});
+		expect(ctx.eventActions.artifactDelta).toEqual({});
+	});
+
+	it("loadArtifact without version forwards undefined to the service", async () => {
+		const loadArtifact = vi.fn().mockResolvedValue(undefined);
+		const ctx = new CallbackContext(
+			makeInvocationContext({
+				artifactService: { loadArtifact, saveArtifact: vi.fn() } as any,
+			}),
+		);
+		await expect(ctx.loadArtifact("latest.bin")).resolves.toBeUndefined();
+		expect(loadArtifact).toHaveBeenCalledWith({
+			appName: "app",
+			userId: "user-1",
+			sessionId: "session-1",
+			filename: "latest.bin",
+			version: undefined,
+		});
+	});
+
+	it("accumulates multiple artifactDelta entries across saves", async () => {
+		const saveArtifact = vi
+			.fn()
+			.mockResolvedValueOnce(0)
+			.mockResolvedValueOnce(1);
+		const ctx = new CallbackContext(
+			makeInvocationContext({
+				artifactService: { loadArtifact: vi.fn(), saveArtifact } as any,
+			}),
+		);
+		await ctx.saveArtifact("a.txt", { text: "a" });
+		await ctx.saveArtifact("b.txt", { text: "b" });
+		expect(ctx.eventActions.artifactDelta).toEqual({
+			"a.txt": 0,
+			"b.txt": 1,
+		});
+	});
 });

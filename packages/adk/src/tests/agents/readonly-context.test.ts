@@ -72,4 +72,21 @@ describe("ReadonlyContext", () => {
 		}).toThrow();
 		expect(invocation.session.state.foo).toBe("bar");
 	});
+
+	it("returns undefined userContent when the invocation has none", () => {
+		const ctx = new ReadonlyContext(makeInvocationContext());
+		expect(ctx.userContent).toBeUndefined();
+	});
+
+	it("state getter returns a fresh frozen snapshot each access", () => {
+		const invocation = makeInvocationContext({ state: { n: 1 } });
+		const ctx = new ReadonlyContext(invocation);
+		const first = ctx.state;
+		invocation.session.state.n = 2;
+		const second = ctx.state;
+		expect(first).toEqual({ n: 1 });
+		expect(second).toEqual({ n: 2 });
+		expect(first).not.toBe(second);
+		expect(Object.isFrozen(second)).toBe(true);
+	});
 });
