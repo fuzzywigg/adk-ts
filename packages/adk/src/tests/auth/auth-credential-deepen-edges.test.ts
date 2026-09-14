@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import { AuthConfig } from "../../auth/auth-config";
 import {
 	ApiKeyCredential,
