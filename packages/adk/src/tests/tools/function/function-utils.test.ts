@@ -461,3 +461,26 @@ function cased(a, b, c) { return {}; }`,
 		expect(declaration.parameters?.required).toBeUndefined();
 	});
 });
+
+describe("buildFunctionDeclaration leftover paren-less arrow edges", () => {
+	it("builds empty properties for paren-less arrow functions", () => {
+		const identity = withSource((x: number) => x, "x => x");
+		Object.defineProperty(identity, "name", { value: "identity" });
+
+		const declaration = buildFunctionDeclaration(identity);
+		expect(declaration.name).toBe("identity");
+		expect(declaration.parameters).toEqual({
+			type: Type.OBJECT,
+			properties: {},
+		});
+	});
+
+	it("builds empty properties for async paren-less arrows", () => {
+		const asyncId = withSource(async (n: number) => n, "async n => n");
+		Object.defineProperty(asyncId, "name", { value: "asyncId" });
+
+		const declaration = buildFunctionDeclaration(asyncId);
+		expect(declaration.parameters?.properties).toEqual({});
+		expect(declaration.parameters?.required).toBeUndefined();
+	});
+});

@@ -779,3 +779,66 @@ describe("McpClientService sampling wrap and setSamplingHandler leftovers", () =
 		expect(caught?.originalError).toBe(root);
 	});
 });
+
+describe("McpClientService leftover transport/sampling/retry edges", () => {
+	it("reuses a pre-seeded transport and skips createTransport", async () => {
+		const service = new McpClientService(stdioConfig());
+		const preexisting = { close: vi.fn() };
+		(service as any).transport = preexisting;
+
+		await service.initialize();
+
+		expect(StdioClientTransport).not.toHaveBeenCalled();
+		expect(StreamableHTTPClientTransport).not.toHaveBeenCalled();
+		expect((service as any).transport).toBe(preexisting);
+		expect(connect).toHaveBeenCalledWith(preexisting);
+	});
+
+	it("setSamplingHandler and removeSamplingHandler no-op client hooks before connect", () => {
+		const service = new McpClientService(stdioConfig());
+		expect((service as any).client).toBeNull();
+
+		service.setSamplingHandler(async () => "ok");
+		expect((service as any).mcpSamplingHandler).toBeTruthy();
+		expect(setRequestHandler).not.toHaveBeenCalled();
+
+		service.removeSamplingHandler();
+		expect((service as any).mcpSamplingHandler).toBeNull();
+		expect(removeRequestHandler).not.toHaveBeenCalled();
+	});
+
+	it("setupSamplingHandler logs when no handler is configured", async () => {
+		const service = new McpClientService(stdioConfig());
+		const debugSpy = vi
+			.spyOn((service as any).logger, "debug")
+			.mockImplementation(() => {});
+
+		await service.initialize();
+
+		expect(debugSpy).toHaveBeenCalledWith(
+			"⚠️ No sampling handler provided - sampling requests will be rejected",
+		);
+		expect(setRequestHandler).not.toHaveBeenCalled();
+		debugSpy.mockRestore();
+	});
+
+	it("callTool defaults maxRetries to 2 when retryOptions is an empty object", async () => {
+		let attempts = 0;
+		callTool.mockImplementation(async () => {
+			attempts++;
+			if (attempts <= 2) {
+				throw new Error("closed");
+			}
+			return { content: [{ type: "text", text: "recovered" }] };
+		});
+		const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+		const service = new McpClientService(stdioConfig({ retryOptions: {} }));
+
+		await expect(service.callTool("echo", { a: 1 })).resolves.toEqual({
+			content: [{ type: "text", text: "recovered" }],
+		});
+		expect(attempts).toBe(3);
+		expect(warn).toHaveBeenCalled();
+		warn.mockRestore();
+	});
+});

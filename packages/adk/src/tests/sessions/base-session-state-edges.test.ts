@@ -163,3 +163,28 @@ describe("State leftover edges (post #113)", () => {
 		expect(state.hasDelta()).toBe(true);
 	});
 });
+
+describe("State leftover raw get / prefix edges", () => {
+	it("raw State.get returns undefined for data keys even when has is true", () => {
+		const state = new State({ a: 1 }, { b: 2 });
+		expect(state.has("a")).toBe(true);
+		expect(state.has("b")).toBe(true);
+		expect(state.get("a")).toBeUndefined();
+		expect(state.get("b")).toBeUndefined();
+		expect(state.get("a", "fallback")).toBeUndefined();
+		expect(state.toDict()).toEqual({ a: 1, b: 2 });
+	});
+
+	it("proxied State.get returns values from value and delta maps", () => {
+		const state = State.create({ a: 1 }, { b: 2 });
+		expect(state.get("a")).toBe(1);
+		expect(state.get("b")).toBe(2);
+		expect(state.get("missing", "fallback")).toBe("fallback");
+	});
+
+	it("exposes stable APP/USER/TEMP prefix constants", () => {
+		expect(State.APP_PREFIX).toBe("app:");
+		expect(State.USER_PREFIX).toBe("user:");
+		expect(State.TEMP_PREFIX).toBe("temp:");
+	});
+});

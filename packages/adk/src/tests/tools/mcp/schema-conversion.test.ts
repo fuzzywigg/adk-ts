@@ -453,3 +453,53 @@ describe("schema-conversion", () => {
 		});
 	});
 });
+
+describe("schema-conversion leftover null/dual-schema edges", () => {
+	it("adkToMcpToolType throws when getDeclaration returns null", () => {
+		const tool = {
+			name: "null_decl",
+			description: "declaration is null",
+			getDeclaration: () => null,
+		} as unknown as BaseTool;
+
+		expect(() => adkToMcpToolType(tool)).toThrow();
+	});
+
+	it("mcpSchemaToParameters prefers inputSchema when parameters also exist", () => {
+		expect(
+			mcpSchemaToParameters({
+				name: "dual",
+				inputSchema: {
+					type: "object",
+					properties: { fromInput: { type: "string" } },
+				},
+				parameters: {
+					type: "object",
+					properties: { fromParams: { type: "number" } },
+				},
+			} as any),
+		).toEqual({
+			type: Type.OBJECT,
+			properties: {
+				fromInput: { type: Type.STRING },
+			},
+		});
+	});
+
+	it("declarationToJsonSchema returns empty object for nullish parameters", () => {
+		expect(
+			declarationToJsonSchema({
+				name: "x",
+				description: "d",
+				parameters: null as any,
+			}),
+		).toEqual({});
+		expect(
+			declarationToJsonSchema({
+				name: "x",
+				description: "d",
+				parameters: undefined,
+			}),
+		).toEqual({});
+	});
+});

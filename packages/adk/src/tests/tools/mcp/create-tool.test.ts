@@ -540,3 +540,89 @@ describe("convertMcpToolToBaseTool", () => {
 		}
 	});
 });
+
+describe("convertMcpToolToBaseTool leftover metadata/retry edges", () => {
+	it("prefers metadata over conflicting _meta when both are present", async () => {
+		const tool = await convertMcpToolToBaseTool({
+			mcpTool: {
+				name: "both_meta",
+				description: "metadata wins over _meta flags",
+				inputSchema: { type: "object", properties: {} },
+				metadata: {
+					isLongRunning: true,
+					shouldRetryOnFailure: true,
+					maxRetryAttempts: 5,
+				},
+				_meta: {
+					isLongRunning: false,
+					shouldRetryOnFailure: false,
+					maxRetryAttempts: 1,
+				},
+			} as any,
+			toolHandler: async () => ({ content: [] }),
+		});
+
+		expect(tool.isLongRunning).toBe(true);
+		expect(tool.shouldRetryOnFailure).toBe(true);
+		expect(tool.maxRetryAttempts).toBe(5);
+	});
+
+	it("warns that plain client cannot reinitialize on closed-resource retries", async () => {
+		const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+		let attempts = 0;
+		const callTool = vi.fn(async () => {
+			attempts++;
+			if (attempts === 1) {
+				throw new Error("connection closed");
+			}
+			return { content: [{ type: "text", text: "ok" }] };
+		});
+
+		const tool = await convertMcpToolToBaseTool({
+			mcpTool: {
+				name: "retry_plain",
+				description: "plain client closed-resource retry path",
+				inputSchema: { type: "object", properties: {} },
+				metadata: {
+					shouldRetryOnFailure: true,
+					maxRetryAttempts: 1,
+				},
+			} as any,
+			client: { callTool } as any,
+		});
+
+		await expect(tool.runAsync({}, makeContext())).resolves.toEqual({
+			content: [{ type: "text", text: "ok" }],
+		});
+		expect(warn).toHaveBeenCalledWith(
+			expect.stringContaining("cannot reinitialize client"),
+		);
+		warn.mockRestore();
+	});
+
+	it("does not retry closed errors when shouldRetryOnFailure is false", async () => {
+		const callTool = vi.fn(async () => {
+			throw new Error("connection closed");
+		});
+		const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+		const tool = await convertMcpToolToBaseTool({
+			mcpTool: {
+				name: "no_retry_closed",
+				description: "closed error without retry enabled",
+				inputSchema: { type: "object", properties: {} },
+				metadata: { shouldRetryOnFailure: false },
+			} as any,
+			client: { callTool } as any,
+		});
+
+		await expect(tool.runAsync({}, makeContext())).rejects.toMatchObject({
+			type: McpErrorType.TOOL_EXECUTION_ERROR,
+			message: expect.stringContaining("connection closed"),
+		});
+		expect(callTool).toHaveBeenCalledTimes(1);
+		expect(warn).not.toHaveBeenCalledWith(
+			expect.stringContaining("cannot reinitialize client"),
+		);
+		warn.mockRestore();
+	});
+});

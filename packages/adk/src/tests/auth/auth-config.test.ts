@@ -80,3 +80,42 @@ describe("AuthConfig", () => {
 		expect(config.context).toEqual({ a: 2, b: "added" });
 	});
 });
+
+describe("AuthConfig leftover mutation edges", () => {
+	it("allows replacing authScheme after construction", () => {
+		const first = new HttpScheme({ scheme: "bearer" });
+		const second = new ApiKeyScheme({ in: "header", name: "X-Key" });
+		const config = new AuthConfig({
+			authScheme: first,
+			context: { realm: "a" },
+		});
+
+		config.authScheme = second;
+		expect(config.authScheme).toBe(second);
+		expect(config.authScheme.type).toBe("apiKey");
+	});
+
+	it("allows clearing context to undefined after construction", () => {
+		const config = new AuthConfig({
+			authScheme: new HttpScheme({ scheme: "basic" }),
+			context: { realm: "x" },
+		});
+		config.context = undefined;
+		expect(config.context).toBeUndefined();
+	});
+
+	it("allows assigning a fresh context object", () => {
+		const config = new AuthConfig({
+			authScheme: new OAuth2Scheme({
+				flows: {
+					clientCredentials: {
+						tokenUrl: "https://example.com/token",
+						scopes: {},
+					},
+				},
+			}),
+		});
+		config.context = { next: true };
+		expect(config.context).toEqual({ next: true });
+	});
+});

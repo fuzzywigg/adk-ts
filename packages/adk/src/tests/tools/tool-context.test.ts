@@ -250,3 +250,39 @@ describe("ToolContext", () => {
 		]);
 	});
 });
+
+describe("ToolContext leftover state / stateDelta edges", () => {
+	it("mutates session state through ToolContext.state and mirrors into actions.stateDelta", () => {
+		const sessionState: Record<string, any> = { existing: 1 };
+		const actions = new EventActions();
+		const context = new ToolContext(
+			makeInvocationContext({
+				session: { id: "session-1", state: sessionState } as any,
+			}),
+			{ eventActions: actions },
+		);
+
+		context.state.set("existing", 2);
+		context.state["fresh"] = "yes";
+
+		expect(context.state.get("existing")).toBe(2);
+		expect(context.state.get("fresh")).toBe("yes");
+		expect(actions.stateDelta.existing).toBe(2);
+		expect(actions.stateDelta.fresh).toBe("yes");
+		expect(sessionState.existing).toBe(2);
+		expect(sessionState.fresh).toBe("yes");
+	});
+
+	it("shares the same EventActions instance between actions and eventActions", () => {
+		const actions = new EventActions({ escalate: true });
+		actions.stateDelta.seed = true;
+		const context = new ToolContext(makeInvocationContext(), {
+			eventActions: actions,
+			functionCallId: "fc-state",
+		});
+		expect(context.actions).toBe(actions);
+		expect(context.eventActions).toBe(actions);
+		expect(context.state.get("seed")).toBe(true);
+		expect(context.functionCallId).toBe("fc-state");
+	});
+});

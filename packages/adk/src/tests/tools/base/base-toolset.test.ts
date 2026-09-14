@@ -148,3 +148,28 @@ describe("BaseToolset", () => {
 		).toBe(false);
 	});
 });
+
+describe("BaseToolset leftover ToolPredicate null context edges", () => {
+	const search = { name: "search" } as BaseTool;
+	const hidden = { name: "hidden" } as BaseTool;
+
+	it("ToolPredicate treats null context differently from undefined via optional chaining", () => {
+		const needsCtx: ToolPredicate = (_tool, ctx) => ctx != null;
+		expect(needsCtx(search)).toBe(false);
+		expect(needsCtx(search, undefined)).toBe(false);
+		expect(needsCtx(search, null as any)).toBe(false);
+
+		const seesNull: ToolPredicate = (_tool, ctx) => ctx === null;
+		expect(seesNull(search)).toBe(false);
+		expect(seesNull(search, undefined)).toBe(false);
+		expect(seesNull(search, null as any)).toBe(true);
+	});
+
+	it("MemoryToolset getTools with null context follows the falsy branch", async () => {
+		const toolset = new MemoryToolset([search, hidden]);
+		await expect(toolset.getTools(null as any)).resolves.toEqual([
+			search,
+			hidden,
+		]);
+	});
+});

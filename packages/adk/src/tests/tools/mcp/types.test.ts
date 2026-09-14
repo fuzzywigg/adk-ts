@@ -37,3 +37,46 @@ describe("McpError", () => {
 		expect(error.type).toBe(McpErrorType.TIMEOUT_ERROR);
 	});
 });
+
+describe("McpError leftover edges", () => {
+	it("is instanceof Error and preserves stack when constructed", () => {
+		const error = new McpError("stack check", McpErrorType.TIMEOUT_ERROR);
+		expect(error).toBeInstanceOf(Error);
+		expect(error.stack).toBeTypeOf("string");
+		expect(error.stack).toContain("McpError");
+	});
+
+	it("round-trips every McpErrorType with and without originalError", () => {
+		const original = new Error("cause");
+		for (const type of Object.values(McpErrorType)) {
+			const withCause = new McpError(`msg:${type}`, type, original);
+			expect(withCause.type).toBe(type);
+			expect(withCause.originalError).toBe(original);
+			expect(withCause.message).toBe(`msg:${type}`);
+
+			const bare = new McpError(`bare:${type}`, type);
+			expect(bare.originalError).toBeUndefined();
+			expect(bare.type).toBe(type);
+		}
+	});
+
+	it("keeps originalError identity for nested Error subclasses", () => {
+		class NestedError extends Error {
+			code = "NESTED";
+		}
+		const nested = new NestedError("nested");
+		const error = new McpError(
+			"wrap",
+			McpErrorType.TOOL_EXECUTION_ERROR,
+			nested,
+		);
+		expect(error.originalError).toBe(nested);
+		expect((error.originalError as NestedError).code).toBe("NESTED");
+	});
+
+	it("allows empty message strings", () => {
+		const error = new McpError("", McpErrorType.INVALID_SCHEMA_ERROR);
+		expect(error.message).toBe("");
+		expect(error.name).toBe("McpError");
+	});
+});

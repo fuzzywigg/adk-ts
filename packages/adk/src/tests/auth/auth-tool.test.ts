@@ -307,3 +307,37 @@ describe("AuthTool leftover edges", () => {
 		expect(AuthTool.validateAuthArguments(args)).toBe(true);
 	});
 });
+
+describe("AuthTool leftover success payload edges", () => {
+	it("processAuthRequest success payload omits function_call_id", async () => {
+		const result = await AuthTool.processAuthRequest({
+			function_call_id: "fc-ignored",
+			auth_config: new AuthConfig({
+				authScheme: new HttpScheme({ scheme: "bearer" }),
+			}),
+		});
+
+		expect(result.status).toBe("auth_request_processed");
+		expect(result).not.toHaveProperty("function_call_id");
+		expect(Object.keys(result).sort()).toEqual([
+			"authConfig",
+			"credentialKey",
+			"status",
+		]);
+	});
+
+	it("processAuthRequest failure payload only includes status", async () => {
+		const authConfig = new EnhancedAuthConfig({
+			authScheme: new ApiKeyScheme({ in: "header", name: "x-api-key" }),
+		});
+		vi.spyOn(authConfig, "getCredentialKey").mockImplementation(() => {
+			throw new Error("fail");
+		});
+		const result = await AuthTool.processAuthRequest({
+			function_call_id: "fc-fail-shape",
+			auth_config: authConfig,
+		});
+		expect(result).toEqual({ status: "auth_request_failed" });
+		expect(result).not.toHaveProperty("function_call_id");
+	});
+});

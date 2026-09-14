@@ -228,3 +228,105 @@ describe("retryOnClosedResource", () => {
 		expect(reinit).not.toHaveBeenCalled();
 	});
 });
+
+describe("withRetry / retryOnClosedResource leftover edges", () => {
+	it("withRetry stringifies non-Error reinit failures in the thrown message", async () => {
+		const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+		const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+		const reinit = vi.fn(async () => {
+			throw "boom-string";
+		});
+		const fn = vi.fn(async () => {
+			throw new Error("connection closed");
+		});
+
+		const wrapped = withRetry(fn, {}, reinit, 1);
+		await expect(wrapped()).rejects.toThrow(
+			"Failed to reinitialize resources: boom-string",
+		);
+		expect(errorSpy).toHaveBeenCalled();
+		errorSpy.mockRestore();
+		warn.mockRestore();
+	});
+
+	it("withRetry stringifies object reinit failures via String()", async () => {
+		const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+		const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+		const reinit = vi.fn(async () => {
+			throw { code: "reinit" };
+		});
+		const fn = vi.fn(async () => {
+			throw new Error("closed");
+		});
+
+		const wrapped = withRetry(fn, {}, reinit, 1);
+		await expect(wrapped()).rejects.toThrow(
+			"Failed to reinitialize resources: [object Object]",
+		);
+		errorSpy.mockRestore();
+		warn.mockRestore();
+	});
+
+	it("retryOnClosedResource with maxRetries 0 rethrows closed errors without reinit", async () => {
+		const reinit = vi.fn(async () => undefined);
+		class Sample {
+			async work(): Promise<string> {
+				throw new Error("closed");
+			}
+		}
+		const descriptor = Object.getOwnPropertyDescriptor(
+			Sample.prototype,
+			"work",
+		)!;
+		retryOnClosedResource(() => reinit(), 0)(
+			Sample.prototype,
+			"work",
+			descriptor,
+		);
+		Object.defineProperty(Sample.prototype, "work", descriptor);
+
+		await expect(new Sample().work()).rejects.toThrow("closed");
+		expect(reinit).not.toHaveBeenCalled();
+	});
+
+	it("retryOnClosedResource stringifies non-Error reinit failures", async () => {
+		const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+		const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+		const reinit = vi.fn(async () => {
+			throw 404;
+		});
+		class Sample {
+			async work(): Promise<string> {
+				throw new Error("socket hang up");
+			}
+		}
+		const descriptor = Object.getOwnPropertyDescriptor(
+			Sample.prototype,
+			"work",
+		)!;
+		retryOnClosedResource(() => reinit(), 1)(
+			Sample.prototype,
+			"work",
+			descriptor,
+		);
+		Object.defineProperty(Sample.prototype, "work", descriptor);
+
+		await expect(new Sample().work()).rejects.toThrow(
+			"Failed to reinitialize resources: 404",
+		);
+		expect(reinit).toHaveBeenCalledTimes(1);
+		errorSpy.mockRestore();
+		warn.mockRestore();
+	});
+
+	it("withRetry treats maxRetries 0 as a single attempt with no reinit", async () => {
+		const reinit = vi.fn(async () => undefined);
+		const fn = vi.fn(async () => {
+			throw new Error("closed");
+		});
+		const wrapped = withRetry(fn, {}, reinit, 0);
+		await expect(wrapped()).rejects.toThrow("closed");
+		expect(fn).toHaveBeenCalledTimes(1);
+		expect(reinit).not.toHaveBeenCalled();
+	});
+});

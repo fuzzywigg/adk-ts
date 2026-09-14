@@ -330,3 +330,50 @@ describe("VertexAiSessionService leftover edges (post #113)", () => {
 		});
 	});
 });
+
+describe("VertexAiSessionService leftover serialize/LRO edges", () => {
+	it("convertEventToJson serializes empty longRunningToolIds Set as []", () => {
+		const { service } = createService();
+		const event = new Event({
+			author: "agent",
+			invocationId: "inv",
+			timestamp: 1.5,
+			longRunningToolIds: new Set(),
+		});
+		const json = (service as any).convertEventToJson(event);
+		expect(json.event_metadata.long_running_tool_ids).toEqual([]);
+		expect(json.timestamp).toEqual({
+			seconds: 1,
+			nanos: 500_000_000,
+		});
+	});
+
+	it("createSession succeeds when LRO completes on the final poll attempt", async () => {
+		vi.useFakeTimers();
+		const { service, asyncRequest } = createService();
+		asyncRequest.mockResolvedValueOnce({
+			name: "projects/p/locations/l/reasoningEngines/9/sessions/sess-last/operations/op-last",
+		});
+		for (let i = 0; i < 5; i++) {
+			asyncRequest.mockResolvedValueOnce({ done: false });
+		}
+		asyncRequest.mockResolvedValueOnce({ done: true });
+		asyncRequest.mockResolvedValueOnce({
+			name: "projects/p/locations/l/reasoningEngines/9/sessions/sess-last",
+			updateTime: "2024-01-01T00:00:00.000Z",
+			sessionState: { ready: true },
+		});
+
+		const pending = service.createSession("app", "u", { ready: true });
+		await vi.runAllTimersAsync();
+		const session = await pending;
+
+		expect(session.id).toBe("sess-last");
+		expect(session.state).toEqual({ ready: true });
+		expect(
+			asyncRequest.mock.calls.filter((c) =>
+				String(c[0].path).startsWith("operations/"),
+			),
+		).toHaveLength(6);
+	});
+});

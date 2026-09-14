@@ -782,3 +782,78 @@ describe("FunctionTool leftover parsing and type edges", () => {
 		).resolves.toEqual({ value: "true", type: "string" });
 	});
 });
+
+describe("FunctionTool leftover context-substring and boolean coerce edges", () => {
+	it("myContext substring does not inject an extra positional toolContext arg", async () => {
+		function usesMyContext(value: string) {
+			const myContext = value;
+			return { myContext, argc: arguments.length };
+		}
+		Object.defineProperty(usesMyContext, "toString", {
+			value: () =>
+				"function usesMyContext(value) { const myContext = value; return { myContext, argc: arguments.length }; }",
+		});
+
+		const tool = new FunctionTool(usesMyContext, {
+			description: "substring context false positive",
+		});
+		const result = await tool.runAsync({ value: "x" } as any, makeContext());
+		expect(result).toEqual({ myContext: "x", argc: 1 });
+		expect(
+			tool.getDeclaration().parameters?.properties?.toolContext,
+		).toBeUndefined();
+	});
+
+	it("contextId param name triggers accepts-tool-context but stays mandatory", async () => {
+		function withContextId(value: string, contextId: string) {
+			return { value, contextId };
+		}
+		Object.defineProperty(withContextId, "toString", {
+			value: () =>
+				"function withContextId(value, contextId) { return { value, contextId }; }",
+		});
+
+		const tool = new FunctionTool(withContextId, {
+			description: "contextId substring is still mandatory",
+		});
+		expect((tool as any).mandatoryArgs).toEqual(["value", "contextId"]);
+		const missing = await tool.runAsync({ value: "x" } as any, makeContext());
+		expect(missing.error).toContain("contextId");
+		await expect(
+			tool.runAsync({ value: "x", contextId: "c1" } as any, makeContext()),
+		).resolves.toEqual({ value: "x", contextId: "c1" });
+	});
+
+	it("boolean coerce treats True as true and yes/0 as false", async () => {
+		function inspect(flag: boolean) {
+			return { flag };
+		}
+		Object.defineProperty(inspect, "toString", {
+			value: () => "function inspect(flag: boolean) { return { flag }; }",
+		});
+		const tool = new FunctionTool(inspect, {
+			description: "boolean string coerce leftovers",
+		});
+		vi.spyOn(tool, "getDeclaration").mockReturnValue({
+			name: "inspect",
+			description: "boolean coerce",
+			parameters: {
+				type: "OBJECT",
+				properties: { flag: { type: "boolean" } as any },
+			},
+		} as any);
+
+		await expect(
+			tool.runAsync({ flag: "True" } as any, makeContext()),
+		).resolves.toEqual({ flag: true });
+		await expect(
+			tool.runAsync({ flag: "yes" } as any, makeContext()),
+		).resolves.toEqual({ flag: false });
+		await expect(
+			tool.runAsync({ flag: "0" } as any, makeContext()),
+		).resolves.toEqual({ flag: false });
+		await expect(
+			tool.runAsync({ flag: "False" } as any, makeContext()),
+		).resolves.toEqual({ flag: false });
+	});
+});

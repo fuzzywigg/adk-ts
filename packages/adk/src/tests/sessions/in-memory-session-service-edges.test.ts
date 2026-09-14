@@ -186,3 +186,43 @@ describe("InMemorySessionService leftover edges (post #113)", () => {
 		).toBe("only");
 	});
 });
+
+describe("InMemorySessionService leftover temp:/sync warn edges", () => {
+	it("writes temp: keys onto session state without creating app/user maps", async () => {
+		const service = new InMemorySessionService();
+		const session = await service.createSession("app", "user", {}, "s-temp");
+		await service.appendEvent(session, {
+			author: "agent",
+			timestamp: 1,
+			actions: {
+				stateDelta: {
+					[`${State.TEMP_PREFIX}scratch`]: "ephemeral",
+					local: "ok",
+				},
+			},
+		} as any);
+
+		expect(session.state[`${State.TEMP_PREFIX}scratch`]).toBe("ephemeral");
+		expect(session.state.local).toBe("ok");
+		expect((service as any).appState.has("app")).toBe(false);
+		expect((service as any).userState.has("app")).toBe(false);
+
+		const fetched = await service.getSession("app", "user", "s-temp");
+		expect(fetched?.state[`${State.TEMP_PREFIX}scratch`]).toBe("ephemeral");
+	});
+
+	it("deprecated sync APIs warn with the exact migrate message", () => {
+		const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+		const service = new InMemorySessionService();
+		service.createSessionSync("app", "user", {}, "sync-msg");
+		service.getSessionSync("app", "user", "sync-msg");
+		service.listSessionsSync("app", "user");
+		service.deleteSessionSync("app", "user", "sync-msg");
+
+		expect(warn.mock.calls.length).toBeGreaterThanOrEqual(4);
+		for (const call of warn.mock.calls) {
+			expect(call[0]).toBe("Deprecated. Please migrate to the async method.");
+		}
+		warn.mockRestore();
+	});
+});

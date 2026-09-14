@@ -249,3 +249,55 @@ describe("McpGeneric", () => {
 		expect(config.debug).toBe(true);
 	});
 });
+
+describe("createMcpConfig leftover env and description edges", () => {
+	it("coerces null, objects, arrays, and bigint env values via String()", () => {
+		const config = getConfig(
+			McpGeneric("@iqai/mcp-edge", {
+				env: {
+					NULLISH: null,
+					OBJ: { a: 1 },
+					ARR: [1, 2],
+					BIG: BigInt(7),
+					SKIP: undefined,
+				},
+			}),
+		);
+		if (config.transport.mode !== "stdio") {
+			throw new Error("expected stdio");
+		}
+		expect(config.transport.env?.NULLISH).toBe("null");
+		expect(config.transport.env?.OBJ).toBe("[object Object]");
+		expect(config.transport.env?.ARR).toBe("1,2");
+		expect(config.transport.env?.BIG).toBe("7");
+		expect(config.transport.env).not.toHaveProperty("SKIP");
+	});
+
+	it("falls back to default description when description is an empty string", () => {
+		const config = getConfig(
+			McpMemory({
+				description: "",
+			}),
+		);
+		expect(config.description).toBe("Client for Memory MCP Client");
+	});
+
+	it("treats falsy debug as false and still applies custom retryOptions", () => {
+		const config = getConfig(
+			McpIqWiki({
+				debug: false,
+				retryOptions: { maxRetries: 0, initialDelay: 1 },
+				description: "wiki edge",
+			}),
+		);
+		expect(config.debug).toBe(false);
+		expect(config.description).toBe("wiki edge");
+		expect(config.retryOptions).toEqual({ maxRetries: 0, initialDelay: 1 });
+	});
+
+	it("McpGeneric empty name override falls through to package-derived client name", () => {
+		const config = getConfig(McpGeneric("@scope/pkg", {}, ""));
+		expect(config.name).toBe("@scope/pkg Client");
+		expect(config.description).toBe("Client for @scope/pkg Client");
+	});
+});

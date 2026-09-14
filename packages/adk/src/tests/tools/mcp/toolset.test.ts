@@ -478,3 +478,66 @@ describe("McpToolset offline helpers", () => {
 		expect(close).toHaveBeenCalled();
 	});
 });
+
+describe("McpToolset leftover cache/filter/sampling edges", () => {
+	it("getTools warns and returns [] when tools is a non-array object", async () => {
+		listTools.mockResolvedValue({ tools: { name: "x" } });
+		const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+		const toolset = new McpToolset(baseConfig);
+		await expect(toolset.getTools()).resolves.toEqual([]);
+		expect(warn).toHaveBeenCalledWith(
+			expect.stringContaining("no tools or invalid tools array"),
+		);
+		warn.mockRestore();
+	});
+
+	it("logs exact sampling handler set/removed strings when debug is true", () => {
+		const log = vi.spyOn(console, "log").mockImplementation(() => {});
+		const toolset = new McpToolset({ ...baseConfig, debug: true });
+		toolset.setSamplingHandler(vi.fn() as any);
+		expect(log).toHaveBeenCalledWith("🎯 Sampling handler set for MCP toolset");
+		toolset.removeSamplingHandler();
+		expect(log).toHaveBeenCalledWith(
+			"🚫 Sampling handler removed from MCP toolset",
+		);
+		log.mockRestore();
+	});
+
+	it("cache early-return ignores unused maxAge/maxSize fields", async () => {
+		const toolset = new McpToolset({
+			...baseConfig,
+			cacheConfig: { enabled: true, maxAge: 1, maxSize: 1 },
+		});
+		const first = await toolset.getTools();
+		expect(first).toHaveLength(2);
+		expect(listTools).toHaveBeenCalledTimes(1);
+		const second = await toolset.getTools();
+		expect(second).toBe(first);
+		expect(listTools).toHaveBeenCalledTimes(1);
+	});
+
+	it("getTools returns [] for an empty tools array without the invalid-shape warn", async () => {
+		listTools.mockResolvedValue({ tools: [] });
+		const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+		const toolset = new McpToolset(baseConfig);
+		await expect(toolset.getTools()).resolves.toEqual([]);
+		expect(warn).not.toHaveBeenCalledWith(
+			expect.stringContaining("no tools or invalid tools array"),
+		);
+		warn.mockRestore();
+	});
+
+	it("does not log sampling handler messages when debug is false", () => {
+		const log = vi.spyOn(console, "log").mockImplementation(() => {});
+		const toolset = new McpToolset(baseConfig);
+		toolset.setSamplingHandler(vi.fn() as any);
+		toolset.removeSamplingHandler();
+		expect(log).not.toHaveBeenCalledWith(
+			"🎯 Sampling handler set for MCP toolset",
+		);
+		expect(log).not.toHaveBeenCalledWith(
+			"🚫 Sampling handler removed from MCP toolset",
+		);
+		log.mockRestore();
+	});
+});

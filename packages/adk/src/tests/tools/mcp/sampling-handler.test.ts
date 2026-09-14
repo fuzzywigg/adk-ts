@@ -547,3 +547,72 @@ describe("McpSamplingHandler", () => {
 		);
 	});
 });
+
+describe("McpSamplingHandler leftover media/text and response edges", () => {
+	it("prepends optional text before image and audio inlineData parts", () => {
+		const handler = new McpSamplingHandler(async () => "ok");
+		expect(
+			(handler as any).convertMcpContentToADKParts({
+				type: "image",
+				mimeType: "image/png",
+				data: "abc",
+				text: "caption",
+			}),
+		).toEqual([
+			{ text: "caption" },
+			{ inlineData: { mimeType: "image/png", data: "abc" } },
+		]);
+		expect(
+			(handler as any).convertMcpContentToADKParts({
+				type: "audio",
+				mimeType: "audio/wav",
+				data: "zzz",
+				text: "note",
+			}),
+		).toEqual([
+			{ text: "note" },
+			{ inlineData: { mimeType: "audio/wav", data: "zzz" } },
+		]);
+	});
+
+	it("omits empty optional text on image content", () => {
+		const handler = new McpSamplingHandler(async () => "ok");
+		expect(
+			(handler as any).convertMcpContentToADKParts({
+				type: "image",
+				mimeType: "image/png",
+				data: "abc",
+				text: "",
+			}),
+		).toEqual([{ inlineData: { mimeType: "image/png", data: "abc" } }]);
+	});
+
+	it("converts ADK inlineData-only responses into empty MCP text", () => {
+		const handler = new McpSamplingHandler(async () => "ok");
+		const result = (handler as any).convertADKResponseToMcp({
+			content: {
+				role: "model",
+				parts: [{ inlineData: { mimeType: "image/png", data: "x" } }],
+			},
+		});
+		expect(result).toMatchObject({
+			role: "assistant",
+			content: { type: "text", text: "" },
+		});
+	});
+
+	it("joins mixed text and non-text ADK parts, dropping non-text as empty", () => {
+		const handler = new McpSamplingHandler(async () => "ok");
+		const result = (handler as any).convertADKResponseToMcp({
+			content: {
+				role: "model",
+				parts: [
+					{ text: "hello" },
+					{ inlineData: { mimeType: "image/png", data: "x" } },
+					{ text: "world" },
+				],
+			},
+		});
+		expect(result.content.text).toBe("helloworld");
+	});
+});
