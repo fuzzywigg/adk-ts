@@ -10,6 +10,20 @@ describe("LiveRequest", () => {
 		expect(request.close).toBe(false);
 		expect(request.blob).toBeUndefined();
 	});
+
+	it("accepts blob and explicit close in the constructor", () => {
+		const blob = { data: "YQ==", mimeType: "text/plain" };
+		const withBlob = new LiveRequest({ blob });
+		const closing = new LiveRequest({ close: true });
+		const empty = new LiveRequest();
+
+		expect(withBlob.blob).toEqual(blob);
+		expect(withBlob.close).toBe(false);
+		expect(closing.close).toBe(true);
+		expect(empty.content).toBeUndefined();
+		expect(empty.blob).toBeUndefined();
+		expect(empty.close).toBe(false);
+	});
 });
 
 describe("LiveRequestQueue", () => {

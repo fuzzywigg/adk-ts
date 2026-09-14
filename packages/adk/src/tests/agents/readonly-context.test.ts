@@ -72,4 +72,21 @@ describe("ReadonlyContext", () => {
 		}).toThrow();
 		expect(invocation.session.state.foo).toBe("bar");
 	});
+
+	it("exposes undefined userContent when the invocation has none", () => {
+		const ctx = new ReadonlyContext(makeInvocationContext());
+		expect(ctx.userContent).toBeUndefined();
+	});
+
+	it("returns a shallow snapshot so later session mutations are invisible", () => {
+		const invocation = makeInvocationContext({ state: { count: 1 } });
+		const ctx = new ReadonlyContext(invocation);
+		const snapshot = ctx.state;
+
+		invocation.session.state.count = 2;
+		invocation.session.state.extra = "new";
+
+		expect(snapshot).toEqual({ count: 1 });
+		expect(ctx.state).toEqual({ count: 2, extra: "new" });
+	});
 });

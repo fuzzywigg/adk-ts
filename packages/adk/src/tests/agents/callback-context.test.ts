@@ -108,4 +108,49 @@ describe("CallbackContext", () => {
 		expect(ctx.eventActions).toBe(actions);
 		expect(ctx.invocationContext).toBe(invocation);
 	});
+
+	it("creates default EventActions when omitted", () => {
+		const ctx = new CallbackContext(makeInvocationContext());
+		expect(ctx.eventActions).toBeInstanceOf(EventActions);
+		expect(ctx.eventActions.artifactDelta).toEqual({});
+	});
+
+	it("loads the latest artifact when version is omitted", async () => {
+		const artifact: Part = { text: "latest" };
+		const loadArtifact = vi.fn().mockResolvedValue(artifact);
+		const ctx = new CallbackContext(
+			makeInvocationContext({
+				artifactService: { loadArtifact, saveArtifact: vi.fn() } as any,
+			}),
+		);
+
+		await expect(ctx.loadArtifact("file.txt")).resolves.toBe(artifact);
+		expect(loadArtifact).toHaveBeenCalledWith({
+			appName: "app",
+			userId: "user-1",
+			sessionId: "session-1",
+			filename: "file.txt",
+			version: undefined,
+		});
+	});
+
+	it("accumulates artifactDelta across multiple saves", async () => {
+		const saveArtifact = vi
+			.fn()
+			.mockResolvedValueOnce(1)
+			.mockResolvedValueOnce(2);
+		const ctx = new CallbackContext(
+			makeInvocationContext({
+				artifactService: { loadArtifact: vi.fn(), saveArtifact } as any,
+			}),
+		);
+
+		await ctx.saveArtifact("a.txt", { text: "a" });
+		await ctx.saveArtifact("b.txt", { text: "b" });
+
+		expect(ctx.eventActions.artifactDelta).toEqual({
+			"a.txt": 1,
+			"b.txt": 2,
+		});
+	});
 });
