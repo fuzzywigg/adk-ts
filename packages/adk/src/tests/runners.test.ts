@@ -1637,6 +1637,710 @@ describe("Runner.runAsync", () => {
 
 		await expect(runner.close()).rejects.toThrow(/close\(\) timeout/);
 	});
+
+	it("sync run accepts an omitted runConfig and still drains events", async () => {
+		await sessionService.createSession("runner-app", "u1", {}, "s-sync-rc");
+		vi.spyOn(agent, "runAsync").mockImplementation(async function* () {
+			yield new Event({
+				author: "root_agent",
+				content: { role: "model", parts: [{ text: "sync-default-rc" }] },
+			});
+		});
+
+		const generator = runner.run({
+			userId: "u1",
+			sessionId: "s-sync-rc",
+			newMessage: { role: "user", parts: [{ text: "go" }] },
+		});
+
+		await vi.waitFor(async () => {
+			const session = await sessionService.getSession(
+				"runner-app",
+				"u1",
+				"s-sync-rc",
+			);
+			expect(
+				session?.events.some(
+					(e) =>
+						e.author === "root_agent" &&
+						e.content?.parts?.[0]?.text === "sync-default-rc",
+				),
+			).toBe(true);
+		});
+
+		const events = [...generator];
+		expect(events).toHaveLength(1);
+		expect(events[0].content?.parts?.[0]?.text).toBe("sync-default-rc");
+	});
+
+	it("sync run forwards an explicit RunConfig into runAsync", async () => {
+		await sessionService.createSession("runner-app", "u1", {}, "s-sync-cfg");
+		const runConfig = new RunConfig({ saveInputBlobsAsArtifacts: false });
+		vi.spyOn(agent, "runAsync").mockImplementation(async function* (ctx) {
+			expect(ctx.runConfig).toBe(runConfig);
+			yield new Event({
+				author: "root_agent",
+				content: { role: "model", parts: [{ text: "cfg-ok" }] },
+			});
+		});
+
+		const generator = runner.run({
+			userId: "u1",
+			sessionId: "s-sync-cfg",
+			newMessage: { role: "user", parts: [{ text: "go" }] },
+			runConfig,
+		});
+
+		await vi.waitFor(async () => {
+			const session = await sessionService.getSession(
+				"runner-app",
+				"u1",
+				"s-sync-cfg",
+			);
+			expect(
+				session?.events.some(
+					(e) =>
+						e.author === "root_agent" &&
+						e.content?.parts?.[0]?.text === "cfg-ok",
+				),
+			).toBe(true);
+		});
+
+		const events = [...generator];
+		expect(events).toHaveLength(1);
+		expect(events[0].content?.parts?.[0]?.text).toBe("cfg-ok");
+	});
+
+	it("sync run drains multiple events in order", async () => {
+		await sessionService.createSession("runner-app", "u1", {}, "s-sync-multi");
+		vi.spyOn(agent, "runAsync").mockImplementation(async function* () {
+			yield new Event({
+				author: "root_agent",
+				content: { role: "model", parts: [{ text: "a" }] },
+			});
+			yield new Event({
+				author: "root_agent",
+				content: { role: "model", parts: [{ text: "b" }] },
+			});
+			yield new Event({
+				author: "root_agent",
+				content: { role: "model", parts: [{ text: "c" }] },
+			});
+		});
+
+		const generator = runner.run({
+			userId: "u1",
+			sessionId: "s-sync-multi",
+			newMessage: { role: "user", parts: [{ text: "go" }] },
+		});
+
+		await vi.waitFor(async () => {
+			const session = await sessionService.getSession(
+				"runner-app",
+				"u1",
+				"s-sync-multi",
+			);
+			expect(
+				session?.events.filter((e) => e.author === "root_agent"),
+			).toHaveLength(3);
+		});
+
+		const texts = [...generator].map((e) => e.content?.parts?.[0]?.text);
+		expect(texts).toEqual(["a", "b", "c"]);
+	});
+
+	it("sync run completes with an empty event list when the agent yields nothing", async () => {
+		await sessionService.createSession("runner-app", "u1", {}, "s-sync-empty");
+		vi.spyOn(agent, "runAsync").mockImplementation(async function* () {
+			// no yields
+		});
+
+		const generator = runner.run({
+			userId: "u1",
+			sessionId: "s-sync-empty",
+			newMessage: { role: "user", parts: [{ text: "go" }] },
+		});
+
+		await vi.waitFor(async () => {
+			const session = await sessionService.getSession(
+				"runner-app",
+				"u1",
+				"s-sync-empty",
+			);
+			expect(session?.events.some((e) => e.author === "user")).toBe(true);
+		});
+
+		expect([...generator]).toEqual([]);
+	});
+
+	it("sync run yields only non-null events when the agent streams partial then final", async () => {
+		await sessionService.createSession(
+			"runner-app",
+			"u1",
+			{},
+			"s-sync-partial",
+		);
+		vi.spyOn(agent, "runAsync").mockImplementation(async function* () {
+			yield new Event({
+				author: "root_agent",
+				partial: true,
+				content: { role: "model", parts: [{ text: "chunk" }] },
+			});
+			yield new Event({
+				author: "root_agent",
+				content: { role: "model", parts: [{ text: "final" }] },
+			});
+		});
+
+		const generator = runner.run({
+			userId: "u1",
+			sessionId: "s-sync-partial",
+			newMessage: { role: "user", parts: [{ text: "go" }] },
+		});
+
+		await vi.waitFor(async () => {
+			const session = await sessionService.getSession(
+				"runner-app",
+				"u1",
+				"s-sync-partial",
+			);
+			expect(
+				session?.events.some(
+					(e) =>
+						e.author === "root_agent" &&
+						e.content?.parts?.[0]?.text === "final",
+				),
+			).toBe(true);
+		});
+
+		const events = [...generator];
+		expect(events).toHaveLength(2);
+		expect(events[0].partial).toBe(true);
+		expect(events[1].content?.parts?.[0]?.text).toBe("final");
+	});
+
+	it("skips unknown authors then routes to an earlier transferable sub-agent", async () => {
+		const child = new LlmAgent({
+			name: "known_child",
+			model: "gemini-2.0-flash-exp",
+		});
+		agent = new LlmAgent({
+			name: "root_agent",
+			model: "gemini-2.0-flash-exp",
+			subAgents: [child],
+		});
+		runner = new Runner({
+			appName: "runner-app",
+			agent,
+			sessionService,
+		});
+
+		const session = await sessionService.createSession(
+			"runner-app",
+			"u1",
+			{},
+			"s-skip-unknown",
+		);
+		await sessionService.appendEvent(
+			session,
+			new Event({
+				author: "known_child",
+				content: { role: "model", parts: [{ text: "older" }] },
+			}),
+		);
+		await sessionService.appendEvent(
+			session,
+			new Event({
+				author: "ghost_agent",
+				content: { role: "model", parts: [{ text: "newer-unknown" }] },
+			}),
+		);
+
+		const childSpy = vi
+			.spyOn(child, "runAsync")
+			.mockImplementation(async function* () {
+				yield new Event({
+					author: "known_child",
+					content: { role: "model", parts: [{ text: "from-known" }] },
+				});
+			});
+		vi.spyOn(agent, "runAsync").mockImplementation(async function* () {
+			yield new Event({
+				author: "root_agent",
+				content: { role: "model", parts: [{ text: "from-root" }] },
+			});
+		});
+
+		const events: Event[] = [];
+		for await (const event of runner.runAsync({
+			userId: "u1",
+			sessionId: "s-skip-unknown",
+			newMessage: { role: "user", parts: [{ text: "continue" }] },
+		})) {
+			events.push(event);
+		}
+
+		expect(childSpy).toHaveBeenCalled();
+		expect(events[0].author).toBe("known_child");
+	});
+
+	it("falls back to root when the session only has user events", async () => {
+		const session = await sessionService.createSession(
+			"runner-app",
+			"u1",
+			{},
+			"s-only-user",
+		);
+		await sessionService.appendEvent(
+			session,
+			new Event({
+				author: "user",
+				content: { role: "user", parts: [{ text: "prior-user" }] },
+			}),
+		);
+
+		const rootSpy = vi
+			.spyOn(agent, "runAsync")
+			.mockImplementation(async function* () {
+				yield new Event({
+					author: "root_agent",
+					content: { role: "model", parts: [{ text: "root-only" }] },
+				});
+			});
+
+		const events: Event[] = [];
+		for await (const event of runner.runAsync({
+			userId: "u1",
+			sessionId: "s-only-user",
+			newMessage: { role: "user", parts: [{ text: "hi" }] },
+		})) {
+			events.push(event);
+		}
+
+		expect(rootSpy).toHaveBeenCalled();
+		expect(events[0].author).toBe("root_agent");
+	});
+
+	it("prefers function-response routing over a later transferable sub-agent", async () => {
+		const toolAgent = new LlmAgent({
+			name: "tool_agent",
+			model: "gemini-2.0-flash-exp",
+		});
+		const chatAgent = new LlmAgent({
+			name: "chat_agent",
+			model: "gemini-2.0-flash-exp",
+		});
+		agent = new LlmAgent({
+			name: "root_agent",
+			model: "gemini-2.0-flash-exp",
+			subAgents: [toolAgent, chatAgent],
+		});
+		runner = new Runner({
+			appName: "runner-app",
+			agent,
+			sessionService,
+		});
+
+		const session = await sessionService.createSession(
+			"runner-app",
+			"u1",
+			{},
+			"s-fr-prefers",
+		);
+		await sessionService.appendEvent(
+			session,
+			new Event({
+				author: "chat_agent",
+				content: { role: "model", parts: [{ text: "chat-prior" }] },
+			}),
+		);
+		await sessionService.appendEvent(
+			session,
+			new Event({
+				author: "tool_agent",
+				content: {
+					role: "model",
+					parts: [
+						{
+							functionCall: {
+								id: "call_pref",
+								name: "lookup",
+								args: {},
+							},
+						},
+					],
+				},
+			}),
+		);
+
+		const toolSpy = vi
+			.spyOn(toolAgent, "runAsync")
+			.mockImplementation(async function* () {
+				yield new Event({
+					author: "tool_agent",
+					content: { role: "model", parts: [{ text: "from-tool" }] },
+				});
+			});
+		const chatSpy = vi
+			.spyOn(chatAgent, "runAsync")
+			.mockImplementation(async function* () {
+				yield new Event({
+					author: "chat_agent",
+					content: { role: "model", parts: [{ text: "from-chat" }] },
+				});
+			});
+
+		const events: Event[] = [];
+		for await (const event of runner.runAsync({
+			userId: "u1",
+			sessionId: "s-fr-prefers",
+			newMessage: {
+				role: "user",
+				parts: [
+					{
+						functionResponse: {
+							id: "call_pref",
+							name: "lookup",
+							response: { ok: true },
+						},
+					},
+				],
+			},
+		})) {
+			events.push(event);
+		}
+
+		expect(toolSpy).toHaveBeenCalled();
+		expect(chatSpy).not.toHaveBeenCalled();
+		expect(events[0].author).toBe("tool_agent");
+	});
+
+	it("skips a locked sub-agent and continues searching for a transferable one", async () => {
+		const locked = new LlmAgent({
+			name: "locked_leaf",
+			model: "gemini-2.0-flash-exp",
+			disallowTransferToParent: true,
+		});
+		const open = new LlmAgent({
+			name: "open_leaf",
+			model: "gemini-2.0-flash-exp",
+		});
+		agent = new LlmAgent({
+			name: "root_agent",
+			model: "gemini-2.0-flash-exp",
+			subAgents: [locked, open],
+		});
+		runner = new Runner({
+			appName: "runner-app",
+			agent,
+			sessionService,
+		});
+
+		const session = await sessionService.createSession(
+			"runner-app",
+			"u1",
+			{},
+			"s-skip-locked",
+		);
+		await sessionService.appendEvent(
+			session,
+			new Event({
+				author: "open_leaf",
+				content: { role: "model", parts: [{ text: "older-open" }] },
+			}),
+		);
+		await sessionService.appendEvent(
+			session,
+			new Event({
+				author: "locked_leaf",
+				content: { role: "model", parts: [{ text: "newer-locked" }] },
+			}),
+		);
+
+		const openSpy = vi
+			.spyOn(open, "runAsync")
+			.mockImplementation(async function* () {
+				yield new Event({
+					author: "open_leaf",
+					content: { role: "model", parts: [{ text: "from-open" }] },
+				});
+			});
+		const lockedSpy = vi
+			.spyOn(locked, "runAsync")
+			.mockImplementation(async function* () {
+				yield new Event({
+					author: "locked_leaf",
+					content: { role: "model", parts: [{ text: "from-locked" }] },
+				});
+			});
+
+		const events: Event[] = [];
+		for await (const event of runner.runAsync({
+			userId: "u1",
+			sessionId: "s-skip-locked",
+			newMessage: { role: "user", parts: [{ text: "continue" }] },
+		})) {
+			events.push(event);
+		}
+
+		expect(lockedSpy).not.toHaveBeenCalled();
+		expect(openSpy).toHaveBeenCalled();
+		expect(events[0].author).toBe("open_leaf");
+	});
+
+	it("does not save inline blobs when saveInputBlobsAsArtifacts is false", async () => {
+		const artifactService = new InMemoryArtifactService();
+		await sessionService.createSession("runner-app", "u1", {}, "s-blob-off");
+		runner = new Runner({
+			appName: "runner-app",
+			agent,
+			sessionService,
+			artifactService,
+		});
+		const saveSpy = vi.spyOn(artifactService, "saveArtifact");
+		vi.spyOn(agent, "runAsync").mockImplementation(async function* () {
+			yield new Event({
+				author: "root_agent",
+				content: { role: "model", parts: [{ text: "ok" }] },
+			});
+		});
+
+		for await (const _ of runner.runAsync({
+			userId: "u1",
+			sessionId: "s-blob-off",
+			newMessage: {
+				role: "user",
+				parts: [
+					{
+						inlineData: {
+							mimeType: "text/plain",
+							data: "YQ==",
+						},
+					},
+				],
+			},
+			runConfig: new RunConfig({ saveInputBlobsAsArtifacts: false }),
+		})) {
+			// drain
+		}
+
+		expect(saveSpy).not.toHaveBeenCalled();
+		const session = await sessionService.getSession(
+			"runner-app",
+			"u1",
+			"s-blob-off",
+		);
+		expect(
+			session?.events.find((e) => e.author === "user")?.content?.parts?.[0]
+				?.inlineData?.data,
+		).toBe("YQ==");
+	});
+
+	it("keeps the original user message when onUserMessageCallback returns undefined", async () => {
+		class NoopUserPlugin extends BasePlugin {
+			async onUserMessageCallback() {
+				return undefined;
+			}
+		}
+
+		await sessionService.createSession("runner-app", "u1", {}, "s-user-noop");
+		runner = new Runner({
+			appName: "runner-app",
+			agent,
+			sessionService,
+			plugins: [new NoopUserPlugin("user-noop")],
+		});
+		vi.spyOn(agent, "runAsync").mockImplementation(async function* () {
+			yield new Event({
+				author: "root_agent",
+				content: { role: "model", parts: [{ text: "ok" }] },
+			});
+		});
+
+		for await (const _ of runner.runAsync({
+			userId: "u1",
+			sessionId: "s-user-noop",
+			newMessage: { role: "user", parts: [{ text: "keep-me" }] },
+		})) {
+			// drain
+		}
+
+		const session = await sessionService.getSession(
+			"runner-app",
+			"u1",
+			"s-user-noop",
+		);
+		expect(
+			session?.events.find((e) => e.author === "user")?.content?.parts?.[0]
+				?.text,
+		).toBe("keep-me");
+	});
+
+	it("defaults runConfig when the caller omits it", async () => {
+		await sessionService.createSession("runner-app", "u1", {}, "s-default-rc");
+		vi.spyOn(agent, "runAsync").mockImplementation(async function* (ctx) {
+			expect(ctx.runConfig).toBeInstanceOf(RunConfig);
+			yield new Event({
+				author: "root_agent",
+				content: { role: "model", parts: [{ text: "defaulted" }] },
+			});
+		});
+
+		const events: Event[] = [];
+		for await (const event of runner.runAsync({
+			userId: "u1",
+			sessionId: "s-default-rc",
+			newMessage: { role: "user", parts: [{ text: "hi" }] },
+		})) {
+			events.push(event);
+		}
+
+		expect(events[0].content?.parts?.[0]?.text).toBe("defaulted");
+	});
+
+	it("yields partial events without calling memoryService for them", async () => {
+		await sessionService.createSession("runner-app", "u1", {}, "s-partial-mem");
+		const memorySpy = vi.spyOn(
+			runner.memoryService as InMemoryMemoryService,
+			"addSessionToMemory",
+		);
+		vi.spyOn(agent, "runAsync").mockImplementation(async function* () {
+			yield new Event({
+				author: "root_agent",
+				partial: true,
+				content: { role: "model", parts: [{ text: "chunk" }] },
+			});
+			yield new Event({
+				author: "root_agent",
+				content: { role: "model", parts: [{ text: "final" }] },
+			});
+		});
+
+		const events: Event[] = [];
+		for await (const event of runner.runAsync({
+			userId: "u1",
+			sessionId: "s-partial-mem",
+			newMessage: { role: "user", parts: [{ text: "hi" }] },
+		})) {
+			events.push(event);
+		}
+
+		expect(events).toHaveLength(2);
+		expect(memorySpy).toHaveBeenCalledTimes(1);
+	});
+
+	it("logs a debug message when skipping an unknown prior agent author", async () => {
+		await sessionService.createSession("runner-app", "u1", {}, "s-unknown-log");
+		const session = await sessionService.getSession(
+			"runner-app",
+			"u1",
+			"s-unknown-log",
+		);
+		const ghost = new Event({
+			author: "ghost_agent",
+			content: { role: "model", parts: [{ text: "who?" }] },
+		});
+		await sessionService.appendEvent(session!, ghost);
+
+		const debugSpy = vi
+			.spyOn(runner["logger"], "debug")
+			.mockImplementation(() => {});
+		vi.spyOn(agent, "runAsync").mockImplementation(async function* () {
+			yield new Event({
+				author: "root_agent",
+				content: { role: "model", parts: [{ text: "root-ok" }] },
+			});
+		});
+
+		for await (const _ of runner.runAsync({
+			userId: "u1",
+			sessionId: "s-unknown-log",
+			newMessage: { role: "user", parts: [{ text: "hi" }] },
+		})) {
+			// drain
+		}
+
+		expect(debugSpy).toHaveBeenCalledWith(
+			`Event from an unknown agent: ghost_agent, event id: ${ghost.id}`,
+		);
+	});
+
+	it("propagates non-Error throws from runAsync with a generic span message", async () => {
+		await sessionService.createSession("runner-app", "u1", {}, "s-string-err");
+		const debugSpy = vi
+			.spyOn(runner["logger"], "debug")
+			.mockImplementation(() => {});
+		vi.spyOn(agent, "runAsync").mockImplementation(
+			// biome-ignore lint/correctness/useYield: error-path mock must throw before yielding
+			async function* () {
+				throw "string-boom";
+			},
+		);
+
+		const gen = runner.runAsync({
+			userId: "u1",
+			sessionId: "s-string-err",
+			newMessage: { role: "user", parts: [{ text: "hi" }] },
+		});
+		await expect(gen.next()).rejects.toBe("string-boom");
+		expect(debugSpy).toHaveBeenCalled();
+	});
+});
+
+describe("_findFunctionCallEventIfLastEventIsFunctionResponse leftovers", () => {
+	it("matches a functionResponse mixed with preceding text parts", () => {
+		const functionCallEvent = createFunctionCallEvent([
+			{ id: "call_mixed", name: "tool1" },
+		]);
+		const responseEvent = new Event({
+			author: "tool",
+			content: {
+				parts: [
+					{ text: "tool result follows" },
+					{
+						functionResponse: {
+							id: "call_mixed",
+							name: "tool1",
+							response: { ok: true },
+						},
+					},
+				],
+			},
+		});
+		const session = createMockSession([functionCallEvent, responseEvent]);
+		expect(_findFunctionCallEventIfLastEventIsFunctionResponse(session)).toBe(
+			functionCallEvent,
+		);
+	});
+
+	it("walks past earlier non-matching call events to find the match", () => {
+		const olderMatch = createFunctionCallEvent([
+			{ id: "call_walk", name: "tool1" },
+		]);
+		const newerMiss = createFunctionCallEvent([
+			{ id: "call_other", name: "other" },
+		]);
+		const responseEvent = createFunctionResponseEvent({
+			id: "call_walk",
+			name: "tool1",
+		});
+		const session = createMockSession([olderMatch, newerMiss, responseEvent]);
+		expect(_findFunctionCallEventIfLastEventIsFunctionResponse(session)).toBe(
+			olderMatch,
+		);
+	});
+
+	it("returns null when the only preceding event has no matching call id", () => {
+		const alone = createFunctionCallEvent([{ id: "call_x", name: "x" }]);
+		const responseEvent = createFunctionResponseEvent({
+			id: "call_y",
+			name: "y",
+		});
+		const session = createMockSession([alone, responseEvent]);
+		expect(
+			_findFunctionCallEventIfLastEventIsFunctionResponse(session),
+		).toBeNull();
+	});
 });
 
 describe("InMemoryRunner", () => {

@@ -145,4 +145,128 @@ describe("LoadMemoryTool", () => {
 		await tool.runAsync({ query: "bad" }, failContext);
 		expect(failContext.actions).toEqual({ transferToAgent: "x" });
 	});
+
+	it("treats null memories as an empty list with count 0", async () => {
+		const tool = new LoadMemoryTool();
+		const context = {
+			actions: {},
+			searchMemory: vi.fn().mockResolvedValue({ memories: null }),
+		} as unknown as ToolContext;
+
+		await expect(tool.runAsync({ query: "nullish" }, context)).resolves.toEqual(
+			{
+				memories: [],
+				count: 0,
+			},
+		);
+	});
+
+	it("accepts an empty query string and still searches", async () => {
+		const tool = new LoadMemoryTool();
+		const searchMemory = vi.fn().mockResolvedValue({ memories: [] });
+		const context = { actions: {}, searchMemory } as unknown as ToolContext;
+
+		await tool.runAsync({ query: "" }, context);
+
+		expect(searchMemory).toHaveBeenCalledWith("");
+	});
+
+	it("logs the query via the tool logger before searching", async () => {
+		const tool = new LoadMemoryTool();
+		const debug = vi
+			.spyOn((tool as any).logger, "debug")
+			.mockImplementation(() => {});
+		const searchMemory = vi.fn().mockResolvedValue({ memories: [] });
+		const context = { actions: {}, searchMemory } as unknown as ToolContext;
+
+		await tool.runAsync({ query: "logged-query" }, context);
+
+		expect(debug).toHaveBeenCalledWith(expect.stringContaining("logged-query"));
+		expect(searchMemory).toHaveBeenCalledWith("logged-query");
+	});
+
+	it("stringifies object and number rejections in the error message", async () => {
+		const tool = new LoadMemoryTool();
+		vi.spyOn(console, "error").mockImplementation(() => {});
+
+		const objContext = {
+			actions: {},
+			searchMemory: vi.fn().mockRejectedValue({ reason: "down" }),
+		} as unknown as ToolContext;
+		await expect(tool.runAsync({ query: "o" }, objContext)).resolves.toEqual({
+			error: "Memory search failed",
+			message: "[object Object]",
+		});
+
+		const numContext = {
+			actions: {},
+			searchMemory: vi.fn().mockRejectedValue(503),
+		} as unknown as ToolContext;
+		await expect(tool.runAsync({ query: "n" }, numContext)).resolves.toEqual({
+			error: "Memory search failed",
+			message: "503",
+		});
+	});
+
+	it("returns the same memory array reference from searchMemory", async () => {
+		const tool = new LoadMemoryTool();
+		const memories = [{ content: { parts: [{ text: "shared" }] } }];
+		const context = {
+			actions: {},
+			searchMemory: vi.fn().mockResolvedValue({ memories }),
+		} as unknown as ToolContext;
+
+		const result = await tool.runAsync({ query: "ref" }, context);
+		expect(result.memories).toBe(memories);
+		expect(result.count).toBe(1);
+	});
+
+	it("ignores extra fields on the searchMemory result", async () => {
+		const tool = new LoadMemoryTool();
+		const memories = [{ content: { parts: [{ text: "a" }] } }];
+		const context = {
+			actions: {},
+			searchMemory: vi.fn().mockResolvedValue({
+				memories,
+				score: 0.9,
+				cursor: "next",
+			}),
+		} as unknown as ToolContext;
+
+		await expect(tool.runAsync({ query: "extra" }, context)).resolves.toEqual({
+			memories,
+			count: 1,
+		});
+	});
+
+	it("logs to console.error on failure with the original rejection", async () => {
+		const tool = new LoadMemoryTool();
+		const err = new Error("boom");
+		const consoleError = vi
+			.spyOn(console, "error")
+			.mockImplementation(() => {});
+		const context = {
+			actions: {},
+			searchMemory: vi.fn().mockRejectedValue(err),
+		} as unknown as ToolContext;
+
+		await tool.runAsync({ query: "x" }, context);
+
+		expect(consoleError).toHaveBeenCalledWith("Error searching memory:", err);
+	});
+
+	it("supports unicode queries and counts large memory lists", async () => {
+		const tool = new LoadMemoryTool();
+		const memories = Array.from({ length: 25 }, (_, i) => ({
+			content: { parts: [{ text: `m${i}` }] },
+		}));
+		const searchMemory = vi.fn().mockResolvedValue({ memories });
+		const context = { actions: {}, searchMemory } as unknown as ToolContext;
+
+		const result = await tool.runAsync({ query: "你好 🎉" }, context);
+
+		expect(searchMemory).toHaveBeenCalledWith("你好 🎉");
+		expect(result.count).toBe(25);
+		expect(result.memories).toHaveLength(25);
+	});
 });

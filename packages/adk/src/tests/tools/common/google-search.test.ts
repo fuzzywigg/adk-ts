@@ -65,4 +65,30 @@ describe("GoogleSearch (declaration + mock contract)", () => {
 		expect(result.results[0].title).not.toBe(result.results[1].title);
 		expect(result.results[0].link).not.toBe(result.results[1].link);
 	});
+
+	it("uses different snippet templates for result 1 and result 2", async () => {
+		const tool = new GoogleSearch();
+		const result = await tool.runAsync({ query: "tmpl" }, makeContext());
+		expect(result.results[0].snippet).toContain("sample result");
+		expect(result.results[1].snippet).toContain("Another sample result");
+		expect(result.results[0].snippet).not.toBe(result.results[1].snippet);
+	});
+
+	it("does not require actions on the tool context", async () => {
+		const tool = new GoogleSearch();
+		const result = await tool.runAsync(
+			{ query: "no-actions", num_results: undefined },
+			{ actions: undefined } as unknown as ToolContext,
+		);
+		expect(result.results).toHaveLength(2);
+	});
+
+	it("keeps link hosts on example.com for any query length", async () => {
+		const tool = new GoogleSearch();
+		const query = "q".repeat(500);
+		const result = await tool.runAsync({ query }, makeContext());
+		expect(result.results[0].link).toBe("https://example.com/1");
+		expect(result.results[1].link).toBe("https://example.com/2");
+		expect(result.results[0].title.length).toBeGreaterThan(500);
+	});
 });

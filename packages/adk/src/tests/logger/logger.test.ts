@@ -674,4 +674,253 @@ describe("Logger", () => {
 			expect(out).toContain("…");
 		});
 	});
+
+	describe("leftover stack, meta, and structured edges", () => {
+		it("omits stack section when ADK_ERROR_STACK_FRAMES is 0", () => {
+			process.env.NODE_ENV = "production";
+			delete process.env.ADK_FORCE_BOXES;
+			process.env.ADK_ERROR_STACK_FRAMES = "0";
+			const logger = new Logger({ name: "stack0" });
+			const err = new Error("no-frames");
+			err.stack = ["Error: no-frames", "    at only (file.ts:1:1)"].join("\n");
+
+			logger.error("failed", err);
+			const rendered = stripAnsi(String(errorSpy.mock.calls[0][0]));
+			expect(rendered).toContain("• Error: no-frames");
+			expect(rendered).toContain("• Stack:");
+			expect(rendered).toContain("↳ … 1 more frames");
+			expect(rendered).not.toContain("only");
+		});
+
+		it("includes error message without stack when Error.stack is missing", () => {
+			process.env.NODE_ENV = "production";
+			delete process.env.ADK_FORCE_BOXES;
+			const logger = new Logger({ name: "nostack" });
+			const err = new Error("bare");
+			err.stack = undefined;
+
+			logger.error("failed", err);
+			const rendered = stripAnsi(String(errorSpy.mock.calls[0][0]));
+			expect(rendered).toContain("• Error: bare");
+			expect(rendered).not.toContain("• Stack:");
+		});
+
+		it("uses custom Error subclass names in error lines", () => {
+			process.env.NODE_ENV = "production";
+			delete process.env.ADK_FORCE_BOXES;
+			const logger = new Logger({ name: "custom-err" });
+			class BoomError extends Error {
+				name = "BoomError";
+			}
+			logger.error("failed", new BoomError("kaboom"));
+			const rendered = stripAnsi(String(errorSpy.mock.calls[0][0]));
+			expect(rendered).toContain("• BoomError: kaboom");
+		});
+
+		it("accepts suggestion-only and context-only meta objects", () => {
+			process.env.NODE_ENV = "production";
+			delete process.env.ADK_FORCE_BOXES;
+			const logger = new Logger({ name: "meta-split" });
+
+			logger.warn("s-only", { suggestion: "try-a" });
+			logger.warn("c-only", { context: { step: 2 } });
+
+			const first = stripAnsi(String(warnSpy.mock.calls[0][0]));
+			const second = stripAnsi(String(warnSpy.mock.calls[1][0]));
+			expect(first).toContain("• Suggestion: try-a");
+			expect(first).not.toContain("• Context:");
+			expect(second).toContain("• Context: step=2");
+			expect(second).not.toContain("• Suggestion:");
+		});
+
+		it("boxes warn meta lines outside production", () => {
+			process.env.NODE_ENV = "development";
+			delete process.env.ADK_FORCE_BOXES;
+			const logger = new Logger({ name: "boxed-meta" });
+			logger.warn("watch", {
+				suggestion: "retry",
+				context: { id: "x" },
+			});
+
+			const rendered = stripAnsi(String(warnSpy.mock.calls[0][0]));
+			expect(rendered).toContain("┌");
+			expect(rendered).toContain("watch");
+			expect(rendered).toContain("• Suggestion: retry");
+			expect(rendered).toContain("• Context: id=x");
+		});
+
+		it("hard-wraps long tokens when wrap is true and no safe space exists", () => {
+			process.env.NODE_ENV = "development";
+			delete process.env.ADK_FORCE_BOXES;
+			process.stdout.columns = 80;
+			const logger = new Logger({ name: "hardwrap" });
+			const token = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ";
+			const out = stripAnsi(
+				logger.formatBox({
+					title: "Hard",
+					description: token,
+					width: 12,
+					maxWidthPct: 0.3,
+					wrap: true,
+					pad: 1,
+				}),
+			);
+			expect(out).toContain("┌");
+			expect(out.split("\n").length).toBeGreaterThan(5);
+			expect(out).toContain("abcd");
+		});
+
+		it("wraps additional lines as well as the description", () => {
+			process.env.NODE_ENV = "development";
+			delete process.env.ADK_FORCE_BOXES;
+			const logger = new Logger({ name: "wrap-lines" });
+			const out = stripAnsi(
+				logger.formatBox({
+					title: "Lines",
+					description: "short",
+					lines: ["alpha beta gamma delta epsilon"],
+					width: 18,
+					maxWidthPct: 0.4,
+					wrap: true,
+					pad: 1,
+				}),
+			);
+			expect(out).toContain("alpha");
+			expect(out).toContain("beta");
+		});
+
+		it("warnStructured uses info and error icons for known severities", () => {
+			process.env.NODE_ENV = "production";
+			delete process.env.ADK_FORCE_BOXES;
+			const logger = new Logger({ name: "sev" });
+
+			logger.warnStructured(
+				{ code: "I1", message: "info-msg", severity: "info" },
+				{ format: "pretty" },
+			);
+			logger.warnStructured(
+				{ code: "E1", message: "error-msg", severity: "error" },
+				{ format: "pretty" },
+			);
+
+			const infoOut = stripAnsi(String(warnSpy.mock.calls[0][0]));
+			const errorOut = stripAnsi(String(warnSpy.mock.calls[1][0]));
+			expect(infoOut).toContain("ℹ️");
+			expect(infoOut).toContain("I1");
+			expect(errorOut).toContain("❌");
+			expect(errorOut).toContain("E1");
+		});
+
+		it("warnStructured json auto-fills timestamp when omitted", () => {
+			process.env.NODE_ENV = "production";
+			delete process.env.ADK_FORCE_BOXES;
+			const logger = new Logger({ name: "ts" });
+			const before = Date.now();
+			logger.warnStructured(
+				{ code: "T0", message: "auto-ts" },
+				{ format: "json" },
+			);
+			const after = Date.now();
+			const rendered = stripAnsi(String(warnSpy.mock.calls[0][0]));
+			const jsonStart = rendered.indexOf("{");
+			expect(jsonStart).toBeGreaterThanOrEqual(0);
+			const payload = JSON.parse(rendered.slice(jsonStart));
+			const parsed = Date.parse(payload.timestamp);
+			expect(parsed).toBeGreaterThanOrEqual(before - 1000);
+			expect(parsed).toBeLessThanOrEqual(after + 1000);
+			expect(payload.code).toBe("T0");
+			expect(payload.source).toBe("ts");
+		});
+
+		it("warnStructured pretty omits empty context even when verbose", () => {
+			process.env.NODE_ENV = "production";
+			delete process.env.ADK_FORCE_BOXES;
+			const logger = new Logger({ name: "empty-ctx" });
+			logger.warnStructured(
+				{
+					code: "C0",
+					message: "no-ctx",
+					suggestion: "n/a",
+					context: {},
+				},
+				{ format: "pretty", verbose: true },
+			);
+			const rendered = stripAnsi(String(warnSpy.mock.calls[0][0]));
+			expect(rendered).toContain("• Suggestion: n/a");
+			expect(rendered).not.toContain("• Context:");
+		});
+
+		it("pads short keys to at least width 6 in debugStructured", () => {
+			process.env.NODE_ENV = "development";
+			delete process.env.ADK_FORCE_BOXES;
+			const logger = new Logger({ name: "pad" });
+			logger.isDebugEnabled = true;
+			logger.debugStructured("pad", { a: 1 });
+			const out = stripAnsi(String(logSpy.mock.calls[0][0]));
+			expect(out).toMatch(/a\s+: 1/);
+		});
+
+		it("caps key padding width at 30 for very long keys", () => {
+			process.env.NODE_ENV = "development";
+			delete process.env.ADK_FORCE_BOXES;
+			const logger = new Logger({ name: "wide" });
+			logger.isDebugEnabled = true;
+			const longKey = "k".repeat(40);
+			logger.debugStructured("wide", { [longKey]: "v" });
+			const out = stripAnsi(String(logSpy.mock.calls[0][0]));
+			expect(out).toContain(longKey);
+			expect(out).toContain(": v");
+		});
+
+		it("renders debugStructured with simple formatBox in production", () => {
+			process.env.NODE_ENV = "production";
+			delete process.env.ADK_FORCE_BOXES;
+			const logger = new Logger({ name: "prod-dbg" });
+			logger.isDebugEnabled = true;
+			logger.debugStructured("title", { a: 1 });
+			const out = stripAnsi(String(logSpy.mock.calls[0][0]));
+			expect(out).not.toContain("┌");
+			expect(out).toContain("title");
+			expect(out).toContain("a");
+			expect(out).toContain(": 1");
+		});
+
+		it("skips blank stack frames when parsing error stacks", () => {
+			process.env.NODE_ENV = "production";
+			delete process.env.ADK_FORCE_BOXES;
+			delete process.env.ADK_ERROR_STACK_FRAMES;
+			const logger = new Logger({ name: "blank-frames" });
+			const err = new Error("gap");
+			err.stack = [
+				"Error: gap",
+				"",
+				"    at keep (x.ts:1:1)",
+				"   ",
+				"    at also (y.ts:2:2)",
+			].join("\n");
+			logger.error("failed", err);
+			const rendered = stripAnsi(String(errorSpy.mock.calls[0][0]));
+			expect(rendered).toContain("↳ keep (x.ts:1:1)");
+			expect(rendered).toContain("↳ also (y.ts:2:2)");
+		});
+
+		it("treats ADK_DEBUG values other than true as disabled", async () => {
+			process.env.NODE_ENV = "production";
+			process.env.ADK_DEBUG = "false";
+			vi.resetModules();
+			({ isDebugEnabled } = await import("../../logger"));
+			expect(isDebugEnabled()).toBe(false);
+		});
+
+		it("passes plain objects without suggestion/context through as args", () => {
+			process.env.NODE_ENV = "production";
+			delete process.env.ADK_FORCE_BOXES;
+			const logger = new Logger({ name: "plain-arg" });
+			logger.info("msg", { plain: true, nested: { z: 1 } });
+			const rendered = stripAnsi(String(debugSpy.mock.calls[0][0]));
+			expect(rendered).toContain('"plain":true');
+			expect(rendered).not.toContain("• Suggestion:");
+			expect(rendered).not.toContain("• Context:");
+		});
+	});
 });

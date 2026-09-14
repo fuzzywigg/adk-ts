@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { ExitLoopTool } from "../../../tools/common/exit-loop-tool";
 import type { ToolContext } from "../../../tools/tool-context";
 
@@ -68,5 +68,73 @@ describe("ExitLoopTool", () => {
 		const tool = new ExitLoopTool();
 		expect(tool.isLongRunning).toBe(false);
 		expect(tool.shouldRetryOnFailure).toBe(false);
+	});
+
+	it("keeps escalate true when it was already true", async () => {
+		const tool = new ExitLoopTool();
+		const context = makeContext({ escalate: true });
+
+		await tool.runAsync({}, context);
+
+		expect(context.actions.escalate).toBe(true);
+	});
+
+	it("does not set skipSummarization or transferToAgent", async () => {
+		const tool = new ExitLoopTool();
+		const context = makeContext();
+
+		await tool.runAsync({}, context);
+
+		expect(context.actions.escalate).toBe(true);
+		expect(context.actions.skipSummarization).toBeUndefined();
+		expect(context.actions.transferToAgent).toBeUndefined();
+	});
+
+	it("can be called repeatedly and leaves escalate true", async () => {
+		const tool = new ExitLoopTool();
+		const context = makeContext();
+
+		await tool.runAsync({}, context);
+		await tool.runAsync({ again: true }, context);
+		await tool.runAsync({}, context);
+
+		expect(context.actions.escalate).toBe(true);
+	});
+
+	it("logs via the tool logger when executed", async () => {
+		const tool = new ExitLoopTool();
+		const debug = vi
+			.spyOn((tool as any).logger, "debug")
+			.mockImplementation(() => {});
+		const context = makeContext();
+
+		await tool.runAsync({}, context);
+
+		expect(debug).toHaveBeenCalled();
+		expect(context.actions.escalate).toBe(true);
+	});
+
+	it("uses the exact exit_loop description from the constructor", () => {
+		const tool = new ExitLoopTool();
+		expect(tool.description).toBe(
+			"Exits the loop. Call this function only when you are instructed to do so.",
+		);
+		expect(tool.name).toBe("exit_loop");
+	});
+
+	it("returns undefined even when args is empty and actions already populated", async () => {
+		const tool = new ExitLoopTool();
+		const context = makeContext({
+			escalate: false,
+			skipSummarization: false,
+			transferToAgent: "keep-me",
+		});
+
+		await expect(tool.runAsync({}, context)).resolves.toBeUndefined();
+		expect(context.actions).toEqual({
+			escalate: true,
+			skipSummarization: false,
+			transferToAgent: "keep-me",
+		});
 	});
 });

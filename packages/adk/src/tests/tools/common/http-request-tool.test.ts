@@ -500,4 +500,296 @@ describe("HttpRequestTool", () => {
 			expect.objectContaining({ body: "", headers: {} }),
 		);
 	});
+
+	it("still auto-sets Content-Type when only lowercase content-type is present", async () => {
+		const tool = new HttpRequestTool();
+		const fetchMock = vi.fn().mockResolvedValue({
+			status: 200,
+			headers: new Headers(),
+			text: async () => "ok",
+		});
+		globalThis.fetch = fetchMock as typeof fetch;
+
+		await tool.runAsync(
+			{
+				url: "https://example.com/case",
+				method: "POST",
+				headers: { "content-type": "text/plain" },
+				body: JSON.stringify({ ok: true }),
+			},
+			makeContext(),
+		);
+
+		expect(fetchMock.mock.calls[0][1].headers).toEqual({
+			"content-type": "text/plain",
+			"Content-Type": "application/json",
+		});
+	});
+
+	it("leaves the URL unchanged when params is an empty object", async () => {
+		const tool = new HttpRequestTool();
+		const fetchMock = vi.fn().mockResolvedValue({
+			status: 200,
+			headers: new Headers(),
+			text: async () => "",
+		});
+		globalThis.fetch = fetchMock as typeof fetch;
+
+		await tool.runAsync(
+			{ url: "https://example.com/empty-params", params: {} },
+			makeContext(),
+		);
+
+		expect(fetchMock).toHaveBeenCalledWith(
+			"https://example.com/empty-params",
+			expect.any(Object),
+		);
+	});
+
+	it("URL-encodes special characters in query params", async () => {
+		const tool = new HttpRequestTool();
+		const fetchMock = vi.fn().mockResolvedValue({
+			status: 200,
+			headers: new Headers(),
+			text: async () => "",
+		});
+		globalThis.fetch = fetchMock as typeof fetch;
+
+		await tool.runAsync(
+			{
+				url: "https://example.com/q",
+				params: { q: "a b&c=d", emoji: "🎉" },
+			},
+			makeContext(),
+		);
+
+		const calledUrl = fetchMock.mock.calls[0][0] as string;
+		expect(calledUrl).toContain("q=a+b%26c%3Dd");
+		expect(calledUrl).toMatch(/emoji=/);
+		expect(decodeURIComponent(calledUrl)).toContain("🎉");
+	});
+
+	it("returns structured errors when response.text() rejects", async () => {
+		const tool = new HttpRequestTool();
+		globalThis.fetch = vi.fn().mockResolvedValue({
+			status: 200,
+			headers: new Headers(),
+			text: async () => {
+				throw new Error("body read failed");
+			},
+		}) as typeof fetch;
+
+		const result = await tool.runAsync(
+			{ url: "https://example.com/body-fail" },
+			makeContext(),
+		);
+
+		expect(result).toEqual({
+			statusCode: 0,
+			headers: {},
+			body: "",
+			error: "body read failed",
+		});
+	});
+
+	it("stringifies object rejections as [object Object]", async () => {
+		const tool = new HttpRequestTool();
+		globalThis.fetch = vi
+			.fn()
+			.mockRejectedValue({ code: "ECONNRESET" }) as typeof fetch;
+
+		const result = await tool.runAsync(
+			{ url: "https://example.com/obj-fail" },
+			makeContext(),
+		);
+
+		expect(result.error).toBe("[object Object]");
+		expect(result.statusCode).toBe(0);
+	});
+
+	it("returns 5xx status bodies without setting error", async () => {
+		const tool = new HttpRequestTool();
+		globalThis.fetch = vi.fn().mockResolvedValue({
+			status: 503,
+			headers: new Headers({ "retry-after": "30" }),
+			text: async () => "unavailable",
+		}) as typeof fetch;
+
+		const result = await tool.runAsync(
+			{ url: "https://example.com/down" },
+			makeContext(),
+		);
+
+		expect(result).toEqual({
+			statusCode: 503,
+			headers: { "retry-after": "30" },
+			body: "unavailable",
+		});
+		expect(result.error).toBeUndefined();
+	});
+
+	it("auto-sets Content-Type for JSON null and quoted string bodies", async () => {
+		const tool = new HttpRequestTool();
+		const fetchMock = vi.fn().mockResolvedValue({
+			status: 200,
+			headers: new Headers(),
+			text: async () => "ok",
+		});
+		globalThis.fetch = fetchMock as typeof fetch;
+
+		await tool.runAsync(
+			{ url: "https://example.com/null", method: "POST", body: "null" },
+			makeContext(),
+		);
+		expect(fetchMock.mock.calls[0][1].headers).toEqual({
+			"Content-Type": "application/json",
+		});
+
+		await tool.runAsync(
+			{
+				url: "https://example.com/str",
+				method: "POST",
+				body: '"hello"',
+			},
+			makeContext(),
+		);
+		expect(fetchMock.mock.calls[1][1].headers).toEqual({
+			"Content-Type": "application/json",
+		});
+	});
+
+	it("does not treat whitespace-only body as JSON", async () => {
+		const tool = new HttpRequestTool();
+		const fetchMock = vi.fn().mockResolvedValue({
+			status: 200,
+			headers: new Headers(),
+			text: async () => "",
+		});
+		globalThis.fetch = fetchMock as typeof fetch;
+
+		await tool.runAsync(
+			{ url: "https://example.com/ws", method: "POST", body: "   " },
+			makeContext(),
+		);
+
+		expect(fetchMock.mock.calls[0][1].headers).toEqual({});
+	});
+
+	it("rejects relative URLs before calling fetch", async () => {
+		const tool = new HttpRequestTool();
+		const fetchMock = vi.fn();
+		globalThis.fetch = fetchMock as typeof fetch;
+
+		const result = await tool.runAsync(
+			{ url: "/relative/path" },
+			makeContext(),
+		);
+
+		expect(result.statusCode).toBe(0);
+		expect(result.error).toBeTruthy();
+		expect(fetchMock).not.toHaveBeenCalled();
+	});
+
+	it("forwards custom method strings that are not in the enum", async () => {
+		const tool = new HttpRequestTool();
+		const fetchMock = vi.fn().mockResolvedValue({
+			status: 200,
+			headers: new Headers(),
+			text: async () => "",
+		});
+		globalThis.fetch = fetchMock as typeof fetch;
+
+		await tool.runAsync(
+			{ url: "https://example.com/custom", method: "get" },
+			makeContext(),
+		);
+
+		expect(fetchMock).toHaveBeenCalledWith(
+			"https://example.com/custom",
+			expect.objectContaining({ method: "get" }),
+		);
+	});
+
+	it("passes the AbortSignal from AbortSignal.timeout into fetch options", async () => {
+		const tool = new HttpRequestTool();
+		const fakeSignal = AbortSignal.abort();
+		const timeoutSpy = vi
+			.spyOn(AbortSignal, "timeout")
+			.mockReturnValue(fakeSignal);
+		const fetchMock = vi.fn().mockResolvedValue({
+			status: 200,
+			headers: new Headers(),
+			text: async () => "ok",
+		});
+		globalThis.fetch = fetchMock as typeof fetch;
+
+		await tool.runAsync(
+			{ url: "https://example.com/signal", timeout: 42 },
+			makeContext(),
+		);
+
+		expect(fetchMock.mock.calls[0][1].signal).toBe(fakeSignal);
+		timeoutSpy.mockRestore();
+	});
+
+	it("preserves URL hash fragments when appending params", async () => {
+		const tool = new HttpRequestTool();
+		const fetchMock = vi.fn().mockResolvedValue({
+			status: 200,
+			headers: new Headers(),
+			text: async () => "",
+		});
+		globalThis.fetch = fetchMock as typeof fetch;
+
+		await tool.runAsync(
+			{
+				url: "https://example.com/page#section",
+				params: { x: "1" },
+			},
+			makeContext(),
+		);
+
+		const calledUrl = fetchMock.mock.calls[0][0] as string;
+		expect(calledUrl).toContain("x=1");
+		expect(calledUrl).toContain("#section");
+	});
+
+	it("handles concurrent requests independently", async () => {
+		const tool = new HttpRequestTool();
+		globalThis.fetch = vi.fn().mockImplementation(async (url: string) => ({
+			status: 200,
+			headers: new Headers(),
+			text: async () => `body-for-${url}`,
+		})) as typeof fetch;
+
+		const [a, b] = await Promise.all([
+			tool.runAsync({ url: "https://example.com/a" }, makeContext()),
+			tool.runAsync({ url: "https://example.com/b" }, makeContext()),
+		]);
+
+		expect(a.body).toBe("body-for-https://example.com/a");
+		expect(b.body).toBe("body-for-https://example.com/b");
+		expect(a.error).toBeUndefined();
+		expect(b.error).toBeUndefined();
+	});
+
+	it("returns empty body for successful responses with empty text", async () => {
+		const tool = new HttpRequestTool();
+		globalThis.fetch = vi.fn().mockResolvedValue({
+			status: 204,
+			headers: new Headers(),
+			text: async () => "",
+		}) as typeof fetch;
+
+		const result = await tool.runAsync(
+			{ url: "https://example.com/no-content", method: "DELETE" },
+			makeContext(),
+		);
+
+		expect(result).toEqual({
+			statusCode: 204,
+			headers: {},
+			body: "",
+		});
+	});
 });

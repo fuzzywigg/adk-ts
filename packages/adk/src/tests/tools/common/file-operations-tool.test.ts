@@ -473,4 +473,205 @@ describe("FileOperationsTool", () => {
 		);
 		expect(readResult.data).toBe("new");
 	});
+
+	it("surfaces non-Error throws from private readFile via outer catch", async () => {
+		const original = (tool as any).readFile.bind(tool);
+		(tool as any).readFile = async () => {
+			throw "disk-gone";
+		};
+		try {
+			const result = await tool.runAsync(
+				{ operation: "read", filepath: "x.txt" },
+				makeContext(),
+			);
+			expect(result).toEqual({ success: false, error: "disk-gone" });
+		} finally {
+			(tool as any).readFile = original;
+		}
+	});
+
+	it("surfaces non-Error throws from private writeFile via outer catch", async () => {
+		const original = (tool as any).writeFile.bind(tool);
+		(tool as any).writeFile = async () => {
+			throw { code: "EIO" };
+		};
+		try {
+			const result = await tool.runAsync(
+				{ operation: "write", filepath: "x.txt", content: "hi" },
+				makeContext(),
+			);
+			expect(result).toEqual({
+				success: false,
+				error: "[object Object]",
+			});
+		} finally {
+			(tool as any).writeFile = original;
+		}
+	});
+
+	it("surfaces non-Error throws from private appendFile via outer catch", async () => {
+		const original = (tool as any).appendFile.bind(tool);
+		(tool as any).appendFile = async () => {
+			throw 404;
+		};
+		try {
+			const result = await tool.runAsync(
+				{ operation: "append", filepath: "x.txt", content: "more" },
+				makeContext(),
+			);
+			expect(result).toEqual({ success: false, error: "404" });
+		} finally {
+			(tool as any).appendFile = original;
+		}
+	});
+
+	it("surfaces non-Error throws from private deleteFile via outer catch", async () => {
+		const original = (tool as any).deleteFile.bind(tool);
+		(tool as any).deleteFile = async () => {
+			throw "unlink-blocked";
+		};
+		try {
+			const result = await tool.runAsync(
+				{ operation: "delete", filepath: "x.txt" },
+				makeContext(),
+			);
+			expect(result).toEqual({
+				success: false,
+				error: "unlink-blocked",
+			});
+		} finally {
+			(tool as any).deleteFile = original;
+		}
+	});
+
+	it("surfaces non-Error throws from private listDirectory via outer catch", async () => {
+		const original = (tool as any).listDirectory.bind(tool);
+		(tool as any).listDirectory = async () => {
+			throw "not-a-dir";
+		};
+		try {
+			const result = await tool.runAsync(
+				{ operation: "list", filepath: "." },
+				makeContext(),
+			);
+			expect(result).toEqual({ success: false, error: "not-a-dir" });
+		} finally {
+			(tool as any).listDirectory = original;
+		}
+	});
+
+	it("surfaces non-Error throws from private makeDirectory via outer catch", async () => {
+		const original = (tool as any).makeDirectory.bind(tool);
+		(tool as any).makeDirectory = async () => {
+			throw "mkdir-blocked";
+		};
+		try {
+			const result = await tool.runAsync(
+				{ operation: "mkdir", filepath: "new-dir" },
+				makeContext(),
+			);
+			expect(result).toEqual({
+				success: false,
+				error: "mkdir-blocked",
+			});
+		} finally {
+			(tool as any).makeDirectory = original;
+		}
+	});
+
+	it("stringifies non-Error throws from validatePath via outer catch", async () => {
+		const original = (tool as any).validatePath.bind(tool);
+		(tool as any).validatePath = () => {
+			throw "top-level-denied";
+		};
+		try {
+			const result = await tool.runAsync(
+				{ operation: "exists", filepath: "x.txt" },
+				makeContext(),
+			);
+			expect(result).toEqual({
+				success: false,
+				error: "top-level-denied",
+			});
+		} finally {
+			(tool as any).validatePath = original;
+		}
+	});
+
+	it("stringifies non-Error throws from resolvePath via outer catch", async () => {
+		const original = (tool as any).resolvePath.bind(tool);
+		(tool as any).resolvePath = () => {
+			throw "path-boom";
+		};
+		try {
+			const result = await tool.runAsync(
+				{ operation: "read", filepath: "x.txt" },
+				makeContext(),
+			);
+			expect(result).toEqual({ success: false, error: "path-boom" });
+		} finally {
+			(tool as any).resolvePath = original;
+		}
+	});
+
+	it("propagates Error messages from fileExists when it throws", async () => {
+		const original = (tool as any).fileExists.bind(tool);
+		(tool as any).fileExists = async () => {
+			throw new Error("exists-boom");
+		};
+		try {
+			const result = await tool.runAsync(
+				{ operation: "exists", filepath: "z.txt" },
+				makeContext(),
+			);
+			expect(result).toEqual({ success: false, error: "exists-boom" });
+		} finally {
+			(tool as any).fileExists = original;
+		}
+	});
+
+	it("allows listing when filepath is the absolute basePath", async () => {
+		await tool.runAsync(
+			{ operation: "write", filepath: "root.txt", content: "r" },
+			makeContext(),
+		);
+		const result = await tool.runAsync(
+			{ operation: "list", filepath: basePath },
+			makeContext(),
+		);
+		expect(result.success).toBe(true);
+		expect(result.data).toEqual(
+			expect.arrayContaining([
+				expect.objectContaining({ name: "root.txt", isFile: true }),
+			]),
+		);
+	});
+
+	it("appends empty content when content is omitted", async () => {
+		await tool.runAsync(
+			{ operation: "write", filepath: "append-empty.txt", content: "base" },
+			makeContext(),
+		);
+		const appendResult = await tool.runAsync(
+			{ operation: "append", filepath: "append-empty.txt" },
+			makeContext(),
+		);
+		expect(appendResult.success).toBe(true);
+		const readResult = await tool.runAsync(
+			{ operation: "read", filepath: "append-empty.txt" },
+			makeContext(),
+		);
+		expect(readResult.data).toBe("base");
+	});
+
+	it("returns Unsupported operation for unknown verbs via outer catch", async () => {
+		const result = await tool.runAsync(
+			{ operation: "chmod" as any, filepath: "x.txt" },
+			makeContext(),
+		);
+		expect(result).toEqual({
+			success: false,
+			error: "Unsupported operation: chmod",
+		});
+	});
 });

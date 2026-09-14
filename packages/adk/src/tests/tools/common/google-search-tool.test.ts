@@ -1,5 +1,5 @@
 import { Type } from "@google/genai";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { GoogleSearch } from "../../../tools/common/google-search";
 import type { ToolContext } from "../../../tools/tool-context";
 
@@ -106,5 +106,66 @@ describe("GoogleSearch", () => {
 		expect(result.results[0].title).toContain(query);
 		expect(result.results[0].snippet).toContain(query);
 		expect(result.results[1].snippet).toContain(query);
+	});
+
+	it("works when num_results is omitted", async () => {
+		const tool = new GoogleSearch();
+		const result = await tool.runAsync({ query: "no-count" }, makeContext());
+		expect(result.results).toHaveLength(2);
+	});
+
+	it("embeds unicode queries into titles and snippets", async () => {
+		const tool = new GoogleSearch();
+		const query = "検索 🔍 café";
+		const result = await tool.runAsync({ query }, makeContext());
+
+		expect(result.results[0].title).toBe(`Result 1 for ${query}`);
+		expect(result.results[0].snippet).toContain(query);
+		expect(result.results[1].title).toBe(`Result 2 for ${query}`);
+	});
+
+	it("logs the query via the tool logger", async () => {
+		const tool = new GoogleSearch();
+		const debug = vi
+			.spyOn((tool as any).logger, "debug")
+			.mockImplementation(() => {});
+
+		await tool.runAsync({ query: "logged" }, makeContext());
+
+		expect(debug).toHaveBeenCalledWith(expect.stringContaining("logged"));
+	});
+
+	it("returns a fresh results array on each call", async () => {
+		const tool = new GoogleSearch();
+		const a = await tool.runAsync({ query: "a" }, makeContext());
+		const b = await tool.runAsync({ query: "b" }, makeContext());
+
+		expect(a.results).not.toBe(b.results);
+		expect(a.results[0].title).toContain("a");
+		expect(b.results[0].title).toContain("b");
+	});
+
+	it("embeds whitespace-only queries without trimming", async () => {
+		const tool = new GoogleSearch();
+		const result = await tool.runAsync({ query: "  " }, makeContext());
+		expect(result.results[0].title).toBe("Result 1 for   ");
+		expect(result.results[0].snippet).toContain('"  "');
+	});
+
+	it("ignores negative and fractional num_results values", async () => {
+		const tool = new GoogleSearch();
+		for (const num_results of [-1, 2.5, Number.NaN] as number[]) {
+			const result = await tool.runAsync(
+				{ query: "n", num_results },
+				makeContext(),
+			);
+			expect(result.results).toHaveLength(2);
+		}
+	});
+
+	it("exposes only the results key on the return payload", async () => {
+		const tool = new GoogleSearch();
+		const result = await tool.runAsync({ query: "keys" }, makeContext());
+		expect(Object.keys(result)).toEqual(["results"]);
 	});
 });

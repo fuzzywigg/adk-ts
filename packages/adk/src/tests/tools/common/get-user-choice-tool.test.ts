@@ -1,5 +1,5 @@
 import { Type } from "@google/genai";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { GetUserChoiceTool } from "../../../tools/common/get-user-choice-tool";
 import type { ToolContext } from "../../../tools/tool-context";
 
@@ -109,5 +109,87 @@ describe("GetUserChoiceTool", () => {
 				context,
 			),
 		).resolves.toBeNull();
+	});
+
+	it("accepts a large options list and still returns null", async () => {
+		const tool = new GetUserChoiceTool();
+		const options = Array.from({ length: 50 }, (_, i) => `opt-${i}`);
+		const context = makeContext();
+
+		await expect(tool.runAsync({ options }, context)).resolves.toBeNull();
+		expect(context.actions.skipSummarization).toBe(true);
+	});
+
+	it("treats an empty-string question as present for logging", async () => {
+		const tool = new GetUserChoiceTool();
+		const debug = vi
+			.spyOn((tool as any).logger, "debug")
+			.mockImplementation(() => {});
+		const context = makeContext();
+
+		await tool.runAsync({ options: ["a"], question: "" }, context);
+
+		expect(debug).toHaveBeenCalledTimes(1);
+		expect(debug.mock.calls[0][0]).toContain("a");
+		expect(context.actions.skipSummarization).toBe(true);
+	});
+
+	it("logs both options and a non-empty question", async () => {
+		const tool = new GetUserChoiceTool();
+		const debug = vi
+			.spyOn((tool as any).logger, "debug")
+			.mockImplementation(() => {});
+		const context = makeContext();
+
+		await tool.runAsync(
+			{ options: ["yes", "no"], question: "Continue?" },
+			context,
+		);
+
+		expect(debug).toHaveBeenCalledTimes(2);
+		expect(debug.mock.calls[0][0]).toContain("yes, no");
+		expect(debug.mock.calls[1][0]).toContain("Continue?");
+	});
+
+	it("accepts duplicate and unicode option values", async () => {
+		const tool = new GetUserChoiceTool();
+		const context = makeContext();
+
+		await expect(
+			tool.runAsync(
+				{ options: ["同じ", "同じ", "🎉"], question: "選んで" },
+				context,
+			),
+		).resolves.toBeNull();
+		expect(context.actions.skipSummarization).toBe(true);
+	});
+
+	it("overwrites skipSummarization even when other flags are set", async () => {
+		const tool = new GetUserChoiceTool();
+		const context = makeContext({
+			skipSummarization: false,
+			escalate: false,
+			transferToAgent: "stay",
+		});
+
+		await tool.runAsync({ options: ["1", "2"] }, context);
+
+		expect(context.actions).toEqual({
+			skipSummarization: true,
+			escalate: false,
+			transferToAgent: "stay",
+		});
+	});
+
+	it("returns null for a single-option list without a question", async () => {
+		const tool = new GetUserChoiceTool();
+		const result = await tool.runAsync({ options: ["only"] }, makeContext());
+		expect(result).toBeNull();
+	});
+
+	it("is long-running and does not retry by default", () => {
+		const tool = new GetUserChoiceTool();
+		expect(tool.isLongRunning).toBe(true);
+		expect(tool.shouldRetryOnFailure).toBe(false);
 	});
 });
