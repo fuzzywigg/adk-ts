@@ -721,6 +721,109 @@ describe("Runner.runAsync", () => {
 		expect(events[0].author).toBe("tool_agent");
 	});
 
+	it("falls back to root when an ancestor disallows transfer to parent", async () => {
+		const leaf = new LlmAgent({
+			name: "leaf_agent",
+			model: "gemini-2.0-flash-exp",
+		});
+		const mid = new LlmAgent({
+			name: "mid_agent",
+			model: "gemini-2.0-flash-exp",
+			disallowTransferToParent: true,
+			subAgents: [leaf],
+		});
+		agent = new LlmAgent({
+			name: "root_agent",
+			model: "gemini-2.0-flash-exp",
+			subAgents: [mid],
+		});
+		runner = new Runner({
+			appName: "runner-app",
+			agent,
+			sessionService,
+		});
+
+		const session = await sessionService.createSession(
+			"runner-app",
+			"u1",
+			{},
+			"s-ancestor-lock",
+		);
+		await sessionService.appendEvent(
+			session,
+			new Event({
+				author: "leaf_agent",
+				content: { role: "model", parts: [{ text: "prior" }] },
+			}),
+		);
+
+		const leafSpy = vi
+			.spyOn(leaf, "runAsync")
+			.mockImplementation(async function* () {
+				yield new Event({
+					author: "leaf_agent",
+					content: { role: "model", parts: [{ text: "from-leaf" }] },
+				});
+			});
+		const rootSpy = vi
+			.spyOn(agent, "runAsync")
+			.mockImplementation(async function* () {
+				yield new Event({
+					author: "root_agent",
+					content: { role: "model", parts: [{ text: "from-root" }] },
+				});
+			});
+
+		const events: Event[] = [];
+		for await (const event of runner.runAsync({
+			userId: "u1",
+			sessionId: "s-ancestor-lock",
+			newMessage: { role: "user", parts: [{ text: "continue" }] },
+		})) {
+			events.push(event);
+		}
+
+		expect(leafSpy).not.toHaveBeenCalled();
+		expect(rootSpy).toHaveBeenCalled();
+		expect(events[0].author).toBe("root_agent");
+	});
+
+	it("sync run drains runAsync events after the async side completes", async () => {
+		await sessionService.createSession("runner-app", "u1", {}, "s-sync-run");
+		vi.spyOn(agent, "runAsync").mockImplementation(async function* () {
+			yield new Event({
+				author: "root_agent",
+				content: { role: "model", parts: [{ text: "sync-ok" }] },
+			});
+		});
+
+		const generator = runner.run({
+			userId: "u1",
+			sessionId: "s-sync-run",
+			newMessage: { role: "user", parts: [{ text: "go" }] },
+		});
+
+		await vi.waitFor(async () => {
+			const session = await sessionService.getSession(
+				"runner-app",
+				"u1",
+				"s-sync-run",
+			);
+			expect(
+				session?.events.some(
+					(e) =>
+						e.author === "root_agent" &&
+						e.content?.parts?.[0]?.text === "sync-ok",
+				),
+			).toBe(true);
+		});
+
+		const events = [...generator];
+		expect(events).toHaveLength(1);
+		expect(events[0].author).toBe("root_agent");
+		expect(events[0].content?.parts?.[0]?.text).toBe("sync-ok");
+	});
+
 	it("falls back to root when prior agent disallows transfer to parent", async () => {
 		const child = new LlmAgent({
 			name: "locked_child",

@@ -1,6 +1,6 @@
-import { describe, it, expect, beforeEach, vi, afterEach } from "vitest";
-import { GoogleLlm } from "../../models/google-llm";
 import { GoogleGenAI } from "@google/genai";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { GoogleLlm } from "../../models/google-llm";
 
 vi.mock("@adk/helpers/logger", () => ({
 	Logger: vi.fn(() => ({
@@ -67,6 +67,21 @@ describe("GoogleLlm", () => {
 				apiKey: "abc",
 			});
 			expect(client).toBe(llm.apiClient);
+		});
+
+		it("falls back to apiKey when Vertex flag is set but location is missing", () => {
+			process.env.GOOGLE_GENAI_USE_VERTEXAI = "true";
+			process.env.GOOGLE_CLOUD_PROJECT = "proj";
+			process.env.GOOGLE_CLOUD_LOCATION = undefined;
+			process.env.GOOGLE_API_KEY = "fallback-key";
+			const llm = new GoogleLlm();
+			llm.apiClient;
+			expect(GoogleGenAI).toHaveBeenCalledWith({
+				apiKey: "fallback-key",
+			});
+			expect(GoogleGenAI).not.toHaveBeenCalledWith(
+				expect.objectContaining({ vertexai: true }),
+			);
 		});
 
 		it("throws if no API key or VertexAI config", () => {
@@ -151,6 +166,19 @@ describe("GoogleLlm", () => {
 			expect(client).toBe(llm.liveApiClient);
 		});
 
+		it("falls back to apiKey live client when Vertex location is missing", () => {
+			process.env.GOOGLE_GENAI_USE_VERTEXAI = "true";
+			process.env.GOOGLE_CLOUD_PROJECT = "proj";
+			process.env.GOOGLE_CLOUD_LOCATION = undefined;
+			process.env.GOOGLE_API_KEY = "live-fallback";
+			const llm = new GoogleLlm();
+			llm.liveApiClient;
+			expect(GoogleGenAI).toHaveBeenCalledWith({
+				apiKey: "live-fallback",
+				apiVersion: "v1beta1",
+			});
+		});
+
 		it("throws if no API key or VertexAI config", () => {
 			process.env.GOOGLE_API_KEY = undefined;
 			process.env.GOOGLE_GENAI_USE_VERTEXAI = undefined;
@@ -227,6 +255,65 @@ describe("GoogleLlm", () => {
 			expect(req.config.labels).toBeUndefined();
 			expect(req.contents[0].parts[0].inlineData.displayName).toBeNull();
 			expect(req.contents[0].parts[1].fileData.displayName).toBeNull();
+		});
+
+		it("preprocessRequest preserves labels and displayNames for Vertex AI", () => {
+			process.env.GOOGLE_GENAI_USE_VERTEXAI = "true";
+			process.env.GOOGLE_CLOUD_PROJECT = "proj";
+			process.env.GOOGLE_CLOUD_LOCATION = "loc";
+			const llm = new GoogleLlm();
+			const req = {
+				config: { labels: { team: "adk" } },
+				contents: [
+					{
+						parts: [
+							{
+								inlineData: {
+									displayName: "keep.png",
+									mimeType: "image/png",
+									data: "x",
+								},
+							},
+							{
+								fileData: {
+									displayName: "keep.txt",
+									fileUri: "gs://bucket/keep",
+								},
+							},
+						],
+					},
+				],
+			};
+			(llm as any).preprocessRequest(req);
+			expect(req.config.labels).toEqual({ team: "adk" });
+			expect(req.contents[0].parts[0].inlineData.displayName).toBe("keep.png");
+			expect(req.contents[0].parts[1].fileData.displayName).toBe("keep.txt");
+		});
+
+		it("preprocessRequest skips contents without parts while sanitizing others", () => {
+			process.env.GOOGLE_API_KEY = "abc";
+			process.env.GOOGLE_GENAI_USE_VERTEXAI = "false";
+			const llm = new GoogleLlm();
+			const req = {
+				config: { labels: { team: "adk" } },
+				contents: [
+					{ role: "user" },
+					{
+						parts: [
+							{
+								inlineData: {
+									displayName: "c.png",
+									mimeType: "image/png",
+									data: "y",
+								},
+							},
+						],
+					},
+				],
+			};
+			expect(() => (llm as any).preprocessRequest(req)).not.toThrow();
+			expect(req.config.labels).toBeUndefined();
+			expect(req.contents[1].parts[0].inlineData.displayName).toBeNull();
 		});
 
 		it("hasInlineData detects GenAI response shapes", () => {
@@ -583,6 +670,55 @@ describe("GoogleLlm", () => {
 			expect(generateContent).toHaveBeenCalledWith(
 				expect.objectContaining({ model: "gemini-2.5-flash" }),
 			);
+		});
+
+		it("drops leftover buffered text when stream ends with MAX_TOKENS", async () => {
+			const stream = (async function* () {
+				yield {
+					candidates: [{ content: { parts: [{ text: "trunc-" }] } }],
+					usageMetadata: { totalTokenCount: 1 },
+				};
+				yield {
+					candidates: [
+						{
+							content: { parts: [{ text: "ated" }] },
+							finishReason: "MAX_TOKENS",
+						},
+					],
+					usageMetadata: { totalTokenCount: 2 },
+				};
+			})();
+
+			const generateContentStream = vi.fn().mockResolvedValue(stream);
+			(GoogleGenAI as unknown as ReturnType<typeof vi.fn>).mockImplementation(
+				() => ({
+					models: {
+						generateContent: vi.fn(),
+						generateContentStream,
+					},
+				}),
+			);
+
+			const llm = new GoogleLlm();
+			const responses: any[] = [];
+			for await (const response of (llm as any).generateContentAsyncImpl(
+				{
+					contents: [{ role: "user", parts: [{ text: "hi" }] }],
+					config: {},
+				},
+				true,
+			)) {
+				responses.push(response);
+			}
+
+			expect(
+				responses.filter((r) => r.partial && r.content?.parts?.[0]?.text),
+			).toHaveLength(2);
+			expect(
+				responses.some(
+					(r) => !r.partial && r.content?.parts?.[0]?.text === "truncated-ated",
+				),
+			).toBe(false);
 		});
 	});
 });

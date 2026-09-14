@@ -187,6 +187,20 @@ describe("McpClientService.initialize", () => {
 		expect(StdioClientTransport).not.toHaveBeenCalled();
 	});
 
+	it("creates stdio transport with command, args, and env", async () => {
+		const service = new McpClientService(stdioConfig());
+
+		await service.initialize();
+
+		expect(StdioClientTransport).toHaveBeenCalledTimes(1);
+		expect(StdioClientTransport).toHaveBeenCalledWith({
+			command: "npx",
+			args: ["-y", "@example/mcp"],
+			env: { PATH: "/usr/bin" },
+		});
+		expect(StreamableHTTPClientTransport).not.toHaveBeenCalled();
+	});
+
 	it("wraps transport construction failures", async () => {
 		StreamableHTTPClientTransport.mockImplementation(function Boom() {
 			throw new Error("bad url");

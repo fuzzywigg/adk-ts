@@ -120,6 +120,25 @@ describe("HttpRequestTool", () => {
 		});
 	});
 
+	it("surfaces AbortError timeouts as structured statusCode 0 errors", async () => {
+		const tool = new HttpRequestTool();
+		const abortError = new Error("The operation was aborted");
+		abortError.name = "AbortError";
+		globalThis.fetch = vi.fn().mockRejectedValue(abortError) as typeof fetch;
+
+		const result = await tool.runAsync(
+			{ url: "https://example.com/slow", timeout: 1 },
+			makeContext(),
+		);
+
+		expect(result).toEqual({
+			statusCode: 0,
+			headers: {},
+			body: "",
+			error: "The operation was aborted",
+		});
+	});
+
 	it("does not override an explicit Content-Type for JSON bodies", async () => {
 		const tool = new HttpRequestTool();
 		const fetchMock = vi.fn().mockResolvedValue({

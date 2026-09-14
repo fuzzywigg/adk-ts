@@ -364,4 +364,19 @@ describe("McpSamplingHandler", () => {
 			content: { type: "text", text: "" },
 		});
 	});
+
+	it("rejects when convertADKResponseToMcp yields a schema-invalid payload", async () => {
+		const handler = new McpSamplingHandler(async () => "ok");
+		vi.spyOn(handler as any, "convertADKResponseToMcp").mockReturnValue({
+			role: "assistant",
+			content: { type: "text", text: "missing-model" },
+		});
+
+		await expect(
+			handler.handleSamplingRequest(textRequest()),
+		).rejects.toMatchObject({
+			type: McpErrorType.SAMPLING_ERROR,
+			message: expect.stringContaining("Invalid response generated"),
+		});
+	});
 });

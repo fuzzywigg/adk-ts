@@ -494,6 +494,31 @@ describe("DatabaseSessionService (sqlite :memory:)", () => {
 		);
 	});
 
+	it("updateSessionState assigns null/undefined instead of deleting keys", () => {
+		const session = {
+			id: "s",
+			appName: "app",
+			userId: "user",
+			state: { keep: 1, removeMe: "x", also: "y" },
+			events: [],
+			lastUpdateTime: 0,
+		};
+		(service as any).updateSessionState(session, {
+			actions: {
+				stateDelta: {
+					removeMe: null,
+					also: undefined,
+					added: "z",
+				},
+			},
+		});
+		expect(session.state.keep).toBe(1);
+		expect(session.state.removeMe).toBeNull();
+		expect(session.state.also).toBeUndefined();
+		expect(Object.hasOwn(session.state, "also")).toBe(true);
+		expect(session.state.added).toBe("z");
+	});
+
 	it("updateSessionState skips TEMP keys and no-ops without stateDelta", () => {
 		const session = {
 			id: "s",
@@ -876,5 +901,26 @@ describe("DatabaseSessionService (sqlite :memory:)", () => {
 		expect(
 			(await service.listSessions("brand-new-app", "nobody")).sessions,
 		).toEqual([]);
+	});
+
+	it("rejects createSession when the session id already exists", async () => {
+		await service.createSession("app", "user", {}, "dup-id");
+		await expect(
+			service.createSession("app", "user", { again: true }, "dup-id"),
+		).rejects.toThrow();
+	});
+
+	it("rejects appendEvent when the storage session no longer exists", async () => {
+		const session = await service.createSession("app", "user", {}, "gone");
+		await service.deleteSession("app", "user", "gone");
+		await expect(
+			service.appendEvent(
+				session,
+				new Event({
+					author: "agent",
+					content: { role: "model", parts: [{ text: "late" }] },
+				}),
+			),
+		).rejects.toThrow();
 	});
 });

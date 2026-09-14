@@ -462,4 +462,32 @@ describe("InMemorySessionService", () => {
 		expect(service.listSessionsSync("missing", "user").sessions).toEqual([]);
 		warn.mockRestore();
 	});
+
+	it("createSession with the same id overwrites the stored session", async () => {
+		const service = new InMemorySessionService();
+		const first = await service.createSession(
+			"app",
+			"user",
+			{ version: 1 },
+			"same-id",
+		);
+		await service.appendEvent(first, {
+			author: "agent",
+			timestamp: 1,
+			content: { parts: [{ text: "old" }] },
+		} as any);
+
+		const second = await service.createSession(
+			"app",
+			"user",
+			{ version: 2 },
+			"same-id",
+		);
+		expect(second.state.version).toBe(2);
+		expect(second.events).toEqual([]);
+
+		const fetched = await service.getSession("app", "user", "same-id");
+		expect(fetched?.state.version).toBe(2);
+		expect(fetched?.events).toEqual([]);
+	});
 });
