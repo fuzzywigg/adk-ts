@@ -290,6 +290,32 @@ describe("SequentialAgent", () => {
 			expect(llmB.instruction).toContain("taskCompleted");
 			expect(yieldedEvents.map((e) => e.author)).toEqual(["llmA", "llmB"]);
 		});
+
+		it("injected taskCompleted function returns the completion signal string", async () => {
+			const llmAgent = new LlmAgent({
+				name: "llmSub",
+				description: "llm sub agent",
+				instruction: "Do work.",
+				tools: [],
+			});
+			llmAgent.runLive = vi.fn().mockImplementation(async function* () {
+				yield new Event({ author: "llmSub" });
+			});
+
+			const agent = new SequentialAgent({
+				name: "seq",
+				description: "desc",
+				subAgents: [llmAgent],
+			});
+
+			for await (const _ of agent["runLiveImpl"](mockContext)) {
+			}
+
+			const taskCompleted = llmAgent.tools[0] as unknown as () => string;
+			expect(typeof taskCompleted).toBe("function");
+			expect(taskCompleted.name).toBe("taskCompleted");
+			expect(taskCompleted()).toBe("Task completion signaled.");
+		});
 	});
 
 	describe("runAsyncImpl extras", () => {

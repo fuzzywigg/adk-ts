@@ -267,6 +267,56 @@ describe("BaseTool", () => {
 		).toBe("search_tool");
 	});
 
+	it("processLlmRequest appends onto an existing functionDeclarations list", async () => {
+		const tool = new StubTool({
+			name: "search_tool",
+			description: "Searches things",
+		});
+		const request = new LlmRequest({
+			config: {
+				tools: [
+					{
+						functionDeclarations: [
+							{
+								name: "other_tool",
+								description: "Already present",
+							},
+						],
+					},
+				],
+			},
+		});
+
+		await tool.processLlmRequest(makeContext(), request);
+
+		expect(request.toolsDict.search_tool).toBe(tool);
+		expect(request.config?.tools).toHaveLength(1);
+		expect(
+			(request.config?.tools?.[0] as any).functionDeclarations.map(
+				(fd: { name: string }) => fd.name,
+			),
+		).toEqual(["other_tool", "search_tool"]);
+	});
+
+	it("processLlmRequest treats empty functionDeclarations as absent and creates a new tool entry", async () => {
+		const tool = new StubTool({
+			name: "fresh_tool",
+			description: "Creates a fresh declarations entry",
+		});
+		const request = new LlmRequest({
+			config: {
+				tools: [{ functionDeclarations: [] } as any],
+			},
+		});
+
+		await tool.processLlmRequest(makeContext(), request);
+
+		expect(request.config?.tools).toHaveLength(2);
+		expect(
+			(request.config?.tools?.[1] as any).functionDeclarations[0].name,
+		).toBe("fresh_tool");
+	});
+
 	it("safeExecute wraps non-Error throws into the exhaustion envelope", async () => {
 		const tool = new StubTool(
 			{

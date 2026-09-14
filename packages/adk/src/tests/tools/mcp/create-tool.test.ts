@@ -239,4 +239,199 @@ describe("convertMcpToolToBaseTool", () => {
 			message: "typed",
 		});
 	});
+
+	it("wraps BaseTool construction failures as INVALID_SCHEMA_ERROR", async () => {
+		await expect(
+			convertMcpToolToBaseTool({
+				mcpTool: {
+					name: "bad-name!",
+					description: "valid description",
+					inputSchema: { type: "object", properties: {} },
+				} as any,
+				toolHandler: async () => ({ content: [] }),
+			}),
+		).rejects.toMatchObject({
+			name: "McpError",
+			type: McpErrorType.INVALID_SCHEMA_ERROR,
+			message: expect.stringContaining("Failed to create tool from MCP tool"),
+		});
+
+		await expect(
+			convertMcpToolToBaseTool({
+				mcpTool: {
+					name: "ok_name",
+					description: "no",
+					inputSchema: { type: "object", properties: {} },
+				} as any,
+				toolHandler: async () => ({ content: [] }),
+			}),
+		).rejects.toMatchObject({
+			type: McpErrorType.INVALID_SCHEMA_ERROR,
+			message: expect.stringContaining("too short"),
+		});
+	});
+
+	it("wraps non-Error construction failures via String()", async () => {
+		const throwingTool = new Proxy(
+			{ inputSchema: { type: "object", properties: {} } },
+			{
+				get(_target, prop) {
+					if (prop === "name") {
+						throw "construction-string-boom";
+					}
+					if (prop === "description") {
+						return "Valid description text";
+					}
+					if (prop === "inputSchema") {
+						return { type: "object", properties: {} };
+					}
+					if (prop === "metadata" || prop === "_meta") {
+						return undefined;
+					}
+					return undefined;
+				},
+				has(_target, prop) {
+					return prop === "inputSchema";
+				},
+			},
+		);
+
+		await expect(
+			convertMcpToolToBaseTool({
+				mcpTool: throwingTool as any,
+				toolHandler: async () => ({ content: [] }),
+			}),
+		).rejects.toMatchObject({
+			type: McpErrorType.INVALID_SCHEMA_ERROR,
+			message: expect.stringContaining("construction-string-boom"),
+		});
+	});
+
+	it("wraps getDeclaration schema conversion failures as INVALID_SCHEMA_ERROR", async () => {
+		const schemaMod = await import("../../../tools/mcp/schema-conversion");
+		const spy = vi
+			.spyOn(schemaMod, "mcpSchemaToParameters")
+			.mockImplementation(() => {
+				throw new Error("schema explode");
+			});
+
+		try {
+			const tool = await convertMcpToolToBaseTool({
+				mcpTool: {
+					name: "schema_fail",
+					description: "Fails declaration conversion",
+					inputSchema: { type: "object", properties: {} },
+				} as any,
+				toolHandler: async () => ({ content: [] }),
+			});
+
+			expect(() => tool.getDeclaration()).toThrow(McpError);
+			try {
+				tool.getDeclaration();
+				expect.unreachable("expected getDeclaration to throw");
+			} catch (error) {
+				expect(error).toMatchObject({
+					type: McpErrorType.INVALID_SCHEMA_ERROR,
+					message: expect.stringContaining("schema_fail"),
+				});
+				expect(String((error as Error).message)).toContain("schema explode");
+			}
+		} finally {
+			spy.mockRestore();
+		}
+	});
+
+	it("wraps non-Error getDeclaration failures via String()", async () => {
+		const schemaMod = await import("../../../tools/mcp/schema-conversion");
+		const spy = vi
+			.spyOn(schemaMod, "mcpSchemaToParameters")
+			.mockImplementation(() => {
+				throw "schema-string-boom";
+			});
+
+		try {
+			const tool = await convertMcpToolToBaseTool({
+				mcpTool: {
+					name: "schema_string",
+					description: "Fails declaration with string throw",
+					inputSchema: { type: "object", properties: {} },
+				} as any,
+				toolHandler: async () => ({ content: [] }),
+			});
+
+			expect(() => tool.getDeclaration()).toThrow(/schema-string-boom/);
+		} finally {
+			spy.mockRestore();
+		}
+	});
+
+	it("wraps non-Error runAsync failures via String()", async () => {
+		const tool = await convertMcpToolToBaseTool({
+			mcpTool: {
+				name: "string_run",
+				description: "Throws a string",
+				inputSchema: { type: "object", properties: {} },
+			} as any,
+			toolHandler: async () => {
+				throw "run-string-boom";
+			},
+		});
+
+		await expect(tool.runAsync({}, makeContext())).rejects.toMatchObject({
+			type: McpErrorType.TOOL_EXECUTION_ERROR,
+			message: expect.stringContaining("run-string-boom"),
+		});
+	});
+
+	it("ignores non-object metadata and _meta values", async () => {
+		const tool = await convertMcpToolToBaseTool({
+			mcpTool: {
+				name: "plain_meta",
+				description: "Non-object metadata ignored",
+				inputSchema: { type: "object", properties: {} },
+				metadata: "not-an-object",
+				_meta: 42,
+			} as any,
+			toolHandler: async () => ({ content: [] }),
+		});
+
+		expect(tool.isLongRunning).toBe(false);
+		expect(tool.shouldRetryOnFailure).toBe(false);
+		expect(tool.maxRetryAttempts).toBe(3);
+	});
+
+	it("prefers metadata over _meta when both are objects", async () => {
+		const tool = await convertMcpToolToBaseTool({
+			mcpTool: {
+				name: "both_meta",
+				description: "Both metadata shapes present",
+				inputSchema: { type: "object", properties: {} },
+				metadata: { isLongRunning: true, maxRetryAttempts: 9 },
+				_meta: { isLongRunning: false, maxRetryAttempts: 1 },
+			} as any,
+			toolHandler: async () => ({ content: [] }),
+		});
+
+		expect(tool.isLongRunning).toBe(true);
+		expect(tool.maxRetryAttempts).toBe(9);
+	});
+
+	it("calls client.callTool without retry when shouldRetryOnFailure is false", async () => {
+		const callTool = vi.fn().mockResolvedValue({
+			content: [{ type: "text", text: "once" }],
+		});
+		const tool = await convertMcpToolToBaseTool({
+			mcpTool: {
+				name: "no_retry",
+				description: "Single shot client call",
+				inputSchema: { type: "object", properties: {} },
+			} as any,
+			client: { callTool } as any,
+		});
+
+		await expect(tool.runAsync({ q: 1 }, makeContext())).resolves.toEqual({
+			content: [{ type: "text", text: "once" }],
+		});
+		expect(callTool).toHaveBeenCalledTimes(1);
+	});
 });

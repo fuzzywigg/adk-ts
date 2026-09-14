@@ -238,6 +238,46 @@ describe("schema-conversion", () => {
 		});
 	});
 
+	it("infers integer from exclusive bounds and falls back to object", () => {
+		expect(normalizeJsonSchema({ exclusiveMinimum: 0 })).toEqual({
+			type: Type.INTEGER,
+			exclusiveMinimum: 0,
+		});
+		expect(normalizeJsonSchema({ exclusiveMaximum: 10 })).toEqual({
+			type: Type.INTEGER,
+			exclusiveMaximum: 10,
+		});
+		expect(
+			normalizeJsonSchema({
+				exclusiveMinimum: 1,
+				exclusiveMaximum: 5,
+				multipleOf: 2,
+			}),
+		).toEqual({
+			type: Type.INTEGER,
+			exclusiveMinimum: 1,
+			exclusiveMaximum: 5,
+			multipleOf: 2,
+		});
+		expect(
+			normalizeJsonSchema({
+				exclusiveMinimum: 0,
+				multipleOf: 0.25,
+			}),
+		).toEqual({
+			type: Type.NUMBER,
+			exclusiveMinimum: 0,
+			multipleOf: 0.25,
+		});
+		expect(normalizeJsonSchema({ title: "orphan" })).toEqual({
+			type: Type.OBJECT,
+			title: "orphan",
+		});
+		expect(normalizeJsonSchema({})).toEqual({
+			type: Type.OBJECT,
+		});
+	});
+
 	it("preserves string/array metadata during normalize", () => {
 		expect(
 			normalizeJsonSchema({

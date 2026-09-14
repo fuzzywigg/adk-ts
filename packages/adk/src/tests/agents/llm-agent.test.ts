@@ -640,6 +640,46 @@ describe("LlmAgent defaults and canonical helpers", () => {
 		expect(String(warn.mock.calls[0][0])).toContain("transfer");
 	});
 
+	it("validateOutputSchemaConfig warns when only one transfer flag is open", async () => {
+		const { z } = await import("zod");
+		const warn = vi.fn();
+		const agent = new LlmAgent({
+			name: "half_open",
+			outputSchema: z.object({ value: z.string() }),
+			disallowTransferToParent: true,
+			disallowTransferToPeers: false,
+		});
+		(agent as any).logger = { warn, debug: vi.fn(), error: vi.fn() };
+		agent["validateOutputSchemaConfig"]();
+		expect(warn).toHaveBeenCalledTimes(1);
+		expect(String(warn.mock.calls[0][0])).toContain("transfer");
+	});
+
+	it("maybeSaveOutputToState stringifies non-Error schema failures", async () => {
+		const agent = new LlmAgent({ name: "schema_string_fail" });
+		agent.outputKey = "result";
+		agent.outputSchema = {
+			parse: () => {
+				throw "zod-string-boom";
+			},
+		} as any;
+		(agent as any).logger = {
+			warn: vi.fn(),
+			debug: vi.fn(),
+			error: vi.fn(),
+		};
+
+		const event = new Event({
+			content: { parts: [{ text: '{"answer":"ok"}' }] },
+			author: agent.name,
+		});
+		vi.spyOn(event, "isFinalResponse").mockReturnValue(true);
+
+		expect(() => agent["maybeSaveOutputToState"](event)).toThrow(
+			/Output validation failed: zod-string-boom/,
+		);
+	});
+
 	it("canonicalModel still throws when only non-LlmAgent ancestors exist", () => {
 		class ShellAgent extends BaseAgent {
 			protected async *runAsyncImpl() {}

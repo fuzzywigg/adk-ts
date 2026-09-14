@@ -449,4 +449,36 @@ describe("FunctionTool", () => {
 		expect(declaration.parameters?.properties?.b?.type).toBe("string");
 		expect(declaration.parameters?.properties?.missing).toBeUndefined();
 	});
+
+	it("defaults getParameterType to string when schema and parameterTypes omit the param", () => {
+		function echo(value: unknown) {
+			return { value, type: typeof value };
+		}
+		Object.defineProperty(echo, "toString", {
+			value: () =>
+				"function echo(value) { return { value, type: typeof value }; }",
+		});
+
+		const tool = new FunctionTool(echo, {
+			description: "default string coerce",
+		});
+
+		expect((tool as any).getParameterType("value")).toBe("string");
+		expect((tool as any).getParameterType("missing")).toBe("string");
+	});
+
+	it("uses declaration schema type when parameterTypes omits the key", () => {
+		function tagged(flag: boolean) {
+			return { flag };
+		}
+		Object.defineProperty(tagged, "toString", {
+			value: () => "function tagged(flag: boolean) { return { flag }; }",
+		});
+
+		const tool = new FunctionTool(tagged, {
+			description: "declaration type fallback",
+		});
+
+		expect((tool as any).getParameterType("flag")).toBe("boolean");
+	});
 });

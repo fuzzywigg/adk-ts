@@ -486,4 +486,112 @@ describe("InMemoryArtifactService", () => {
 			inlineData: { data: "", mimeType: "text/plain" },
 		});
 	});
+
+	it("returns null when a version slot exists but is empty", async () => {
+		const service = new InMemoryArtifactService();
+		await service.saveArtifact({
+			...base,
+			filename: "sparse.txt",
+			artifact: { text: "v0" },
+		});
+		await service.saveArtifact({
+			...base,
+			filename: "sparse.txt",
+			artifact: { text: "v1" },
+		});
+
+		const path = `${base.appName}/${base.userId}/${base.sessionId}/sparse.txt`;
+		const versions = (service as any).artifacts.get(path) as Array<
+			{ text: string } | undefined
+		>;
+		versions[1] = undefined;
+
+		expect(
+			await service.loadArtifact({
+				...base,
+				filename: "sparse.txt",
+				version: 1,
+			}),
+		).toBeNull();
+		expect(
+			await service.loadArtifact({
+				...base,
+				filename: "sparse.txt",
+				version: 0,
+			}),
+		).toEqual({ text: "v0" });
+	});
+
+	it("returns null for empty inlineData without text or fileData", async () => {
+		const service = new InMemoryArtifactService();
+		await service.saveArtifact({
+			...base,
+			filename: "empty-inline.txt",
+			artifact: {
+				inlineData: { data: "", mimeType: "text/plain" },
+			},
+		});
+		expect(
+			await service.loadArtifact({ ...base, filename: "empty-inline.txt" }),
+		).toBeNull();
+	});
+
+	it("loads fileData artifacts that are not artifact refs", async () => {
+		const service = new InMemoryArtifactService();
+		const artifact = {
+			fileData: {
+				fileUri: "gs://bucket/object.bin",
+				mimeType: "application/octet-stream",
+			},
+		};
+		await service.saveArtifact({
+			...base,
+			filename: "remote.bin",
+			artifact,
+		});
+		expect(
+			await service.loadArtifact({ ...base, filename: "remote.bin" }),
+		).toEqual(artifact);
+	});
+
+	it("supports negative version indexing from the end", async () => {
+		const service = new InMemoryArtifactService();
+		await service.saveArtifact({
+			...base,
+			filename: "neg.txt",
+			artifact: { text: "first" },
+		});
+		await service.saveArtifact({
+			...base,
+			filename: "neg.txt",
+			artifact: { text: "second" },
+		});
+		await service.saveArtifact({
+			...base,
+			filename: "neg.txt",
+			artifact: { text: "third" },
+		});
+
+		expect(
+			await service.loadArtifact({
+				...base,
+				filename: "neg.txt",
+				version: -1,
+			}),
+		).toEqual({ text: "third" });
+		expect(
+			await service.loadArtifact({
+				...base,
+				filename: "neg.txt",
+				version: -2,
+			}),
+		).toEqual({ text: "second" });
+		expect(
+			await service.loadArtifact({
+				...base,
+				filename: "neg.txt",
+				version: -99,
+			}),
+		).toBeNull();
+	});
 });

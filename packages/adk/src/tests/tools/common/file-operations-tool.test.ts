@@ -473,4 +473,51 @@ describe("FileOperationsTool", () => {
 		);
 		expect(readResult.data).toBe("new");
 	});
+
+	it("append creates the file when it does not exist yet", async () => {
+		const result = await tool.runAsync(
+			{ operation: "append", filepath: "new-append.txt", content: "first" },
+			makeContext(),
+		);
+		expect(result).toEqual({ success: true });
+		const readResult = await tool.runAsync(
+			{ operation: "read", filepath: "new-append.txt" },
+			makeContext(),
+		);
+		expect(readResult).toEqual({ success: true, data: "first" });
+	});
+
+	it("exists returns false for missing paths", async () => {
+		await expect(
+			tool.runAsync(
+				{ operation: "exists", filepath: "no-such-file.txt" },
+				makeContext(),
+			),
+		).resolves.toEqual({ success: true, data: false });
+	});
+
+	it("rejects empty filepath values", async () => {
+		await expect(
+			tool.runAsync({ operation: "read", filepath: "" }, makeContext()),
+		).resolves.toMatchObject({ success: false });
+	});
+
+	it("delete removes an existing file", async () => {
+		await tool.runAsync(
+			{ operation: "write", filepath: "doomed.txt", content: "x" },
+			makeContext(),
+		);
+		await expect(
+			tool.runAsync(
+				{ operation: "delete", filepath: "doomed.txt" },
+				makeContext(),
+			),
+		).resolves.toEqual({ success: true });
+		await expect(
+			tool.runAsync(
+				{ operation: "exists", filepath: "doomed.txt" },
+				makeContext(),
+			),
+		).resolves.toEqual({ success: true, data: false });
+	});
 });

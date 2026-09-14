@@ -468,5 +468,167 @@ describe("LangGraphAgent", () => {
 			expect(runAsyncImplSpy).toHaveBeenCalledOnce();
 			expect(runAsyncImplSpy).toHaveBeenCalledWith(mockContext);
 		});
+
+		it("runLiveImpl yields the same events as runAsyncImpl", async () => {
+			const graph = new LangGraphAgent({
+				name: "LiveGraphReal",
+				description: "Actually invoke runLiveImpl",
+				nodes: [nodeA, nodeB, nodeC],
+				rootNode: "NodeA",
+			});
+
+			const liveEvents: Event[] = [];
+			for await (const event of graph["runLiveImpl"](mockContext)) {
+				liveEvents.push(event);
+			}
+
+			expect(agentA.executionCount).toBe(1);
+			expect(agentB.executionCount).toBe(1);
+			expect(agentC.executionCount).toBe(1);
+			expect(liveEvents[liveEvents.length - 1].turnComplete).toBe(true);
+			expect(
+				liveEvents[liveEvents.length - 1].content?.parts[0].text,
+			).toContain("NodeA → NodeB → NodeC");
+		});
+	});
+
+	describe("leftover execution edges", () => {
+		it("skips missing target names while continuing to known targets", async () => {
+			const source = {
+				name: "Source",
+				agent: agentA,
+				targets: ["Missing", "NodeB"],
+			};
+			const leafB = { name: "NodeB", agent: agentB, targets: [] as string[] };
+			const graph = new LangGraphAgent({
+				name: "MissingTargetGraph",
+				description: "Missing target coverage",
+				nodes: [source, leafB, { name: "Missing", agent: agentC, targets: [] }],
+				rootNode: "Source",
+			});
+
+			Object.defineProperty(graph, "nodes", {
+				value: new Map([
+					["Source", source],
+					["NodeB", leafB],
+				]),
+			});
+
+			const events = await executeGraphAndGetEvents(graph, mockContext);
+			expect(agentA.executionCount).toBe(1);
+			expect(agentB.executionCount).toBe(1);
+			expect(events[events.length - 1].content?.parts[0].text).toContain(
+				"Source → NodeB",
+			);
+		});
+
+		it("stringifies non-Error throws from node agents", async () => {
+			const exploding = new MockAgent("Exploding");
+			exploding.runAsync = async function* () {
+				this.executionCount++;
+				yield* [] as AsyncIterable<Event>;
+				throw "plain-node-boom";
+			} as any;
+
+			const root = {
+				name: "Root",
+				agent: agentA,
+				targets: ["Boom"],
+			};
+			const boom = { name: "Boom", agent: exploding, targets: [] };
+			const graph = new LangGraphAgent({
+				name: "StringErrorGraph",
+				description: "Non-Error node failure",
+				nodes: [root, boom],
+				rootNode: "Root",
+			});
+
+			const events = await executeGraphAndGetEvents(graph, mockContext);
+			expect(events[events.length - 1].errorCode).toBe("NODE_EXECUTION_ERROR");
+			expect(events[events.length - 1].errorMessage).toBe("plain-node-boom");
+			expect(events[events.length - 1].content?.parts[0].text).toContain(
+				"plain-node-boom",
+			);
+		});
+
+		it("getNextNodes skips unknown targets and returns remaining", async () => {
+			const source = {
+				name: "Source",
+				agent: agentA,
+				targets: ["Ghost", "NodeB"],
+			};
+			const leafB = { name: "NodeB", agent: agentB, targets: [] as string[] };
+			const graph = new LangGraphAgent({
+				name: "NextMissing",
+				description: "getNextNodes missing target",
+				nodes: [source, leafB, { name: "Ghost", agent: agentC, targets: [] }],
+				rootNode: "Source",
+			});
+
+			Object.defineProperty(graph, "nodes", {
+				value: new Map([["NodeB", leafB]]),
+			});
+
+			const next = await graph["getNextNodes"](
+				source,
+				new Event({ author: "test" }),
+				mockContext,
+			);
+			expect(next.map((n) => n.name)).toEqual(["NodeB"]);
+		});
+
+		it("does not enqueue next nodes when a node yields no events", async () => {
+			const silent = new MockAgent("Silent");
+			silent.runAsync = async function* () {
+				this.executionCount++;
+				yield* [] as AsyncIterable<Event>;
+			} as any;
+
+			const root = {
+				name: "SilentRoot",
+				agent: silent,
+				targets: ["NodeB"],
+			};
+			const graph = new LangGraphAgent({
+				name: "SilentRootGraph",
+				description: "Root yields nothing",
+				nodes: [root, { ...nodeB, targets: [] }],
+				rootNode: "SilentRoot",
+			});
+
+			const events = await executeGraphAndGetEvents(graph, mockContext);
+			expect(silent.executionCount).toBe(1);
+			expect(agentB.executionCount).toBe(0);
+			expect(events[events.length - 1].content?.parts[0].text).toContain(
+				"SilentRoot",
+			);
+			expect(events[events.length - 1].content?.parts[0].text).not.toContain(
+				"NodeB",
+			);
+		});
+
+		it("supports fan-out to multiple unconditional targets", async () => {
+			const leafB = { name: "LeafB", agent: agentB, targets: [] as string[] };
+			const leafC = { name: "LeafC", agent: agentC, targets: [] as string[] };
+			const root = {
+				name: "Root",
+				agent: agentA,
+				targets: ["LeafB", "LeafC"],
+			};
+			const graph = new LangGraphAgent({
+				name: "FanOut",
+				description: "Parallel targets",
+				nodes: [root, leafB, leafC],
+				rootNode: "Root",
+			});
+
+			const events = await executeGraphAndGetEvents(graph, mockContext);
+			expect(agentA.executionCount).toBe(1);
+			expect(agentB.executionCount).toBe(1);
+			expect(agentC.executionCount).toBe(1);
+			expect(events[events.length - 1].content?.parts[0].text).toContain(
+				"Root → LeafB → LeafC",
+			);
+		});
 	});
 });

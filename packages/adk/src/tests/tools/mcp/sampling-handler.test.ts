@@ -1,3 +1,4 @@
+import { CreateMessageRequestSchema } from "@modelcontextprotocol/sdk/types.js";
 import { describe, expect, it, vi } from "vitest";
 import {
 	createSamplingHandler,
@@ -363,5 +364,181 @@ describe("McpSamplingHandler", () => {
 			role: "assistant",
 			content: { type: "text", text: "" },
 		});
+	});
+
+	it("rejects when schema passes but messages is missing", async () => {
+		const handler = new McpSamplingHandler(async () => "ok");
+		const spy = vi
+			.spyOn(CreateMessageRequestSchema, "safeParse")
+			.mockReturnValue({
+				success: true,
+				data: {
+					method: "sampling/createMessage",
+					params: { maxTokens: 8 },
+				},
+			} as any);
+
+		try {
+			await expect(
+				handler.handleSamplingRequest({
+					method: "sampling/createMessage",
+					params: { maxTokens: 8 },
+				} as any),
+			).rejects.toMatchObject({
+				type: McpErrorType.INVALID_REQUEST_ERROR,
+				message: expect.stringContaining("messages array is required"),
+			});
+		} finally {
+			spy.mockRestore();
+		}
+	});
+
+	it("rejects when schema passes but messages is not an array", async () => {
+		const handler = new McpSamplingHandler(async () => "ok");
+		const spy = vi
+			.spyOn(CreateMessageRequestSchema, "safeParse")
+			.mockReturnValue({
+				success: true,
+				data: {
+					method: "sampling/createMessage",
+					params: { messages: "nope", maxTokens: 8 },
+				},
+			} as any);
+
+		try {
+			await expect(
+				handler.handleSamplingRequest({
+					method: "sampling/createMessage",
+					params: { messages: "nope", maxTokens: 8 },
+				} as any),
+			).rejects.toMatchObject({
+				type: McpErrorType.INVALID_REQUEST_ERROR,
+				message: expect.stringContaining("messages array is required"),
+			});
+		} finally {
+			spy.mockRestore();
+		}
+	});
+
+	it("rejects when generated MCP response fails result schema validation", async () => {
+		const handler = new McpSamplingHandler(async () => "ok");
+		vi.spyOn(handler as any, "convertADKResponseToMcp").mockReturnValue({
+			role: "assistant",
+		});
+
+		await expect(
+			handler.handleSamplingRequest(textRequest()),
+		).rejects.toMatchObject({
+			type: McpErrorType.SAMPLING_ERROR,
+			message: expect.stringContaining("Invalid response generated"),
+		});
+	});
+
+	it("defaults model when modelPreferences hints are empty", async () => {
+		const handler = new McpSamplingHandler(async () => "reply");
+		const response = await handler.handleSamplingRequest(
+			textRequest({
+				modelPreferences: { hints: [] },
+			}),
+		);
+		expect(response.model).toBe("gemini-2.0-flash");
+	});
+
+	it("defaults model when hints entries lack name", async () => {
+		const handler = new McpSamplingHandler(async () => "reply");
+		const response = await handler.handleSamplingRequest(
+			textRequest({
+				modelPreferences: { hints: [{}, { name: undefined }] },
+			}),
+		);
+		expect(response.model).toBe("gemini-2.0-flash");
+	});
+
+	it("maps assistant role to model and preserves temperature", async () => {
+		const samplingHandler = vi.fn(async (request) => {
+			expect(request.contents?.[0]?.role).toBe("model");
+			expect(request.config?.temperature).toBe(0.4);
+			return "ok";
+		}) as SamplingHandler;
+		const handler = new McpSamplingHandler(samplingHandler);
+
+		await handler.handleSamplingRequest(
+			textRequest({
+				temperature: 0.4,
+				messages: [
+					{ role: "assistant", content: { type: "text", text: "prior" } },
+				],
+			}),
+		);
+		expect(samplingHandler).toHaveBeenCalledOnce();
+	});
+
+	it("coerces non-string text fields to empty strings", () => {
+		const handler = new McpSamplingHandler(async () => "ok");
+		expect(
+			(handler as any).convertMcpContentToADKParts({
+				type: "text",
+				text: 123,
+			}),
+		).toEqual([{ text: "" }]);
+		expect(
+			(handler as any).convertMcpContentToADKParts({
+				type: "tool_use",
+				name: null,
+			}),
+		).toEqual([{ text: "[Tool Use: ]" }]);
+	});
+
+	it("includes optional image text only when non-empty", async () => {
+		const imageData = Buffer.from("img").toString("base64");
+		const samplingHandler = vi.fn(async (request) => {
+			const parts = request.contents.flatMap((c) => c.parts ?? []);
+			expect(parts).toEqual([
+				{ text: "caption" },
+				{
+					inlineData: {
+						data: imageData,
+						mimeType: "image/png",
+					},
+				},
+			]);
+			return "ok";
+		}) as SamplingHandler;
+		const handler = new McpSamplingHandler(samplingHandler);
+
+		await handler.handleSamplingRequest({
+			method: "sampling/createMessage",
+			params: {
+				maxTokens: 8,
+				messages: [
+					{
+						role: "user",
+						content: {
+							type: "image",
+							text: "caption",
+							data: imageData,
+							mimeType: "image/png",
+						},
+					},
+				],
+			},
+		});
+		expect(samplingHandler).toHaveBeenCalledOnce();
+	});
+
+	it("stringifies non-string tool_use name and tool_result id", () => {
+		const handler = new McpSamplingHandler(async () => "ok");
+		expect(
+			(handler as any).convertMcpContentToADKParts({
+				type: "tool_use",
+				name: 99,
+			}),
+		).toEqual([{ text: "[Tool Use: ]" }]);
+		expect(
+			(handler as any).convertMcpContentToADKParts({
+				type: "tool_result",
+				toolUseId: { id: 1 },
+			}),
+		).toEqual([{ text: "[Tool Result: ]" }]);
 	});
 });

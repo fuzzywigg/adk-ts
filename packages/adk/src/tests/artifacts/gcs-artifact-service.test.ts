@@ -384,4 +384,26 @@ describe("GcsArtifactService", () => {
 			},
 		});
 	});
+
+	it("listVersions returns empty when no blobs exist", async () => {
+		getFilesMock.mockResolvedValue([[]]);
+		const service = new GcsArtifactService("b");
+		await expect(
+			service.listVersions({ ...base, filename: "missing.txt" }),
+		).resolves.toEqual([]);
+	});
+
+	it("deleteArtifact deletes every listed version blob", async () => {
+		getFilesMock.mockResolvedValue([
+			[
+				{ name: "app/user-1/sess-1/gone.txt/0" },
+				{ name: "app/user-1/sess-1/gone.txt/1" },
+			],
+		]);
+		const service = new GcsArtifactService("b");
+		await service.deleteArtifact({ ...base, filename: "gone.txt" });
+		expect(deleteMock).toHaveBeenCalledTimes(2);
+		expect(fileMock).toHaveBeenCalledWith("app/user-1/sess-1/gone.txt/0");
+		expect(fileMock).toHaveBeenCalledWith("app/user-1/sess-1/gone.txt/1");
+	});
 });

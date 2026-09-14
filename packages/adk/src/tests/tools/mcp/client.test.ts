@@ -423,4 +423,77 @@ describe("McpClientService.reinitialize / close / sampling handlers", () => {
 		});
 		errorSpy.mockRestore();
 	});
+
+	it("cleanupResources logs when transport.close throws", async () => {
+		const service = new McpClientService(stdioConfig());
+		await service.initialize();
+
+		transportClose.mockRejectedValueOnce(new Error("transport close boom"));
+		const errorSpy = vi
+			.spyOn((service as any).logger, "error")
+			.mockImplementation(() => {});
+
+		await expect(service.close()).resolves.toBeUndefined();
+		expect(errorSpy).toHaveBeenCalledWith(
+			"Error cleaning up MCP resources:",
+			expect.any(Error),
+		);
+		expect((service as any).client).toBeNull();
+		expect((service as any).transport).toBeNull();
+		errorSpy.mockRestore();
+	});
+
+	it("wraps non-McpError throws from the sampling callback", async () => {
+		const service = new McpClientService(
+			stdioConfig({ samplingHandler: vi.fn().mockResolvedValue("ok") }),
+		);
+		await service.initialize();
+
+		(service as any).mcpSamplingHandler = {
+			handleSamplingRequest: async () => {
+				throw new Error("raw sampling failure");
+			},
+		};
+
+		const registered = setRequestHandler.mock.calls[0][1];
+		await expect(
+			registered({
+				method: "sampling/createMessage",
+				params: {
+					messages: [{ role: "user", content: { type: "text", text: "ping" } }],
+					maxTokens: 8,
+				},
+			}),
+		).rejects.toMatchObject({
+			type: McpErrorType.SAMPLING_ERROR,
+			message: expect.stringContaining("raw sampling failure"),
+		});
+	});
+
+	it("wraps non-Error sampling callback throws via String()", async () => {
+		const service = new McpClientService(
+			stdioConfig({ samplingHandler: vi.fn().mockResolvedValue("ok") }),
+		);
+		await service.initialize();
+
+		(service as any).mcpSamplingHandler = {
+			handleSamplingRequest: async () => {
+				throw "string-sampling-boom";
+			},
+		};
+
+		const registered = setRequestHandler.mock.calls[0][1];
+		await expect(
+			registered({
+				method: "sampling/createMessage",
+				params: {
+					messages: [{ role: "user", content: { type: "text", text: "ping" } }],
+					maxTokens: 8,
+				},
+			}),
+		).rejects.toMatchObject({
+			type: McpErrorType.SAMPLING_ERROR,
+			message: expect.stringContaining("string-sampling-boom"),
+		});
+	});
 });
