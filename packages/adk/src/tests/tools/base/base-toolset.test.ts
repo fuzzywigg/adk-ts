@@ -50,4 +50,101 @@ describe("BaseToolset", () => {
 		expect(allowSearch(search)).toBe(true);
 		expect(allowSearch(hidden)).toBe(false);
 	});
+
+	it("supports ToolPredicate that consults readonly context", () => {
+		const allowWhenAdmin: ToolPredicate = (tool, ctx) => {
+			const role = (ctx as any)?.userContent?.role;
+			return role === "admin" || tool.name === "search";
+		};
+
+		expect(
+			allowWhenAdmin(hidden, { userContent: { role: "admin" } } as any),
+		).toBe(true);
+		expect(
+			allowWhenAdmin(hidden, { userContent: { role: "viewer" } } as any),
+		).toBe(false);
+		expect(
+			allowWhenAdmin(search, { userContent: { role: "viewer" } } as any),
+		).toBe(true);
+		expect(allowWhenAdmin(search)).toBe(true);
+	});
+
+	it("returns a shallow copy so callers cannot mutate internal tool list via getTools", async () => {
+		const toolset = new MemoryToolset([search, hidden]);
+		const tools = await toolset.getTools();
+		tools.pop();
+		await expect(toolset.getTools()).resolves.toEqual([search, hidden]);
+	});
+
+	it("close is idempotent and leaves subsequent getTools empty", async () => {
+		const toolset = new MemoryToolset([search, hidden]);
+		await toolset.close();
+		await toolset.close();
+		await expect(toolset.getTools()).resolves.toEqual([]);
+		await expect(toolset.getTools({} as ReadonlyContext)).resolves.toEqual([]);
+	});
+
+	it("filters with context even when the toolset holds a single tool", async () => {
+		const toolset = new MemoryToolset([hidden]);
+		await expect(toolset.getTools({} as ReadonlyContext)).resolves.toEqual([]);
+		await expect(toolset.getTools()).resolves.toEqual([hidden]);
+	});
+
+	it("composes multiple ToolPredicates with AND/OR semantics", () => {
+		const isSearch: ToolPredicate = (tool) => tool.name === "search";
+		const notHidden: ToolPredicate = (tool) => tool.name !== "hidden";
+		const andPred: ToolPredicate = (tool, ctx) =>
+			isSearch(tool, ctx) && notHidden(tool, ctx);
+		const orPred: ToolPredicate = (tool, ctx) =>
+			isSearch(tool, ctx) || tool.name === "hidden";
+
+		expect(andPred(search)).toBe(true);
+		expect(andPred(hidden)).toBe(false);
+		expect(orPred(search)).toBe(true);
+		expect(orPred(hidden)).toBe(true);
+		expect(orPred({ name: "other" } as BaseTool)).toBe(false);
+	});
+
+	it("allows concrete toolsets to ignore context entirely", async () => {
+		class AlwaysAllToolset extends BaseToolset {
+			constructor(private readonly tools: BaseTool[]) {
+				super();
+			}
+			async getTools(_readonlyContext?: ReadonlyContext): Promise<BaseTool[]> {
+				return [...this.tools];
+			}
+			async close(): Promise<void> {}
+		}
+
+		const toolset = new AlwaysAllToolset([search, hidden]);
+		await expect(toolset.getTools({} as ReadonlyContext)).resolves.toEqual([
+			search,
+			hidden,
+		]);
+	});
+
+	it("allows concrete toolsets to throw from close for resource failures", async () => {
+		class FailingCloseToolset extends BaseToolset {
+			async getTools(): Promise<BaseTool[]> {
+				return [];
+			}
+			async close(): Promise<void> {
+				throw new Error("close failed");
+			}
+		}
+
+		const toolset = new FailingCloseToolset();
+		await expect(toolset.close()).rejects.toThrow("close failed");
+	});
+
+	it("ToolPredicate may use tool metadata beyond name", () => {
+		const longRunningOnly: ToolPredicate = (tool) =>
+			Boolean((tool as any).isLongRunning);
+		expect(
+			longRunningOnly({ name: "x", isLongRunning: true } as BaseTool),
+		).toBe(true);
+		expect(
+			longRunningOnly({ name: "x", isLongRunning: false } as BaseTool),
+		).toBe(false);
+	});
 });

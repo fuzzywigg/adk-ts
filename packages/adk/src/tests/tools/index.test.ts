@@ -23,4 +23,39 @@ describe("tools barrel exports", () => {
 		expect(typeof tools.TransferToAgentTool).toBe("function");
 		expect(typeof tools.UserInteractionTool).toBe("function");
 	});
+
+	it("exposes MCP toolset helpers from the tools barrel", () => {
+		expect(typeof (tools as any).McpToolset).toBe("function");
+		expect(typeof (tools as any).getMcpTools).toBe("function");
+		expect(typeof (tools as any).convertMcpToolToBaseTool).toBe("function");
+	});
+
+	it("createTool from barrel builds a runnable BaseTool", async () => {
+		const tool = tools.createTool({
+			name: "barrel_add",
+			description: "Adds via barrel",
+			fn: () => ({ ok: true }),
+		});
+		expect(tool).toBeInstanceOf(tools.BaseTool);
+		await expect(tool.runAsync({}, {} as any)).resolves.toEqual({ ok: true });
+	});
+
+	it("FunctionTool from barrel wraps a named function", async () => {
+		function ping() {
+			return "pong";
+		}
+		const tool = new tools.FunctionTool(ping, { description: "ping tool" });
+		await expect(tool.runAsync({}, {} as any)).resolves.toBe("pong");
+	});
+
+	it("buildFunctionDeclaration from barrel reads function names", () => {
+		function sample(a: string) {
+			return a;
+		}
+		const declaration = tools.buildFunctionDeclaration(sample, {
+			description: "sample",
+		});
+		expect(declaration.name).toBe("sample");
+		expect(declaration.description).toBe("sample");
+	});
 });
