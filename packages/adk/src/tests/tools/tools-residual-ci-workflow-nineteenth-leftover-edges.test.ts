@@ -4,8 +4,8 @@ import { describe, expect, it } from "vitest";
 
 /**
  * Nineteenth leftover: reversible workflow assertions for the tools residual
- * Vitest slice. Softened after eighteenth leftover gate retarget — pins
- * lint/build/test only; eighteenth owns the focused filter pin.
+ * Vitest slice. Softened after twentieth leftover gate retarget — pins
+ * lint/build/test only; twentieth owns the focused filter pin.
  */
 describe("tools residual ci workflow nineteenth leftover edges", () => {
 	const root = resolve(__dirname, "../../../../..");
