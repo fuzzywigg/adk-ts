@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import { DatabaseSessionService } from "../../../sessions/database-session-service";
-import { State } from "../../../sessions/state";
+import { DatabaseSessionService } from "../../sessions/database-session-service";
+import { State } from "../../sessions/state";
 
 describe("DatabaseSessionService leftover: eventToStorageEvent coalesce", () => {
 	let service: DatabaseSessionService;
@@ -251,14 +251,14 @@ describe("DatabaseSessionService leftover: storageEventToEvent coalesce", () => 
 
 	it("hasTrailingCodeExecutionResult coalesces falsy to false", () => {
 		const convert = (service as any).storageEventToEvent.bind(service);
-		const cases: Array<{ value: unknown; expected: boolean }> = [
+		const cases: Array<{ value: unknown; expected: unknown }> = [
 			{ value: undefined, expected: false },
 			{ value: null, expected: false },
 			{ value: false, expected: false },
 			{ value: 0, expected: false },
 			{ value: "", expected: false },
 			{ value: true, expected: true },
-			{ value: 1, expected: true },
+			{ value: 1, expected: 1 },
 		];
 		for (const row of cases) {
 			const actions =

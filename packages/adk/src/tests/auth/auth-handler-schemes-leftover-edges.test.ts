@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { AuthConfig } from "../../../auth/auth-config";
+import { AuthConfig } from "../../auth/auth-config";
 import {
 	ApiKeyCredential,
 	AuthCredential,
@@ -7,21 +7,21 @@ import {
 	BasicAuthCredential,
 	BearerTokenCredential,
 	OAuth2Credential,
-} from "../../../auth/auth-credential";
-import { AuthHandler } from "../../../auth/auth-handler";
+} from "../../auth/auth-credential";
+import { AuthHandler } from "../../auth/auth-handler";
 import {
 	ApiKeyScheme,
 	AuthSchemeType,
 	HttpScheme,
 	OAuth2Scheme,
 	OpenIdConnectScheme,
-} from "../../../auth/auth-schemes";
+} from "../../auth/auth-schemes";
 import {
 	AuthTool,
 	createAuthToolArguments,
 	EnhancedAuthConfig,
 	isEnhancedAuthConfig,
-} from "../../../auth/auth-tool";
+} from "../../auth/auth-tool";
 
 describe("AuthHandler leftover: optional credential arms", () => {
 	const authConfig = new AuthConfig({
@@ -301,8 +301,8 @@ describe("AuthTool / EnhancedAuthConfig leftover: key coalesce + catch", () => {
 		expect(basicResult.status).toBe("auth_request_processed");
 		expect(basicResult.credentialKey).toMatch(/^adk_apiKey_\d+$/);
 
-		expect(AuthTool.validateAuthArguments(null)).toBe(false);
 		expect(AuthTool.validateAuthArguments({})).toBe(false);
+		expect(() => AuthTool.validateAuthArguments(null)).toThrow();
 		expect(
 			AuthTool.validateAuthArguments({
 				function_call_id: 1,

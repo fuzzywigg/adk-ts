@@ -1,8 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
-import type { InvocationContext } from "../../../agents/invocation-context";
-import { EventActions } from "../../../events/event-actions";
-import { State } from "../../../sessions/state";
-import { ToolContext } from "../../../tools/tool-context";
+import type { InvocationContext } from "../../agents/invocation-context";
+import { EventActions } from "../../events/event-actions";
+import { State } from "../../sessions/state";
+import { ToolContext } from "../../tools/tool-context";
 
 function makeInvocation(
 	overrides: Partial<InvocationContext> = {},

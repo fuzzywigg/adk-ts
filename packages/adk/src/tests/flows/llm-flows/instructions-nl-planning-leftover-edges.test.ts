@@ -187,27 +187,23 @@ describe("instructions leftover: bypassStateInjection + schema strip/$schema", (
 			name: "bad-schema",
 			canonicalModel: "gpt-4o",
 			rootAgent: { name: "root" },
-			outputSchema: {
-				get [Symbol.toStringTag]() {
-					throw new Error("boom");
+			outputSchema: new Proxy(
+				{},
+				{
+					get() {
+						throw new Error("unsupported schema");
+					},
 				},
-			},
+			),
 		};
 		const llmRequest = new LlmRequest();
-		const toJSONSchema = vi.spyOn(z, "toJSONSchema").mockImplementation(() => {
-			throw new Error("schema explode");
-		});
-		try {
-			await drain(
-				instructionsProcessor.runAsync(
-					{ agent } as unknown as InvocationContext,
-					llmRequest,
-				),
-			);
-			expect(llmRequest.getSystemInstructionText()).toBeUndefined();
-		} finally {
-			toJSONSchema.mockRestore();
-		}
+		await drain(
+			instructionsProcessor.runAsync(
+				{ agent } as unknown as InvocationContext,
+				llmRequest,
+			),
+		);
+		expect(llmRequest.getSystemInstructionText()).toBeUndefined();
 	});
 });
 

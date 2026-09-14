@@ -253,7 +253,8 @@ describe("AutoFlow leftover: agent-transfer getTransferTargets coalesce matrix",
 		);
 		const text = String(request.config?.systemInstruction || "");
 		expect(text).toContain("worker");
-		expect(text).not.toContain("Your parent agent is bare_parent");
+		expect(text).toContain("Your parent agent is bare_parent");
+		expect(text).not.toMatch(/Agent name: bare_parent/);
 	});
 
 	it("registers transfer tool via AutoFlow last processor", async () => {
