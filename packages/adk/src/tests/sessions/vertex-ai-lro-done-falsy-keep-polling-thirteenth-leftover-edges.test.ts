@@ -7,7 +7,6 @@ import { VertexAiSessionService } from "../../sessions/vertex-ai-session-service
  */
 describe("vertex-ai LRO done falsy keep-polling thirteenth leftover edges", () => {
 	afterEach(() => {
-		vi.useRealTimers();
 		vi.restoreAllMocks();
 	});
 
@@ -23,17 +22,20 @@ describe("vertex-ai LRO done falsy keep-polling thirteenth leftover edges", () =
 		{ label: "empty string", done: "" },
 		{ label: "false", done: false },
 	])("done=$label never completes the LRO wait", async ({ done }) => {
-		vi.useFakeTimers();
 		vi.spyOn(console, "debug").mockImplementation(() => undefined);
+		vi.spyOn(globalThis, "setTimeout").mockImplementation((fn) => {
+			(fn as () => void)();
+			return 0 as unknown as NodeJS.Timeout;
+		});
 		const { service, asyncRequest } = createService();
 		asyncRequest.mockResolvedValueOnce({
 			name: "projects/p/locations/l/reasoningEngines/9/sessions/s1/operations/op1",
 		});
 		asyncRequest.mockResolvedValue({ done });
 
-		const pending = service.createSession("app", "u");
-		await vi.runAllTimersAsync();
-		await expect(pending).rejects.toThrow(/Timeout waiting for operation/);
+		await expect(service.createSession("app", "u")).rejects.toThrow(
+			/Timeout waiting for operation/,
+		);
 	});
 
 	it("done: true still completes (control)", async () => {
