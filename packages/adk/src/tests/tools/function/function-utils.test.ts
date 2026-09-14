@@ -229,4 +229,235 @@ function multi() { return 1; }`,
 		expect(declaration.parameters?.properties?.n?.type).toBe("number");
 		expect(declaration.parameters?.required).toEqual(["n"]);
 	});
+
+	it("maps typescript bool alias and object/array/null/undefined annotations", () => {
+		const shaped = withSource(
+			(
+				_flag: unknown,
+				_items: unknown,
+				_meta: unknown,
+				_empty: unknown,
+				_missing: unknown,
+			) => ({}),
+			"function shaped(flag: bool, items: Array, meta: object, empty: null, missing: undefined) { return {}; }",
+		);
+		Object.defineProperty(shaped, "name", { value: "shaped" });
+
+		const declaration = buildFunctionDeclaration(shaped);
+		expect(declaration.parameters?.properties?.flag?.type).toBe("boolean");
+		expect(declaration.parameters?.properties?.items?.type).toBe("array");
+		expect(declaration.parameters?.properties?.meta?.type).toBe("object");
+		expect(declaration.parameters?.properties?.empty?.type).toBe("null");
+		expect(declaration.parameters?.properties?.missing?.type).toBe("null");
+	});
+
+	it("prefers JSDoc types over typescript annotations when both exist", () => {
+		const dual = withSource(
+			(_count: unknown) => _count,
+			`/**
+ * Dual typed
+ * @param {boolean} count Actually a boolean in docs
+ */
+function dual(count: number) { return count; }`,
+		);
+		Object.defineProperty(dual, "name", { value: "dual" });
+
+		const declaration = buildFunctionDeclaration(dual);
+		expect(declaration.parameters?.properties?.count?.type).toBe("boolean");
+	});
+
+	it("handles multiple ignored params mixed with required ones", () => {
+		const mixed = withSource(
+			(
+				_a: string,
+				_toolContext: unknown,
+				_b: number,
+				_context: unknown,
+			) => ({}),
+			"function mixed(a, toolContext, b, context) { return {}; }",
+		);
+		Object.defineProperty(mixed, "name", { value: "mixed" });
+
+		const declaration = buildFunctionDeclaration(mixed, {
+			ignoreParams: ["toolContext", "context"],
+		});
+		expect(
+			Object.keys(declaration.parameters?.properties || {}).sort(),
+		).toEqual(["a", "b"]);
+		expect(declaration.parameters?.required).toEqual(["a", "b"]);
+	});
+
+	it("uses empty description when no JSDoc and no override are provided", () => {
+		function plain(x: string) {
+			return x;
+		}
+		const declaration = buildFunctionDeclaration(plain);
+		expect(declaration.description).toBe("");
+		expect(declaration.name).toBe("plain");
+	});
+
+	it("uses JSDoc when description override is an empty string", () => {
+		const documented = withSource(
+			() => 1,
+			`/**
+ * From JSDoc
+ */
+function documented() { return 1; }`,
+		);
+		Object.defineProperty(documented, "name", { value: "documented" });
+
+		const declaration = buildFunctionDeclaration(documented, {
+			description: "",
+		});
+		expect(declaration.description).toContain("From JSDoc");
+	});
+
+	it("keeps a non-empty explicit description instead of JSDoc", () => {
+		const documented = withSource(
+			() => 1,
+			`/**
+ * Should be ignored
+ */
+function documented() { return 1; }`,
+		);
+		Object.defineProperty(documented, "name", { value: "documented" });
+
+		const declaration = buildFunctionDeclaration(documented, {
+			description: "explicit",
+		});
+		expect(declaration.description).toBe("explicit");
+	});
+
+	it("reads @param descriptions when typed JSDoc annotations are present", () => {
+		const multi = withSource(
+			(_id: string, _label: string) => ({}),
+			`/**
+ * Multi params
+ * @param {string} id The identifier
+ * @param {string} label Short label
+ */
+function multi(id, label) { return {}; }`,
+		);
+		Object.defineProperty(multi, "name", { value: "multi" });
+
+		const declaration = buildFunctionDeclaration(multi);
+		expect(declaration.parameters?.properties?.id?.type).toBe("string");
+		expect(declaration.parameters?.properties?.label?.type).toBe("string");
+		expect(declaration.parameters?.properties?.id?.description).toContain(
+			"The identifier",
+		);
+	});
+
+	it("captures a trailing multiline @param description for a single parameter", () => {
+		const multi = withSource(
+			(_id: string) => ({}),
+			`/**
+ * Multi line single param
+ * @param id The identifier that uniquely
+ * selects a record in storage
+ */
+function multi(id) { return {}; }`,
+		);
+		Object.defineProperty(multi, "name", { value: "multi" });
+
+		const declaration = buildFunctionDeclaration(multi);
+		expect(declaration.parameters?.properties?.id?.description).toContain(
+			"The identifier",
+		);
+		expect(declaration.parameters?.properties?.id?.description).toContain(
+			"selects a record",
+		);
+	});
+
+	it("returns empty properties for a function whose param list is only whitespace", () => {
+		const spaced = withSource(() => 1, "function spaced(   ) { return 1; }");
+		Object.defineProperty(spaced, "name", { value: "spaced" });
+		expect(buildFunctionDeclaration(spaced).parameters).toEqual({
+			type: Type.OBJECT,
+			properties: {},
+		});
+	});
+
+	it("keeps parameters without type annotations as string by default", () => {
+		const untyped = withSource(
+			(_a: unknown, _b: unknown) => ({}),
+			"function untyped(a, b) { return {}; }",
+		);
+		Object.defineProperty(untyped, "name", { value: "untyped" });
+
+		const declaration = buildFunctionDeclaration(untyped);
+		expect(declaration.parameters?.properties?.a?.type).toBe("string");
+		expect(declaration.parameters?.properties?.b?.type).toBe("string");
+		expect(declaration.parameters?.required).toEqual(["a", "b"]);
+	});
+
+	it("marks defaulted params optional even when a typescript type is present", () => {
+		const optional = withSource(
+			(_count = 1) => _count,
+			"function optional(count: number = 1) { return count; }",
+		);
+		Object.defineProperty(optional, "name", { value: "optional" });
+
+		const declaration = buildFunctionDeclaration(optional);
+		expect(declaration.parameters?.properties?.count?.type).toBe("number");
+		expect(declaration.parameters?.required || []).not.toContain("count");
+	});
+
+	it("ignores unknown @param names that are not in the signature", () => {
+		const stray = withSource(
+			(_real: string) => _real,
+			`/**
+ * Has stray docs
+ * @param {string} real The real one
+ * @param {number} ghost Not in signature
+ */
+function stray(real) { return real; }`,
+		);
+		Object.defineProperty(stray, "name", { value: "stray" });
+
+		const declaration = buildFunctionDeclaration(stray);
+		expect(declaration.parameters?.properties?.real?.type).toBe("string");
+		expect(declaration.parameters?.properties?.ghost).toBeUndefined();
+	});
+
+	it("maps JSDoc {String}/{Number}/{Boolean} case-insensitively via typescript mapper", () => {
+		const cased = withSource(
+			(_a: unknown, _b: unknown, _c: unknown) => ({}),
+			`/**
+ * Cased types
+ * @param {String} a Text
+ * @param {Number} b Number
+ * @param {Boolean} c Boolean
+ */
+function cased(a, b, c) { return {}; }`,
+		);
+		Object.defineProperty(cased, "name", { value: "cased" });
+
+		const declaration = buildFunctionDeclaration(cased);
+		expect(declaration.parameters?.properties?.a?.type).toBe("string");
+		expect(declaration.parameters?.properties?.b?.type).toBe("number");
+		expect(declaration.parameters?.properties?.c?.type).toBe("boolean");
+	});
+
+	it("supports arrow-style source strings that still contain a parameter list", () => {
+		const arrow = withSource((n: number) => n, "(n: number) => { return n; }");
+		Object.defineProperty(arrow, "name", { value: "arrow" });
+		const declaration = buildFunctionDeclaration(arrow, { name: "arrow_fn" });
+		expect(declaration.name).toBe("arrow_fn");
+		expect(declaration.parameters?.properties?.n?.type).toBe("number");
+	});
+
+	it("does not set required when all remaining params after ignore are optional", () => {
+		const onlyOptional = withSource(
+			(_toolContext?: unknown, _label = "x") => ({}),
+			'function onlyOptional(toolContext, label = "x") { return {}; }',
+		);
+		Object.defineProperty(onlyOptional, "name", { value: "onlyOptional" });
+
+		const declaration = buildFunctionDeclaration(onlyOptional, {
+			ignoreParams: ["toolContext"],
+		});
+		expect(declaration.parameters?.properties?.label).toBeDefined();
+		expect(declaration.parameters?.required).toBeUndefined();
+	});
 });
