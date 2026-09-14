@@ -59,4 +59,34 @@ describe("auth barrel exports", () => {
 			auth.createAuthToolArguments("fc-1", enhanced).function_call_id,
 		).toBe("fc-1");
 	});
+
+	it("exposes AuthTool.processAuthRequest and validateAuthArguments", async () => {
+		expect(typeof auth.AuthTool.processAuthRequest).toBe("function");
+		expect(typeof auth.AuthTool.validateAuthArguments).toBe("function");
+		const result = await auth.AuthTool.processAuthRequest({
+			function_call_id: "fc-barrel",
+			auth_config: new auth.AuthConfig({
+				authScheme: new auth.HttpScheme({ scheme: "basic" }),
+			}),
+		});
+		expect(result.status).toBe("auth_request_processed");
+		expect(result.credentialKey).toMatch(/^adk_http_/);
+	});
+
+	it("round-trips OAuth2Credential refresh through AuthHandler export", async () => {
+		const credential = new auth.OAuth2Credential({
+			accessToken: "old",
+			refreshToken: "r",
+			refreshFunction: async () => ({ accessToken: "new", expiresIn: 60 }),
+		});
+		const handler = new auth.AuthHandler({
+			authConfig: new auth.AuthConfig({
+				authScheme: new auth.HttpScheme({ scheme: "bearer" }),
+			}),
+			credential,
+		});
+		await handler.refreshToken();
+		expect(handler.getToken()).toBe("new");
+		expect(handler.getHeaders()).toEqual({ Authorization: "Bearer new" });
+	});
 });

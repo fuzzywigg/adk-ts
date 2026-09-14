@@ -330,4 +330,213 @@ describe("convertMcpToolToBaseTool", () => {
 			message: expect.stringContaining("string-ctor-fail"),
 		});
 	});
+
+	it("getDeclaration wraps non-Error schema throws via String() without originalError", async () => {
+		const schemaConversion = await import(
+			"../../../tools/mcp/schema-conversion"
+		);
+		const spy = vi
+			.spyOn(schemaConversion, "mcpSchemaToParameters")
+			.mockImplementation(() => {
+				throw "schema-string-boom";
+			});
+
+		try {
+			const tool = await convertMcpToolToBaseTool({
+				mcpTool: {
+					name: "non_error_schema",
+					description: "fails declaration with non-Error",
+					inputSchema: { type: "object", properties: {} },
+				} as any,
+				toolHandler: async () => ({ content: [] }),
+			});
+
+			let caught: McpError | undefined;
+			try {
+				tool.getDeclaration();
+			} catch (error) {
+				caught = error as McpError;
+			}
+
+			expect(caught?.type).toBe(McpErrorType.INVALID_SCHEMA_ERROR);
+			expect(caught?.message).toContain("non_error_schema");
+			expect(caught?.message).toContain("schema-string-boom");
+			expect(caught?.originalError).toBeUndefined();
+		} finally {
+			spy.mockRestore();
+		}
+	});
+
+	it("runAsync wraps non-Error execute throws via String() without originalError", async () => {
+		const tool = await convertMcpToolToBaseTool({
+			mcpTool: {
+				name: "non_error_exec",
+				description: "throws a non-Error from execute",
+				inputSchema: { type: "object", properties: {} },
+				execute: async () => {
+					throw { code: 500 };
+				},
+			} as any,
+		});
+
+		let caught: McpError | undefined;
+		try {
+			await tool.runAsync({}, makeContext());
+		} catch (error) {
+			caught = error as McpError;
+		}
+
+		expect(caught?.type).toBe(McpErrorType.TOOL_EXECUTION_ERROR);
+		expect(caught?.message).toContain("non_error_exec");
+		expect(caught?.message).toContain("[object Object]");
+		expect(caught?.originalError).toBeUndefined();
+	});
+
+	it("wraps BaseTool invalid name errors as INVALID_SCHEMA_ERROR", async () => {
+		await expect(
+			convertMcpToolToBaseTool({
+				mcpTool: {
+					name: "bad-name-with-dashes",
+					description: "invalid BaseTool name characters",
+					inputSchema: { type: "object", properties: {} },
+				} as any,
+				toolHandler: async () => ({ content: [] }),
+			}),
+		).rejects.toMatchObject({
+			name: "McpError",
+			type: McpErrorType.INVALID_SCHEMA_ERROR,
+			message: expect.stringContaining("Failed to create tool from MCP tool"),
+			originalError: expect.any(Error),
+		});
+	});
+
+	it("wraps BaseTool short description errors as INVALID_SCHEMA_ERROR", async () => {
+		await expect(
+			convertMcpToolToBaseTool({
+				mcpTool: {
+					name: "ok_name",
+					description: "ab",
+					inputSchema: { type: "object", properties: {} },
+				} as any,
+				toolHandler: async () => ({ content: [] }),
+			}),
+		).rejects.toMatchObject({
+			type: McpErrorType.INVALID_SCHEMA_ERROR,
+			message: expect.stringContaining("Failed to create tool from MCP tool"),
+		});
+	});
+
+	it("clientService path uses name+args callTool signature when reinitialize is present", async () => {
+		const reinitialize = vi.fn(async () => undefined);
+		let attempts = 0;
+		const callTool = vi.fn(
+			async (name: string, args: Record<string, unknown>) => {
+				attempts++;
+				if (attempts === 1) {
+					await reinitialize();
+					throw new Error("session closed");
+				}
+				return { content: [{ type: "text", text: `ok:${name}:${args.q}` }] };
+			},
+		);
+
+		const tool = await convertMcpToolToBaseTool({
+			mcpTool: {
+				name: "service_retry",
+				description: "Uses clientService with reinitialize present",
+				inputSchema: { type: "object", properties: {} },
+			} as any,
+			client: { callTool, reinitialize } as any,
+		});
+
+		await expect(tool.runAsync({ q: 1 }, makeContext())).rejects.toMatchObject({
+			type: McpErrorType.TOOL_EXECUTION_ERROR,
+			message: expect.stringContaining("session closed"),
+		});
+		expect(callTool).toHaveBeenCalledWith("service_retry", { q: 1 });
+		expect(reinitialize).toHaveBeenCalledTimes(1);
+
+		await expect(tool.runAsync({ q: 2 }, makeContext())).resolves.toEqual({
+			content: [{ type: "text", text: "ok:service_retry:2" }],
+		});
+		expect(callTool).toHaveBeenCalledWith("service_retry", { q: 2 });
+	});
+
+	it("detects clientService via reinitialize and calls service-style callTool", async () => {
+		const serviceCallTool = vi.fn().mockResolvedValue({ ok: "service" });
+		const tool = await convertMcpToolToBaseTool({
+			mcpTool: {
+				name: "prefer_service",
+				description: "Prefers McpClientService style callTool",
+				inputSchema: { type: "object", properties: {} },
+			} as any,
+			client: {
+				callTool: serviceCallTool,
+				reinitialize: vi.fn(async () => undefined),
+			} as any,
+		});
+
+		await expect(tool.runAsync({ a: 1 }, makeContext())).resolves.toEqual({
+			ok: "service",
+		});
+		expect(serviceCallTool).toHaveBeenCalledWith("prefer_service", { a: 1 });
+		expect(serviceCallTool).not.toHaveBeenCalledWith({
+			name: "prefer_service",
+			arguments: { a: 1 },
+		});
+	});
+
+	it("runAsync wraps non-Error toolHandler throws via String()", async () => {
+		const tool = await convertMcpToolToBaseTool({
+			mcpTool: {
+				name: "handler_string_throw",
+				description: "toolHandler throws a string",
+				inputSchema: { type: "object", properties: {} },
+			} as any,
+			toolHandler: async () => {
+				throw "handler-string-fail";
+			},
+		});
+
+		await expect(tool.runAsync({}, makeContext())).rejects.toMatchObject({
+			type: McpErrorType.TOOL_EXECUTION_ERROR,
+			message: expect.stringContaining("handler-string-fail"),
+			originalError: undefined,
+		});
+	});
+
+	it("getDeclaration wraps Error schema failures with originalError", async () => {
+		const schemaConversion = await import(
+			"../../../tools/mcp/schema-conversion"
+		);
+		const root = new Error("broken schema object");
+		const spy = vi
+			.spyOn(schemaConversion, "mcpSchemaToParameters")
+			.mockImplementation(() => {
+				throw root;
+			});
+
+		try {
+			const tool = await convertMcpToolToBaseTool({
+				mcpTool: {
+					name: "error_schema",
+					description: "fails declaration with Error",
+					inputSchema: { type: "object", properties: {} },
+				} as any,
+				toolHandler: async () => ({ content: [] }),
+			});
+
+			let caught: McpError | undefined;
+			try {
+				tool.getDeclaration();
+			} catch (error) {
+				caught = error as McpError;
+			}
+
+			expect(caught?.type).toBe(McpErrorType.INVALID_SCHEMA_ERROR);
+			expect(caught?.originalError).toBe(root);
+		} finally {
+			spy.mockRestore();
+		}
+	});
 });

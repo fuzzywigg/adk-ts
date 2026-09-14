@@ -231,4 +231,56 @@ describe("AuthHandler leftover edges", () => {
 		const handler = new AuthHandler({ authConfig, credential });
 		expect(handler.getHeaders()).toEqual({ "X-Key": "secret" });
 	});
+
+	it("refreshToken surfaces Failed to refresh token from OAuth2Credential", async () => {
+		const credential = new OAuth2Credential({
+			accessToken: "old",
+			refreshToken: "r",
+			refreshFunction: async () => undefined as any,
+		});
+		const handler = new AuthHandler({
+			authConfig: new AuthConfig({
+				authScheme: new HttpScheme({ scheme: "bearer" }),
+			}),
+			credential,
+		});
+		await expect(handler.refreshToken()).rejects.toThrow(
+			/Failed to refresh token/,
+		);
+	});
+
+	it("getHeaders returns empty object for cookie ApiKey scheme", () => {
+		const handler = new AuthHandler({
+			authConfig: new AuthConfig({
+				authScheme: new ApiKeyScheme({ in: "cookie", name: "sid" }),
+			}),
+			credential: new ApiKeyCredential("cookie-key"),
+		});
+		expect(handler.getHeaders()).toEqual({});
+		expect(handler.getToken()).toBe("cookie-key");
+	});
+
+	it("exposes credential property when provided", () => {
+		const credential = new BearerTokenCredential("tok");
+		const handler = new AuthHandler({
+			authConfig: new AuthConfig({
+				authScheme: new HttpScheme({ scheme: "bearer" }),
+			}),
+			credential,
+		});
+		expect(handler.credential).toBe(credential);
+	});
+
+	it("refreshToken is no-op for ApiKeyCredential which cannot refresh", async () => {
+		const credential = new ApiKeyCredential("static");
+		const refresh = vi.spyOn(credential, "refresh");
+		const handler = new AuthHandler({
+			authConfig: new AuthConfig({
+				authScheme: new ApiKeyScheme({ in: "header", name: "X-Key" }),
+			}),
+			credential,
+		});
+		await handler.refreshToken();
+		expect(refresh).not.toHaveBeenCalled();
+	});
 });

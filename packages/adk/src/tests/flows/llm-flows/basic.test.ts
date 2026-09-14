@@ -427,4 +427,87 @@ describe("basic requestProcessor leftover edges", () => {
 		expect(llmRequest.model).toBe("claude-3");
 		expect(llmRequest.config).toEqual({ topK: 40 });
 	});
+
+	it("returns early when agent lacks canonicalModel", async () => {
+		const llmRequest = new LlmRequest();
+		await drain(
+			requestProcessor.runAsync(
+				{
+					agent: { name: "not-llm" },
+					runConfig: { responseModalities: ["TEXT"] },
+				} as InvocationContext,
+				llmRequest,
+			),
+		);
+		expect(llmRequest.model).toBeUndefined();
+		expect(llmRequest.config).toBeUndefined();
+	});
+
+	it("skips request-level schema when both transfer disallow flags are false", async () => {
+		const schema = { type: "object" };
+		const llmRequest = new LlmRequest();
+		await drain(
+			requestProcessor.runAsync(
+				{
+					agent: {
+						name: "transferable",
+						canonicalModel: "gpt-4o",
+						outputSchema: schema,
+						canonicalTools: async () => [],
+						subAgents: [{ name: "child" }],
+						disallowTransferToParent: false,
+						disallowTransferToPeers: false,
+					},
+					runConfig: {},
+				} as unknown as InvocationContext,
+				llmRequest,
+			),
+		);
+		expect(llmRequest.config?.responseSchema).toBeUndefined();
+	});
+
+	it("applies output schema when both transfer disallow flags are true", async () => {
+		const schema = { type: "object", properties: { x: { type: "string" } } };
+		const llmRequest = new LlmRequest();
+		await drain(
+			requestProcessor.runAsync(
+				{
+					agent: {
+						name: "locked",
+						canonicalModel: "gpt-4o",
+						outputSchema: schema,
+						canonicalTools: async () => [],
+						subAgents: [{ name: "child" }],
+						disallowTransferToParent: true,
+						disallowTransferToPeers: true,
+					},
+					runConfig: {},
+				} as unknown as InvocationContext,
+				llmRequest,
+			),
+		);
+		expect(llmRequest.config?.responseSchema).toBe(schema);
+	});
+
+	it("deep-copies generateContentConfig so mutations do not leak", async () => {
+		const generateContentConfig = { temperature: 0.5, topP: 0.8 };
+		const llmRequest = new LlmRequest();
+		await drain(
+			requestProcessor.runAsync(
+				{
+					agent: {
+						name: "copy-cfg",
+						canonicalModel: "gpt-4o",
+						generateContentConfig,
+					},
+					runConfig: {},
+				} as InvocationContext,
+				llmRequest,
+			),
+		);
+		expect(llmRequest.config).toEqual(generateContentConfig);
+		expect(llmRequest.config).not.toBe(generateContentConfig);
+		(llmRequest.config as any).temperature = 0;
+		expect(generateContentConfig.temperature).toBe(0.5);
+	});
 });

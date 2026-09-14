@@ -16,4 +16,11 @@ describe("code-executors barrel exports", () => {
 			CodeExecutionUtils.buildExecutableCodePart("x").executableCode?.code,
 		).toBe("x");
 	});
+
+	it("BuiltInCodeExecutor from barrel rejects direct executeCode", async () => {
+		const executor = new BuiltInCodeExecutor();
+		await expect(
+			executor.executeCode({} as any, { code: "print(1)", inputFiles: [] }),
+		).rejects.toThrow(/should not be called directly/);
+	});
 });

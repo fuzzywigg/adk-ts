@@ -154,4 +154,68 @@ describe("retryOnClosedResource", () => {
 		);
 		expect(result).toBe(descriptor);
 	});
+
+	it("withRetry treats non-Error throws as non-retryable", async () => {
+		const reinit = vi.fn(async () => undefined);
+		const fn = vi.fn(async () => {
+			throw "string-closed";
+		});
+		const wrapped = withRetry(fn, {}, reinit, 2);
+		await expect(wrapped()).rejects.toBe("string-closed");
+		expect(reinit).not.toHaveBeenCalled();
+	});
+
+	it("withRetry retries ECONNRESET after successful reinit", async () => {
+		const reinit = vi.fn(async () => undefined);
+		let attempts = 0;
+		const fn = vi.fn(async () => {
+			attempts++;
+			if (attempts <= 2) {
+				throw new Error("ECONNRESET from peer");
+			}
+			return "recovered";
+		});
+		const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+		const wrapped = withRetry(fn, {}, reinit, 2);
+		await expect(wrapped()).resolves.toBe("recovered");
+		expect(reinit).toHaveBeenCalledTimes(2);
+		expect(warn).toHaveBeenCalled();
+		warn.mockRestore();
+	});
+
+	it("withRetry default maxRetries is 1", async () => {
+		const reinit = vi.fn(async () => undefined);
+		const fn = vi.fn(async () => {
+			throw new Error("closed");
+		});
+		const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+		const wrapped = withRetry(fn, {}, reinit);
+		await expect(wrapped()).rejects.toThrow("closed");
+		expect(fn).toHaveBeenCalledTimes(2);
+		expect(reinit).toHaveBeenCalledTimes(1);
+		warn.mockRestore();
+	});
+
+	it("retryOnClosedResource exhausts retries and rethrows closed error", async () => {
+		const reinit = vi.fn(async () => undefined);
+		class Sample {
+			async work(): Promise<string> {
+				throw new Error("socket hang up");
+			}
+		}
+		const descriptor = Object.getOwnPropertyDescriptor(
+			Sample.prototype,
+			"work",
+		)!;
+		retryOnClosedResource(() => reinit(), 1)(
+			Sample.prototype,
+			"work",
+			descriptor,
+		);
+		Object.defineProperty(Sample.prototype, "work", descriptor);
+		const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+		await expect(new Sample().work()).rejects.toThrow("socket hang up");
+		expect(reinit).toHaveBeenCalledTimes(1);
+		warn.mockRestore();
+	});
 });

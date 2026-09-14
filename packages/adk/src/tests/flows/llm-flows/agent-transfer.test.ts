@@ -327,4 +327,49 @@ describe("AgentTransferLlmRequestProcessor leftover edges", () => {
 		expect(request.toolsDict.transfer_to_agent).toBeUndefined();
 		expect(request.config?.systemInstruction).toBeUndefined();
 	});
+
+	it("honors disallowTransferToParent alone while still listing peers", async () => {
+		const request = new LlmRequest();
+		const parent = new StubAgent("parent", "Parent agent");
+		const peer = new StubAgent("peer", "Peer helper");
+		const agent = new StubAgent("child", "Child");
+		(agent as any).disallowTransferToParent = true;
+		parent.subAgents = [agent, peer];
+		agent.parentAgent = parent;
+		peer.parentAgent = parent;
+
+		for await (const _ of requestProcessor.runAsync(
+			makeContext(agent),
+			request,
+		)) {
+		}
+
+		const instruction = String(request.config?.systemInstruction ?? "");
+		expect(instruction).not.toContain("Your parent agent is parent");
+		expect(instruction).toContain("Peer helper");
+		expect(instruction).toContain("Agent name: peer");
+		expect(request.toolsDict.transfer_to_agent).toBeDefined();
+	});
+
+	it("honors disallowTransferToPeers alone while still mentioning parent", async () => {
+		const request = new LlmRequest();
+		const parent = new StubAgent("parent", "Parent agent");
+		const peer = new StubAgent("peer", "Peer helper");
+		const agent = new StubAgent("child", "Child");
+		(agent as any).disallowTransferToPeers = true;
+		parent.subAgents = [agent, peer];
+		agent.parentAgent = parent;
+		peer.parentAgent = parent;
+
+		for await (const _ of requestProcessor.runAsync(
+			makeContext(agent),
+			request,
+		)) {
+		}
+
+		const instruction = String(request.config?.systemInstruction ?? "");
+		expect(instruction).toContain("Your parent agent is parent");
+		expect(instruction).not.toContain("Peer helper");
+		expect(instruction).not.toContain("Agent name: peer");
+	});
 });

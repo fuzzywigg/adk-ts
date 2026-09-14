@@ -730,4 +730,98 @@ describe("ContainerCodeExecutor", () => {
 		});
 		errorSpy.mockRestore();
 	});
+
+	it("maps thrown Errors whose message includes timeout substring", async () => {
+		const container = makeContainer();
+		createContainer.mockResolvedValue(container);
+		container.exec
+			.mockResolvedValueOnce({
+				start: vi.fn().mockResolvedValue(makeStream([])),
+				inspect: vi.fn().mockResolvedValue({ ExitCode: 0 }),
+			})
+			.mockResolvedValueOnce({
+				start: vi
+					.fn()
+					.mockRejectedValue(new Error("operation timeout while waiting")),
+				inspect: vi.fn(),
+			});
+
+		const executor = new ContainerCodeExecutor({
+			image: "python:3",
+			executionTimeout: 2500,
+		});
+		const result = await executor.executeCode({} as any, {
+			code: "print(1)",
+			inputFiles: [],
+		});
+		expect(result.stderr).toMatch(/timed out after 2500ms/);
+		expect(result.stdout).toBe("");
+	});
+
+	it("maps non-timeout Errors into container execution stderr", async () => {
+		const container = makeContainer();
+		createContainer.mockResolvedValue(container);
+		container.exec
+			.mockResolvedValueOnce({
+				start: vi.fn().mockResolvedValue(makeStream([])),
+				inspect: vi.fn().mockResolvedValue({ ExitCode: 0 }),
+			})
+			.mockResolvedValueOnce({
+				start: vi
+					.fn()
+					.mockRejectedValue(new Error("docker daemon unavailable")),
+				inspect: vi.fn(),
+			});
+
+		const executor = new ContainerCodeExecutor({ image: "python:3" });
+		const result = await executor.executeCode({} as any, {
+			code: "print(1)",
+			inputFiles: [],
+		});
+		expect(result.stderr).toContain("Container execution error");
+		expect(result.stderr).toContain("docker daemon unavailable");
+	});
+
+	it("maps non-Error throws into container execution stderr via String()", async () => {
+		const container = makeContainer();
+		createContainer.mockResolvedValue(container);
+		container.exec
+			.mockResolvedValueOnce({
+				start: vi.fn().mockResolvedValue(makeStream([])),
+				inspect: vi.fn().mockResolvedValue({ ExitCode: 0 }),
+			})
+			.mockResolvedValueOnce({
+				start: vi.fn().mockRejectedValue("raw-string-fail"),
+				inspect: vi.fn(),
+			});
+
+		const executor = new ContainerCodeExecutor({ image: "python:3" });
+		const result = await executor.executeCode({} as any, {
+			code: "print(1)",
+			inputFiles: [],
+		});
+		expect(result.stderr).toContain("raw-string-fail");
+	});
+
+	it("logs cleanupContainer rejections from SIGTERM handler", async () => {
+		const executor = new ContainerCodeExecutor({ image: "python:3" });
+		const errorSpy = vi
+			.spyOn((executor as any).logger, "error")
+			.mockImplementation(() => {});
+		vi.spyOn(executor as any, "cleanupContainer").mockRejectedValue(
+			new Error("sigterm cleanup failed"),
+		);
+
+		const termHandler = listeners.find(([event]) => event === "SIGTERM")?.[1];
+		expect(termHandler).toBeTypeOf("function");
+		termHandler?.();
+
+		await vi.waitFor(() => {
+			expect(errorSpy).toHaveBeenCalledWith(
+				"Error during cleanup",
+				expect.any(Error),
+			);
+		});
+		errorSpy.mockRestore();
+	});
 });

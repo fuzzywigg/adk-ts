@@ -467,4 +467,19 @@ describe("CodeExecutionUtils leftover edges", () => {
 		expect(part.codeExecutionResult?.outcome).toBe(Outcome.OUTCOME_FAILED);
 		expect(part.codeExecutionResult?.output).toContain("warn");
 	});
+
+	it("buildCodeExecutionResultPart succeeds with stdout only", () => {
+		const part = CodeExecutionUtils.buildCodeExecutionResultPart({
+			stdout: "hello",
+			stderr: "",
+			outputFiles: [],
+		});
+		expect(part.codeExecutionResult?.outcome).toBe(Outcome.OUTCOME_OK);
+		expect(part.codeExecutionResult?.output).toContain("hello");
+		expect(part.codeExecutionResult?.output).toContain("Code execution result");
+	});
+
+	it("getEncodedFileContent round-trips plain strings", () => {
+		expect(CodeExecutionUtils.getEncodedFileContent("abc")).toBe(btoa("abc"));
+	});
 });

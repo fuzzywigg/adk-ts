@@ -55,4 +55,28 @@ describe("AuthConfig", () => {
 		expect(oidcConfig.authScheme.type).toBe("openIdConnect");
 		expect(oidcConfig.context).toEqual({});
 	});
+
+	it("preserves the same authScheme object reference across reads", () => {
+		const authScheme = new HttpScheme({
+			scheme: "digest",
+			description: "digest realm",
+		});
+		const config = new AuthConfig({
+			authScheme,
+			context: { realm: "example" },
+		});
+		expect(config.authScheme).toBe(authScheme);
+		expect(config.authScheme.description).toBe("digest realm");
+		expect(config.context?.realm).toBe("example");
+	});
+
+	it("allows mutating context after construction", () => {
+		const config = new AuthConfig({
+			authScheme: new ApiKeyScheme({ in: "header", name: "X-Key" }),
+			context: { a: 1 },
+		});
+		config.context!.a = 2;
+		config.context!.b = "added";
+		expect(config.context).toEqual({ a: 2, b: "added" });
+	});
 });

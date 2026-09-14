@@ -50,4 +50,25 @@ describe("SingleFlow", () => {
 		).toBe(false);
 		expect(flow.requestProcessors).toHaveLength(8);
 	});
+
+	it("keeps request processor order stable across instances", () => {
+		const a = new SingleFlow();
+		const b = new SingleFlow();
+		expect(a.requestProcessors.map((p) => p.constructor.name)).toEqual(
+			b.requestProcessors.map((p) => p.constructor.name),
+		);
+		expect(a.responseProcessors.map((p) => p.constructor.name)).toEqual(
+			b.responseProcessors.map((p) => p.constructor.name),
+		);
+	});
+
+	it("includes auth preprocessor before instructions", () => {
+		const flow = new SingleFlow();
+		const authIdx = flow.requestProcessors.indexOf(authRequestProcessor);
+		const instructionsIdx = flow.requestProcessors.indexOf(
+			instructionsRequestProcessor,
+		);
+		expect(authIdx).toBeGreaterThanOrEqual(0);
+		expect(instructionsIdx).toBeGreaterThan(authIdx);
+	});
 });

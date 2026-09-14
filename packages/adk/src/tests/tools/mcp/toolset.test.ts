@@ -422,4 +422,59 @@ describe("McpToolset offline helpers", () => {
 			]),
 		);
 	});
+
+	it("getTools wraps non-Error list failures via String()", async () => {
+		listTools.mockRejectedValue("list-string-fail");
+		const toolset = new McpToolset(baseConfig);
+		await expect(toolset.getTools()).rejects.toMatchObject({
+			type: McpErrorType.CONNECTION_ERROR,
+			message: expect.stringContaining("list-string-fail"),
+		});
+	});
+
+	it("initialize is idempotent after a successful first connect", async () => {
+		const toolset = new McpToolset(baseConfig);
+		await toolset.initialize();
+		await toolset.initialize();
+		expect(initialize).toHaveBeenCalledTimes(2);
+	});
+
+	it("refreshTools returns filtered tools after clearing cache", async () => {
+		const toolset = new McpToolset(
+			{ ...baseConfig, cacheConfig: { enabled: true } },
+			["keep"],
+		);
+		const first = await toolset.getTools();
+		expect(first).toHaveLength(1);
+		expect(listTools).toHaveBeenCalledTimes(1);
+
+		const refreshed = await toolset.refreshTools();
+		expect(refreshed.map((t) => t.name)).toEqual(["keep"]);
+		expect(listTools).toHaveBeenCalledTimes(2);
+	});
+
+	it("convertADKToolsToMCP handles tools with empty description", () => {
+		const toolset = new McpToolset(baseConfig);
+		const converted = toolset.convertADKToolsToMCP([
+			{
+				name: "blank",
+				description: "",
+				getDeclaration() {
+					return { name: "blank", description: "" };
+				},
+			} as any,
+		]);
+		expect(converted[0]).toEqual(
+			expect.objectContaining({
+				name: "blank",
+				description: "",
+			}),
+		);
+	});
+
+	it("getMcpTools without filter returns all listed tools", async () => {
+		const tools = await getMcpTools(baseConfig);
+		expect(tools.map((t) => t.name).sort()).toEqual(["drop", "keep"]);
+		expect(close).toHaveBeenCalled();
+	});
 });

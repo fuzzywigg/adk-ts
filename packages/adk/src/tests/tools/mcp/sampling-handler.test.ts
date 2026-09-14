@@ -423,4 +423,93 @@ describe("McpSamplingHandler", () => {
 			spy.mockRestore();
 		}
 	});
+
+	it("rejects negative maxTokens", async () => {
+		const handler = new McpSamplingHandler(async () => "ok");
+		await expect(
+			handler.handleSamplingRequest(textRequest({ maxTokens: -5 })),
+		).rejects.toMatchObject({
+			type: McpErrorType.INVALID_REQUEST_ERROR,
+			message: expect.stringContaining("maxTokens"),
+		});
+	});
+
+	it("passes temperature and maxTokens into ADK request config", async () => {
+		const samplingHandler = vi.fn(async (request) => {
+			expect(request.config?.temperature).toBe(0.2);
+			expect(request.config?.maxOutputTokens).toBe(128);
+			return "ok";
+		}) as SamplingHandler;
+		const handler = new McpSamplingHandler(samplingHandler);
+		await handler.handleSamplingRequest(
+			textRequest({ maxTokens: 128, temperature: 0.2 }),
+		);
+		expect(samplingHandler).toHaveBeenCalledOnce();
+	});
+
+	it("maps empty text parts to empty ADK text parts", async () => {
+		const samplingHandler = vi.fn(async (request) => {
+			const parts = request.contents.flatMap((c) => c.parts ?? []);
+			expect(parts).toEqual([{ text: "" }]);
+			return "ok";
+		}) as SamplingHandler;
+		const handler = new McpSamplingHandler(samplingHandler);
+		await handler.handleSamplingRequest({
+			method: "sampling/createMessage",
+			params: {
+				maxTokens: 8,
+				messages: [{ role: "user", content: { type: "text", text: "" } }],
+			},
+		});
+		expect(samplingHandler).toHaveBeenCalledOnce();
+	});
+
+	it("maps tool_use/tool_result missing name/id to empty placeholders", () => {
+		const handler = new McpSamplingHandler(async () => "ok");
+		expect(
+			(handler as any).convertMcpContentToADKParts({ type: "tool_use" }),
+		).toEqual([{ text: "[Tool Use: ]" }]);
+		expect(
+			(handler as any).convertMcpContentToADKParts({ type: "tool_result" }),
+		).toEqual([{ text: "[Tool Result: ]" }]);
+	});
+
+	it("preserves originalError when ADK handler throws an Error", async () => {
+		const root = new Error("llm exploded");
+		const handler = new McpSamplingHandler(async () => {
+			throw root;
+		});
+		let caught: McpError | undefined;
+		try {
+			await handler.handleSamplingRequest(textRequest());
+		} catch (error) {
+			caught = error as McpError;
+		}
+		expect(caught?.type).toBe(McpErrorType.SAMPLING_ERROR);
+		expect(caught?.originalError).toBe(root);
+	});
+
+	it("omits originalError when ADK handler throws a non-Error", async () => {
+		const handler = new McpSamplingHandler(async () => {
+			throw 404;
+		});
+		let caught: McpError | undefined;
+		try {
+			await handler.handleSamplingRequest(textRequest());
+		} catch (error) {
+			caught = error as McpError;
+		}
+		expect(caught?.message).toContain("404");
+		expect(caught?.originalError).toBeUndefined();
+	});
+
+	it("uses default model when modelPreferences hints lack names", async () => {
+		const handler = new McpSamplingHandler(async () => "ok");
+		const response = await handler.handleSamplingRequest(
+			textRequest({
+				modelPreferences: { hints: [{}, { name: "" }] },
+			}),
+		);
+		expect(response.model).toBe("gemini-2.0-flash");
+	});
 });

@@ -185,4 +185,37 @@ describe("auth schemes leftover edges", () => {
 		});
 		expect(config.context).toEqual({});
 	});
+
+	it("builds bearer HTTP scheme without bearerFormat", () => {
+		const scheme = new HttpScheme({ scheme: "bearer" });
+		expect(scheme.scheme).toBe("bearer");
+		expect(scheme.bearerFormat).toBeUndefined();
+		expect(scheme.type).toBe(AuthSchemeType.HTTP);
+	});
+
+	it("builds OAuth2 with only password flow and refreshUrl", () => {
+		const scheme = new OAuth2Scheme({
+			flows: {
+				password: {
+					tokenUrl: "https://example.com/token",
+					refreshUrl: "https://example.com/refresh",
+					scopes: { profile: "Profile" },
+				},
+			},
+			description: "password-flow",
+		});
+		expect(scheme.description).toBe("password-flow");
+		expect(scheme.flows.password?.refreshUrl).toContain("refresh");
+		expect(scheme.flows.authorizationCode).toBeUndefined();
+	});
+
+	it("OpenIdConnectScheme stores URL without description", () => {
+		const scheme = new OpenIdConnectScheme({
+			openIdConnectUrl:
+				"https://issuer.example/.well-known/openid-configuration",
+		});
+		expect(scheme.openIdConnectUrl).toContain("openid-configuration");
+		expect(scheme.description).toBeUndefined();
+		expect(scheme.type).toBe(AuthSchemeType.OPENID_CONNECT);
+	});
 });

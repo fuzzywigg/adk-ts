@@ -339,4 +339,117 @@ describe("schema-conversion", () => {
 			type: Type.OBJECT,
 		});
 	});
+
+	it("normalizes number schemas with enum, title, and description", () => {
+		expect(
+			normalizeJsonSchema({
+				type: "number",
+				minimum: 0,
+				maximum: 10,
+				enum: [1, 2, 3],
+				title: "score",
+				description: "numeric score choices",
+			}),
+		).toEqual({
+			type: "number",
+			minimum: 0,
+			maximum: 10,
+			enum: [1, 2, 3],
+			title: "score",
+			description: "numeric score choices",
+		});
+
+		expect(
+			normalizeJsonSchema({
+				type: "integer",
+				enum: [0, 1],
+				title: "flag",
+				description: "binary flag",
+			}),
+		).toEqual({
+			type: "integer",
+			enum: [0, 1],
+			title: "flag",
+			description: "binary flag",
+		});
+	});
+
+	it("adkToMcpToolType uses empty string when tool.description is falsy", () => {
+		const emptyDesc = {
+			name: "noop",
+			description: "",
+			getDeclaration: () => ({
+				name: "noop",
+				description: "",
+				parameters: { type: Type.OBJECT, properties: {} },
+			}),
+		} as BaseTool;
+
+		expect(adkToMcpToolType(emptyDesc)).toEqual({
+			name: "noop",
+			description: "",
+			inputSchema: {
+				type: "object",
+				properties: {},
+			},
+		});
+
+		const undefinedDesc = {
+			name: "blank",
+			description: undefined,
+			getDeclaration: () => ({
+				name: "blank",
+				description: undefined,
+			}),
+		} as unknown as BaseTool;
+
+		expect(adkToMcpToolType(undefinedDesc).description).toBe("");
+	});
+
+	it("preserves number exclusive bounds only when present on typed number schemas", () => {
+		expect(
+			normalizeJsonSchema({
+				type: "number",
+				minimum: 1.5,
+				maximum: 9.5,
+				title: "range",
+				description: "float range",
+			}),
+		).toEqual({
+			type: "number",
+			minimum: 1.5,
+			maximum: 9.5,
+			title: "range",
+			description: "float range",
+		});
+	});
+
+	it("mcpSchemaToParameters normalizes nested number property metadata", () => {
+		expect(
+			mcpSchemaToParameters({
+				name: "score_tool",
+				inputSchema: {
+					type: "object",
+					properties: {
+						score: {
+							type: "number",
+							enum: [1, 2, 3],
+							title: "Score",
+							description: "Pick a score",
+						},
+					},
+				},
+			} as any),
+		).toEqual({
+			type: Type.OBJECT,
+			properties: {
+				score: {
+					type: "number",
+					enum: [1, 2, 3],
+					title: "Score",
+					description: "Pick a score",
+				},
+			},
+		});
+	});
 });
