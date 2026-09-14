@@ -135,3 +135,54 @@ describe("AuthConfig", () => {
 		expect(config.context).toBeUndefined();
 	});
 });
+
+describe("auth schemes leftover edges", () => {
+	it("exposes AuthSchemeType enum values", () => {
+		expect(AuthSchemeType).toEqual({
+			APIKEY: "apiKey",
+			HTTP: "http",
+			OAUTH2: "oauth2",
+			OPENID_CONNECT: "openIdConnect",
+		});
+	});
+
+	it("builds basic HTTP schemes", () => {
+		const scheme = new HttpScheme({ scheme: "basic" });
+		expect(scheme.type).toBe(AuthSchemeType.HTTP);
+		expect(scheme.scheme).toBe("basic");
+		expect(scheme.bearerFormat).toBeUndefined();
+		expect(scheme.description).toBeUndefined();
+	});
+
+	it("builds OAuth2 authorizationCode flow with empty scopes and refreshUrl only clientCredentials", () => {
+		const scheme = new OAuth2Scheme({
+			flows: {
+				authorizationCode: {
+					authorizationUrl: "https://example.com/auth",
+					tokenUrl: "https://example.com/token",
+					scopes: {},
+				},
+				clientCredentials: {
+					tokenUrl: "https://example.com/token",
+					refreshUrl: "https://example.com/refresh",
+					scopes: {},
+				},
+			},
+		});
+
+		expect(scheme.flows.authorizationCode?.scopes).toEqual({});
+		expect(scheme.flows.clientCredentials?.refreshUrl).toBe(
+			"https://example.com/refresh",
+		);
+		expect(scheme.flows.implicit).toBeUndefined();
+		expect(scheme.flows.password).toBeUndefined();
+	});
+
+	it("AuthConfig accepts empty context object", () => {
+		const config = new AuthConfig({
+			authScheme: new HttpScheme({ scheme: "bearer" }),
+			context: {},
+		});
+		expect(config.context).toEqual({});
+	});
+});
