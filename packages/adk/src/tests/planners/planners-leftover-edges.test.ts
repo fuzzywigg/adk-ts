@@ -234,14 +234,29 @@ describe("PlanReActPlanner leftover empty / malformed step matrices", () => {
 		expect(parts?.[1].text).toBe(" final");
 	});
 
-	it("function call group stops at non-call even if later calls exist", () => {
+	it("when first part is a named function call, consecutive siblings are not collected (index>0 gate)", () => {
 		const parts = planner.processPlanningResponse({} as any, [
 			{ functionCall: { name: "a", args: {} } },
 			{ functionCall: { name: "b", args: {} } },
 			{ text: "break" },
 			{ functionCall: { name: "c", args: {} } },
 		]);
-		expect(parts?.map((p) => p.functionCall?.name)).toEqual(["a", "b"]);
+		expect(parts?.map((p) => p.functionCall?.name)).toEqual(["a"]);
+	});
+
+	it("collects consecutive function calls when firstFcPartIndex is greater than 0", () => {
+		const parts = planner.processPlanningResponse({} as any, [
+			{ text: "/*ACTION*/" },
+			{ functionCall: { name: "a", args: {} } },
+			{ functionCall: { name: "b", args: {} } },
+			{ text: "break" },
+			{ functionCall: { name: "c", args: {} } },
+		]);
+		expect(parts?.map((p) => p.functionCall?.name || p.text)).toEqual([
+			"/*ACTION*/",
+			"a",
+			"b",
+		]);
 	});
 
 	it("buildPlanningInstruction ignores request contents", () => {
