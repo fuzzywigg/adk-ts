@@ -280,7 +280,7 @@ describe("AgentTool leftover: falsy input with custom schema still executes", ()
 		});
 		const tool = new AgentTool({ name: "undef_input", agent });
 		const { context } = makeToolContext(agent);
-		await tool.runAsync({ input: undefined, body: "body-text" }, context);
+		await tool.runAsync({ body: "body-text", input: undefined }, context);
 		expect(seen[0]).toBe("body-text");
 	});
 

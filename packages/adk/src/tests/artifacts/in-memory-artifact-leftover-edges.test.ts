@@ -12,39 +12,7 @@ describe('InMemoryArtifactService leftover: fileUri || ""', () => {
 		sessionId: "session-1",
 	};
 
-	it("passes empty string into parseArtifactUri when fileUri vanishes after isArtifactRef", async () => {
-		const service = new InMemoryArtifactService();
-		const path = "app/user-1/session-1/flicker-ref.txt";
-		let reads = 0;
-		const fileData: { fileUri?: string; mimeType: string } = {
-			mimeType: "text/plain",
-		};
-		Object.defineProperty(fileData, "fileUri", {
-			enumerable: true,
-			configurable: true,
-			get() {
-				reads++;
-				if (reads === 1) {
-					return getArtifactUri({
-						...base,
-						filename: "target.txt",
-						version: 0,
-					});
-				}
-				return "";
-			},
-		});
-		(service as any).artifacts.set(path, [{ fileData }]);
-
-		await expect(
-			service.loadArtifact({ ...base, filename: "flicker-ref.txt" }),
-		).rejects.toThrow(/Invalid artifact reference URI/);
-		expect(reads).toBeGreaterThanOrEqual(2);
-	});
-
-	it('fileUri || "" path: undefined after first read also throws invalid URI', async () => {
-		const service = new InMemoryArtifactService();
-		const path = "app/user-1/session-1/flicker-undef.txt";
+	function makeFlickerRef(validUri: string, later: unknown) {
 		let reads = 0;
 		const fileData: { mimeType: string } = { mimeType: "text/plain" };
 		Object.defineProperty(fileData, "fileUri", {
@@ -52,12 +20,39 @@ describe('InMemoryArtifactService leftover: fileUri || ""', () => {
 			configurable: true,
 			get() {
 				reads++;
-				if (reads === 1) {
-					return "artifact://apps/app/users/user-1/artifacts/user:x.txt/versions/0";
+				if (reads <= 2) {
+					return validUri;
 				}
-				return undefined;
+				return later as any;
 			},
 		});
+		return { fileData, getReads: () => reads };
+	}
+
+	it("passes empty string into parseArtifactUri when fileUri vanishes after isArtifactRef", async () => {
+		const service = new InMemoryArtifactService();
+		const path = "app/user-1/session-1/flicker-ref.txt";
+		const validUri = getArtifactUri({
+			...base,
+			filename: "target.txt",
+			version: 0,
+		});
+		const { fileData, getReads } = makeFlickerRef(validUri, "");
+		(service as any).artifacts.set(path, [{ fileData }]);
+
+		await expect(
+			service.loadArtifact({ ...base, filename: "flicker-ref.txt" }),
+		).rejects.toThrow(/Invalid artifact reference URI/);
+		expect(getReads()).toBeGreaterThanOrEqual(3);
+	});
+
+	it('fileUri || "" path: undefined after isArtifactRef throws invalid URI', async () => {
+		const service = new InMemoryArtifactService();
+		const path = "app/user-1/session-1/flicker-undef.txt";
+		const { fileData } = makeFlickerRef(
+			"artifact://apps/app/users/user-1/artifacts/user:x.txt/versions/0",
+			undefined,
+		);
 		(service as any).artifacts.set(path, [{ fileData }]);
 
 		await expect(
@@ -68,19 +63,10 @@ describe('InMemoryArtifactService leftover: fileUri || ""', () => {
 	it('null fileUri after isArtifactRef uses || "" and throws', async () => {
 		const service = new InMemoryArtifactService();
 		const path = "app/user-1/session-1/flicker-null.txt";
-		let reads = 0;
-		const fileData: { mimeType: string } = { mimeType: "text/plain" };
-		Object.defineProperty(fileData, "fileUri", {
-			enumerable: true,
-			configurable: true,
-			get() {
-				reads++;
-				if (reads === 1) {
-					return "artifact://apps/app/users/user-1/sessions/session-1/artifacts/t.txt/versions/0";
-				}
-				return null;
-			},
-		});
+		const { fileData } = makeFlickerRef(
+			"artifact://apps/app/users/user-1/sessions/session-1/artifacts/t.txt/versions/0",
+			null,
+		);
 		(service as any).artifacts.set(path, [{ fileData }]);
 
 		await expect(
@@ -94,23 +80,14 @@ describe('InMemoryArtifactService leftover: fileUri || ""', () => {
 		it(`fileUri flicker to ${JSON.stringify(laterUri)} hits || "" / invalid parse`, async () => {
 			const service = new InMemoryArtifactService();
 			const path = `app/user-1/session-1/flicker-${String(laterUri)}.txt`;
-			let reads = 0;
-			const fileData: { mimeType: string } = { mimeType: "text/plain" };
-			Object.defineProperty(fileData, "fileUri", {
-				enumerable: true,
-				configurable: true,
-				get() {
-					reads++;
-					if (reads === 1) {
-						return getArtifactUri({
-							...base,
-							filename: "src.txt",
-							version: 0,
-						});
-					}
-					return laterUri as any;
-				},
-			});
+			const { fileData } = makeFlickerRef(
+				getArtifactUri({
+					...base,
+					filename: "src.txt",
+					version: 0,
+				}),
+				laterUri,
+			);
 			(service as any).artifacts.set(path, [{ fileData }]);
 			await expect(
 				service.loadArtifact({

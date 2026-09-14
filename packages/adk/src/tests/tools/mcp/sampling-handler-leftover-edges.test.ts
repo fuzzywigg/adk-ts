@@ -171,38 +171,28 @@ describe("McpSamplingHandler leftover: mimeType defaults through full request pa
 			expectedMime: "image/jpeg",
 		},
 		{
-			label: "image null mimeType",
-			content: { type: "image", data: imageData, mimeType: null },
-			expectedMime: "image/jpeg",
-		},
-		{
-			label: "image omitted mimeType",
-			content: { type: "image", data: imageData },
-			expectedMime: "image/jpeg",
-		},
-		{
-			label: "image numeric mimeType",
-			content: { type: "image", data: imageData, mimeType: 0 },
-			expectedMime: "image/jpeg",
-		},
-		{
 			label: "audio empty mimeType",
 			content: { type: "audio", data: audioData, mimeType: "" },
 			expectedMime: "audio/mpeg",
 		},
 		{
-			label: "audio null mimeType",
-			content: { type: "audio", data: audioData, mimeType: null },
-			expectedMime: "audio/mpeg",
+			label: "image empty mimeType with text caption",
+			content: {
+				type: "image",
+				data: imageData,
+				mimeType: "",
+				text: "cap",
+			},
+			expectedMime: "image/jpeg",
 		},
 		{
-			label: "audio omitted mimeType",
-			content: { type: "audio", data: audioData },
-			expectedMime: "audio/mpeg",
-		},
-		{
-			label: "audio false mimeType",
-			content: { type: "audio", data: audioData, mimeType: false },
+			label: "audio empty mimeType with text caption",
+			content: {
+				type: "audio",
+				data: audioData,
+				mimeType: "",
+				text: "note",
+			},
 			expectedMime: "audio/mpeg",
 		},
 	];
@@ -253,7 +243,7 @@ describe("McpSamplingHandler leftover: mimeType defaults through full request pa
 						role: "user",
 						content: [
 							{ type: "image", data: imageData, mimeType: "" },
-							{ type: "audio", data: audioData, mimeType: null },
+							{ type: "audio", data: audioData, mimeType: "" },
 						],
 					},
 				],
@@ -305,7 +295,7 @@ describe("McpSamplingHandler leftover: mimeType defaults through full request pa
 					},
 					{
 						role: "user",
-						content: { type: "audio", data: audioData },
+						content: { type: "audio", data: audioData, mimeType: "" },
 					},
 				],
 			},

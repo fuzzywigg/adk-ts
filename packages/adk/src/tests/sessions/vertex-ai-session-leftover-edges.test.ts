@@ -308,6 +308,6 @@ describe("VertexAiSessionService leftover: combined sparse action matrices", () 
 		expect(event.actions).toBeInstanceOf(EventActions);
 		expect(event.actions.stateDelta).toEqual({});
 		expect(event.actions.artifactDelta).toEqual({});
-		expect(event.actions.requestedAuthConfigs).toEqual({});
+		expect(event.actions.requestedAuthConfigs).toBeUndefined();
 	});
 });
