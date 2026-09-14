@@ -23,8 +23,8 @@ import {
  * Eighteenth leftover (HEAVY tip-relaunch residual after #242):
  * `eventData.timestamp || "0"` then parseFloat — eighteenth pins `[]` → NaN
  * throw; seventeenth pins boolean `true`. Empty object `{}` → parseFloat NaN
- * → RangeError; `Infinity` → parseFloat Infinity → formatTimestamp RangeError
- * (distinct coercion, same reject).
+ * → RangeError. JSON numeric `Infinity` stringifies to `null` → coalesce `"0"`
+ * → epoch (asymmetry vs string `"Infinity"` → parseFloat Infinity → throw).
  */
 describe("vertex-rag timestamp empty-object / Infinity nan-throw eighteenth leftover", () => {
 	beforeEach(() => {
@@ -66,9 +66,9 @@ describe("vertex-rag timestamp empty-object / Infinity nan-throw eighteenth left
 		).rejects.toThrow(RangeError);
 	});
 
-	it("timestamp Infinity → parseFloat Infinity → formatTimestamp RangeError", async () => {
-		expect(Number.parseFloat(Number.POSITIVE_INFINITY as any)).toBe(
-			Number.POSITIVE_INFINITY,
+	it('JSON Infinity → null → coalesce "0" → epoch memory', async () => {
+		expect(JSON.stringify({ timestamp: Number.POSITIVE_INFINITY })).toContain(
+			'"timestamp":null',
 		);
 		vi.spyOn(rag, "retrieval_query").mockResolvedValue({
 			contexts: {
@@ -78,6 +78,32 @@ describe("vertex-rag timestamp empty-object / Infinity nan-throw eighteenth left
 						text: JSON.stringify({
 							author: "a",
 							timestamp: Number.POSITIVE_INFINITY,
+							text: "t",
+						}),
+					},
+				],
+			},
+		});
+		const service = new VertexAiRagMemoryService("corpus");
+		const result = await service.searchMemory({
+			appName: "app",
+			userId: "user",
+			query: "q",
+		});
+		expect(result.memories).toHaveLength(1);
+		expect(result.memories[0].timestamp).toBe(new Date(0).toISOString());
+	});
+
+	it('timestamp string "Infinity" → parseFloat Infinity → RangeError', async () => {
+		expect(Number.parseFloat("Infinity")).toBe(Number.POSITIVE_INFINITY);
+		vi.spyOn(rag, "retrieval_query").mockResolvedValue({
+			contexts: {
+				contexts: [
+					{
+						source_display_name: "app.user.s1",
+						text: JSON.stringify({
+							author: "a",
+							timestamp: "Infinity",
 							text: "t",
 						}),
 					},
