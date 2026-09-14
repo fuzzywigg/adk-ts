@@ -57,4 +57,17 @@ describe("BuiltInPlanner", () => {
 
 		expect(request.config).toEqual({ thinkingConfig });
 	});
+
+	it("no-ops applyThinkingConfig when thinkingConfig is falsy", () => {
+		const planner = new BuiltInPlanner({
+			thinkingConfig: undefined as any,
+		});
+		const request = new LlmRequest();
+		request.config = { temperature: 0.1 } as any;
+
+		planner.applyThinkingConfig(request);
+
+		expect(request.config).toEqual({ temperature: 0.1 });
+		expect((request.config as any).thinkingConfig).toBeUndefined();
+	});
 });

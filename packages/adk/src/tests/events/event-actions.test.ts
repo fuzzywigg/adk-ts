@@ -60,4 +60,17 @@ describe("EventActions", () => {
 		expect(empty.stateDelta).toEqual({});
 		expect(empty.artifactDelta).toEqual({});
 	});
+
+	it("coalesces explicitly undefined deltas to empty objects", () => {
+		const actions = new EventActions({
+			stateDelta: undefined,
+			artifactDelta: undefined,
+			escalate: false,
+			skipSummarization: false,
+		});
+		expect(actions.stateDelta).toEqual({});
+		expect(actions.artifactDelta).toEqual({});
+		expect(actions.escalate).toBe(false);
+		expect(actions.skipSummarization).toBe(false);
+	});
 });

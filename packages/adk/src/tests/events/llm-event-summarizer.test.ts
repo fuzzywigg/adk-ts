@@ -499,5 +499,83 @@ describe("LlmEventSummarizer", () => {
 
 			expect(await summarizer.maybeSummarizeEvents(events)).toBeUndefined();
 		});
+
+		it("joins multiple text parts within a single stream chunk", async () => {
+			const events = [
+				new Event({
+					invocationId: "inv-1",
+					author: "user",
+					content: { parts: [{ text: "Hello" }] },
+					timestamp: 1000,
+				}),
+			];
+
+			async function* mockGenerator() {
+				yield {
+					content: {
+						parts: [{ text: "part-a" }, { text: "part-b" }, { text: "" }],
+					},
+				};
+			}
+			(mockLlm.generateContentAsync as any).mockReturnValue(mockGenerator());
+
+			const result = await summarizer.maybeSummarizeEvents(events);
+			expect(result?.actions?.compaction?.compactedContent.parts[0].text).toBe(
+				"part-apart-b",
+			);
+		});
+
+		it("leaves custom prompts without {events} unchanged and omits event body", async () => {
+			const custom = new LlmEventSummarizer(
+				mockLlm,
+				"Static prompt with no placeholder",
+			);
+			const events = [
+				new Event({
+					invocationId: "inv-1",
+					author: "user",
+					content: { parts: [{ text: "secret-event-body" }] },
+					timestamp: 1000,
+				}),
+			];
+
+			async function* mockGenerator() {
+				yield { content: { parts: [{ text: "ok" }] } };
+			}
+			(mockLlm.generateContentAsync as any).mockReturnValue(mockGenerator());
+
+			await custom.maybeSummarizeEvents(events);
+			const promptText = (mockLlm.generateContentAsync as any).mock.calls[0][0]
+				.contents[0].parts[0].text as string;
+			expect(promptText).toBe("Static prompt with no placeholder");
+			expect(promptText).not.toContain("secret-event-body");
+		});
+
+		it("formats functionCall without args and functionResponse without response", async () => {
+			const events = [
+				new Event({
+					invocationId: "inv-1",
+					author: "agent",
+					content: {
+						parts: [
+							{ functionCall: { name: "noop" } as any },
+							{ functionResponse: { name: "noop" } as any },
+						],
+					},
+					timestamp: 1000,
+				}),
+			];
+
+			async function* mockGenerator() {
+				yield { content: { parts: [{ text: "done" }] } };
+			}
+			(mockLlm.generateContentAsync as any).mockReturnValue(mockGenerator());
+
+			await summarizer.maybeSummarizeEvents(events);
+			const promptText = (mockLlm.generateContentAsync as any).mock.calls[0][0]
+				.contents[0].parts[0].text as string;
+			expect(promptText).toContain("Called tool 'noop' with args undefined");
+			expect(promptText).toContain("Tool 'noop' returned: undefined");
+		});
 	});
 });
