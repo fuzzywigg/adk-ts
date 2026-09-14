@@ -84,7 +84,8 @@ describe("Logger stack whitespace filter(Boolean) leftover edges", () => {
 		expect(rendered).toContain("↳ first (a.ts:1:1)");
 		expect(rendered).not.toContain("↳ second");
 		// totalFrames = split length - 1 includes the whitespace line before filter
-		expect(rendered).toContain("more frames");
+		// 3 post-message lines (1 blank + 2 real) - maxFrames 1 → … 2 more
+		expect(rendered).toContain("↳ … 2 more frames");
 	});
 
 	it("Error with empty stack string skips Stack section (falsy stack gate)", () => {

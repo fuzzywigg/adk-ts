@@ -92,6 +92,13 @@ describe("Logger fourth leftover — columns / severity / format matrices", () =
 			{ severity: "not-a-level", icon: "🚧" },
 			{ severity: "", icon: "🚧" },
 			{ severity: "CRITICAL", icon: "🚧" },
+			{ severity: 0, icon: "🚧" },
+			{ severity: false, icon: "🚧" },
+			{ severity: null, icon: "🚧" },
+			{ severity: "WARN", icon: "🚧" },
+			{ severity: "INFO", icon: "🚧" },
+			{ severity: "ERROR", icon: "🚧" },
+			{ severity: "Warn", icon: "🚧" },
 		];
 
 		for (const row of severities) {

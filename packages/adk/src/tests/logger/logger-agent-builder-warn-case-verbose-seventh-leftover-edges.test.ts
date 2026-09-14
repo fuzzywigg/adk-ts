@@ -123,6 +123,33 @@ describe("Logger seventh leftover — ADK_AGENT_BUILDER_WARN === 'verbose' + opt
 		expect(rendered).toContain("k=4");
 	});
 
+	/**
+	 * Residual: opts.verbose || env — truthy non-booleans enable Context even
+	 * when ADK_AGENT_BUILDER_WARN is unset / mismatched.
+	 */
+	it.each([
+		{ label: "1", verbose: 1 },
+		{ label: "yes", verbose: "yes" },
+		{ label: "verbose string", verbose: "verbose" },
+		{ label: "object", verbose: { ok: true } },
+	] as const)("opts.verbose=$label truthy enables Context without exact env", ({
+		verbose,
+	}) => {
+		delete process.env.ADK_AGENT_BUILDER_WARN;
+		const logger = new Logger({ name: "abw-opts-truthy" });
+		logger.warnStructured(
+			{
+				code: "C",
+				message: "m",
+				context: { k: 5 },
+			},
+			{ format: "pretty", verbose: verbose as any },
+		);
+		const rendered = stripAnsi(String(warnSpy.mock.calls[0][0]));
+		expect(rendered).toContain("Context:");
+		expect(rendered).toContain("k=5");
+	});
+
 	it("text format also requires exact env 'verbose' for Context", () => {
 		process.env.ADK_AGENT_BUILDER_WARN = "Verbose";
 		const logger = new Logger({ name: "abw-text" });

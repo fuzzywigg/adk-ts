@@ -98,4 +98,40 @@ describe("standalone env.ts loadEnvironmentVariables leftover edges", () => {
 		expect(process.env.HASH_VAL).toBe("#hash");
 		expect(process.env.skipped).toBeUndefined();
 	});
+
+	it(".env.local wins over later .env (!process.env gate, same list as EnvUtils)", () => {
+		const root = mkdtempSync(join(tmpdir(), "adk-cli-envts-prec-"));
+		const agentFile = agentUnder(root);
+		writeFileSync(join(root, ".env.local"), "STANDALONE_SAME=from-local\n");
+		writeFileSync(join(root, ".env"), "STANDALONE_SAME=from-dotenv\n");
+		delete process.env.STANDALONE_SAME;
+
+		loadEnvironmentVariables(agentFile);
+
+		expect(process.env.STANDALONE_SAME).toBe("from-local");
+	});
+
+	it("does not strip single quotes; value.trim() still applies", () => {
+		const root = mkdtempSync(join(tmpdir(), "adk-cli-envts-sq-"));
+		const agentFile = agentUnder(root);
+		writeFileSync(join(root, ".env"), "SINGLE_Q='kept'\nPADDED=  trim-me  \n");
+		delete process.env.SINGLE_Q;
+		delete process.env.PADDED;
+
+		loadEnvironmentVariables(agentFile);
+
+		expect(process.env.SINGLE_Q).toBe("'kept'");
+		expect(process.env.PADDED).toBe("trim-me");
+	});
+
+	it("keeps existing process.env 'false' (truthy string) against overwrite", () => {
+		const root = mkdtempSync(join(tmpdir(), "adk-cli-envts-false-"));
+		const agentFile = agentUnder(root);
+		writeFileSync(join(root, ".env"), "STANDALONE_FALSE=from-file\n");
+		process.env.STANDALONE_FALSE = "false";
+
+		loadEnvironmentVariables(agentFile);
+
+		expect(process.env.STANDALONE_FALSE).toBe("false");
+	});
 });

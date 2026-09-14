@@ -55,6 +55,26 @@ describe("EnvUtils empty-env overwrite leftover edges", () => {
 		expect(process.env.ZERO_KEEP).toBe("0");
 	});
 
+	it.each([
+		{ label: "false", existing: "false" },
+		{ label: "space", existing: " " },
+		{ label: "tab", existing: "\t" },
+	] as const)("keeps existing process.env '$label' (truthy string) vs empty overwrite", ({
+		existing,
+	}) => {
+		const root = mkdtempSync(
+			join(tmpdir(), `adk-cli-env-keep-${existing.length}-`),
+		);
+		const agentFile = agentUnder(root);
+		writeFileSync(join(root, ".env"), "TRUTHY_KEEP=from-file\n");
+		process.env.TRUTHY_KEEP = existing;
+
+		const utils = new EnvUtils({ warn: vi.fn() } as never, true);
+		utils.loadEnvironmentVariables(agentFile);
+
+		expect(process.env.TRUTHY_KEEP).toBe(existing);
+	});
+
 	it("assigns KEY= with empty value because valueParts.length > 0", () => {
 		const root = mkdtempSync(join(tmpdir(), "adk-cli-env-blank-"));
 		const agentFile = agentUnder(root);

@@ -132,4 +132,65 @@ describe("EnvUtils quiet/catch/quote/precedence leftover edges", () => {
 		expect(process.env.NOEQUALS).toBeUndefined();
 		expect(process.env[""]).toBeUndefined();
 	});
+
+	it("value.trim() strips trailing/leading spaces after quote strip", () => {
+		const root = mkdtempSync(join(tmpdir(), "adk-cli-env-vtrim-"));
+		const agentFile = agentUnder(root);
+		writeFileSync(
+			join(root, ".env"),
+			'PADDED=  spaced  \nQ_PADDED="  quoted  "\n',
+		);
+		delete process.env.PADDED;
+		delete process.env.Q_PADDED;
+
+		const utils = new EnvUtils({ warn: vi.fn() } as never, true);
+		utils.loadEnvironmentVariables(agentFile);
+
+		expect(process.env.PADDED).toBe("spaced");
+		expect(process.env.Q_PADDED).toBe("quoted");
+	});
+
+	it("keeps process.env 'false' / ' ' (truthy strings) against .env overwrite", () => {
+		const root = mkdtempSync(join(tmpdir(), "adk-cli-env-truthy-str-"));
+		const agentFile = agentUnder(root);
+		writeFileSync(
+			join(root, ".env"),
+			"FALSE_KEEP=from-file\nSPACE_KEEP=from-file\n",
+		);
+		process.env.FALSE_KEEP = "false";
+		process.env.SPACE_KEEP = " ";
+
+		const utils = new EnvUtils({ warn: vi.fn() } as never, true);
+		utils.loadEnvironmentVariables(agentFile);
+
+		expect(process.env.FALSE_KEEP).toBe("false");
+		expect(process.env.SPACE_KEEP).toBe(" ");
+	});
+
+	it(".env.development wins over later .env for same key (mid-list priority)", () => {
+		const root = mkdtempSync(join(tmpdir(), "adk-cli-env-dev-"));
+		const agentFile = agentUnder(root);
+		writeFileSync(join(root, ".env.development"), "MID_KEY=from-dev\n");
+		writeFileSync(join(root, ".env"), "MID_KEY=from-dotenv\n");
+		delete process.env.MID_KEY;
+
+		const utils = new EnvUtils({ warn: vi.fn() } as never, true);
+		utils.loadEnvironmentVariables(agentFile);
+
+		expect(process.env.MID_KEY).toBe("from-dev");
+	});
+
+	it("leading-whitespace # line is comment after trim (startsWith('#') post-trim)", () => {
+		const root = mkdtempSync(join(tmpdir(), "adk-cli-env-ws-hash-"));
+		const agentFile = agentUnder(root);
+		writeFileSync(join(root, ".env"), "  # SKIPPED=1\nKEEP_WS_HASH=ok\n");
+		delete process.env.SKIPPED;
+		delete process.env.KEEP_WS_HASH;
+
+		const utils = new EnvUtils({ warn: vi.fn() } as never, true);
+		utils.loadEnvironmentVariables(agentFile);
+
+		expect(process.env.SKIPPED).toBeUndefined();
+		expect(process.env.KEEP_WS_HASH).toBe("ok");
+	});
 });
