@@ -61,6 +61,9 @@ describe("Logger objectToLines/wrap sixth leftover edges (post #151)", () => {
 	it.each([
 		{ label: "null", data: null },
 		{ label: "undefined", data: undefined },
+		{ label: "0", data: 0 },
+		{ label: "false", data: false },
+		{ label: "empty string", data: "" },
 	] as const)("objectToLines coalesces $label via Object.entries(obj || {}) to (empty)", ({
 		data,
 	}) => {

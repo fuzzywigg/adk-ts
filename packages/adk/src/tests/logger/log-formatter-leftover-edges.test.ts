@@ -394,6 +394,84 @@ describe("LogFormatter leftover truncation / part-type matrices", () => {
 		).toThrow();
 	});
 
+	/**
+	 * Residual: formatFunctionCalls uses truthy filter (part.functionCall).
+	 * Filtered-empty join yields "" (not the early "none" for empty input).
+	 * getPartType uses !== undefined so formatContentParts still types
+	 * function_call and formatSingleFunctionCall reads .name/.args off the
+	 * primitive (undefined name, "{}" args) without throwing.
+	 */
+	it.each([
+		{ label: "0", functionCall: 0 },
+		{ label: "empty string", functionCall: "" },
+		{ label: "false", functionCall: false },
+	])("formatFunctionCalls filters falsy functionCall=$label to ''; formatContentParts still types it", ({
+		functionCall,
+	}) => {
+		const part = { functionCall } as Part;
+		expect(LogFormatter.formatFunctionCalls([part])).toBe("");
+		expect(LogFormatter.formatFunctionCalls([])).toBe("none");
+		const lines = LogFormatter.formatContentParts({
+			role: "model",
+			parts: [part],
+		});
+		expect(lines[0]).toContain("[0] function_call:");
+		expect(lines[0]).toContain("undefined(");
+		expect(lines[0]).toContain("{}");
+	});
+
+	it("same-part text wins getPartType priority over functionCall", () => {
+		const lines = LogFormatter.formatContentParts({
+			role: "model",
+			parts: [
+				{
+					text: "hi",
+					functionCall: { name: "ignored", args: { a: 1 } } as FunctionCall,
+				} as Part,
+			],
+		});
+		expect(lines[0]).toContain("[0] text:");
+		expect(lines[0]).toContain('"hi"');
+		expect(lines[0]).not.toContain("ignored");
+	});
+
+	it.each([
+		{ label: "empty string", code: "", expected: '""' },
+		{ label: "null", code: null, expected: '""' },
+		{ label: "0", code: 0, expected: '""' },
+		{ label: "false", code: false, expected: '""' },
+		{ label: "whitespace", code: " ", expected: '" "' },
+	])("executableCode.code || '' for $label", ({ code, expected }) => {
+		const lines = LogFormatter.formatContentParts({
+			parts: [
+				{
+					executableCode: { code: code as any, language: "PYTHON" as any },
+				},
+			],
+		});
+		expect(lines[0]).toContain(`executable_code: ${expected}`);
+	});
+
+	it.each([
+		{ label: "empty string", outcome: "", expected: "unknown" },
+		{ label: "0", outcome: 0, expected: "unknown" },
+		{ label: "false", outcome: false, expected: "unknown" },
+		{ label: "null", outcome: null, expected: "unknown" },
+		{ label: "whitespace", outcome: " ", expected: " " },
+	])("codeExecutionResult.outcome || 'unknown' for $label", ({
+		outcome,
+		expected,
+	}) => {
+		const lines = LogFormatter.formatContentParts({
+			parts: [
+				{
+					codeExecutionResult: { outcome: outcome as any },
+				} as Part,
+			],
+		});
+		expect(lines[0]).toContain(`execution result: ${expected}`);
+	});
+
 	const argBoundary = [
 		{ n: 49, repeat: 41 },
 		{ n: 50, repeat: 42 },

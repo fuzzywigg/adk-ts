@@ -25,4 +25,14 @@ describe("CI workflow logger/env test gate leftover edges", () => {
 	it("ci.yml still installs with frozen lockfile (reproducible env)", () => {
 		expect(ciYml).toContain("pnpm install --frozen-lockfile");
 	});
+
+	it("ci.yml pins Node 22 matching package engines for env-sensitive Vitest", () => {
+		expect(ciYml).toMatch(/node-version:\s*22\b/);
+	});
+
+	it("ci.yml still runs ADK coverage after pnpm test (logger leftovers stay gated)", () => {
+		const testIdx = ciYml.indexOf("run: pnpm test");
+		const coverageIdx = ciYml.indexOf("pnpm --filter @iqai/adk test:coverage");
+		expect(coverageIdx).toBeGreaterThan(testIdx);
+	});
 });
