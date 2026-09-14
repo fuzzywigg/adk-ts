@@ -1673,20 +1673,42 @@ describe("Runner.runAsync", () => {
 		expect(events[0].content?.parts?.[0]?.text).toBe("sync-default-rc");
 	});
 
-	it("sync run exits cleanly when the session is missing", async () => {
-		const debugSpy = vi
-			.spyOn(runner["logger"], "debug")
-			.mockImplementation(() => {});
-		const generator = runner.run({
-			userId: "u1",
-			sessionId: "missing-sync",
-			newMessage: { role: "user", parts: [{ text: "go" }] },
+	it("sync run forwards an explicit RunConfig into runAsync", async () => {
+		await sessionService.createSession("runner-app", "u1", {}, "s-sync-cfg");
+		const runConfig = new RunConfig({ saveInputBlobsAsArtifacts: false });
+		vi.spyOn(agent, "runAsync").mockImplementation(async function* (ctx) {
+			expect(ctx.runConfig).toBe(runConfig);
+			yield new Event({
+				author: "root_agent",
+				content: { role: "model", parts: [{ text: "cfg-ok" }] },
+			});
 		});
 
-		await vi.waitFor(() => {
-			expect(debugSpy).toHaveBeenCalled();
+		const generator = runner.run({
+			userId: "u1",
+			sessionId: "s-sync-cfg",
+			newMessage: { role: "user", parts: [{ text: "go" }] },
+			runConfig,
 		});
-		expect([...generator]).toEqual([]);
+
+		await vi.waitFor(async () => {
+			const session = await sessionService.getSession(
+				"runner-app",
+				"u1",
+				"s-sync-cfg",
+			);
+			expect(
+				session?.events.some(
+					(e) =>
+						e.author === "root_agent" &&
+						e.content?.parts?.[0]?.text === "cfg-ok",
+				),
+			).toBe(true);
+		});
+
+		const events = [...generator];
+		expect(events).toHaveLength(1);
+		expect(events[0].content?.parts?.[0]?.text).toBe("cfg-ok");
 	});
 
 	it("sync run drains multiple events in order", async () => {
@@ -1751,18 +1773,28 @@ describe("Runner.runAsync", () => {
 		expect([...generator]).toEqual([]);
 	});
 
-	it("sync run surfaces runAsync failures after the busy-wait loop", async () => {
-		await sessionService.createSession("runner-app", "u1", {}, "s-sync-err");
-		vi.spyOn(agent, "runAsync").mockImplementation(
-			// biome-ignore lint/correctness/useYield: error-path mock must throw before yielding
-			async function* () {
-				throw new Error("sync agent boom");
-			},
+	it("sync run yields only non-null events when the agent streams partial then final", async () => {
+		await sessionService.createSession(
+			"runner-app",
+			"u1",
+			{},
+			"s-sync-partial",
 		);
+		vi.spyOn(agent, "runAsync").mockImplementation(async function* () {
+			yield new Event({
+				author: "root_agent",
+				partial: true,
+				content: { role: "model", parts: [{ text: "chunk" }] },
+			});
+			yield new Event({
+				author: "root_agent",
+				content: { role: "model", parts: [{ text: "final" }] },
+			});
+		});
 
 		const generator = runner.run({
 			userId: "u1",
-			sessionId: "s-sync-err",
+			sessionId: "s-sync-partial",
 			newMessage: { role: "user", parts: [{ text: "go" }] },
 		});
 
@@ -1770,12 +1802,21 @@ describe("Runner.runAsync", () => {
 			const session = await sessionService.getSession(
 				"runner-app",
 				"u1",
-				"s-sync-err",
+				"s-sync-partial",
 			);
-			expect(session?.events.some((e) => e.author === "user")).toBe(true);
+			expect(
+				session?.events.some(
+					(e) =>
+						e.author === "root_agent" &&
+						e.content?.parts?.[0]?.text === "final",
+				),
+			).toBe(true);
 		});
 
-		expect([...generator]).toEqual([]);
+		const events = [...generator];
+		expect(events).toHaveLength(2);
+		expect(events[0].partial).toBe(true);
+		expect(events[1].content?.parts?.[0]?.text).toBe("final");
 	});
 
 	it("skips unknown authors then routes to an earlier transferable sub-agent", async () => {
