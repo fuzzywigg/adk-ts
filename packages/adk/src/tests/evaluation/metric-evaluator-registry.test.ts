@@ -1,11 +1,14 @@
 import { describe, expect, it, vi } from "vitest";
 import type { EvalMetric } from "../../evaluation/eval-metrics";
 import { PrebuiltMetrics } from "../../evaluation/eval-metrics";
+import { RougeEvaluator } from "../../evaluation/final-response-match-v1";
+import { FinalResponseMatchV2Evaluator } from "../../evaluation/final-response-match-v2";
 import {
 	DEFAULT_METRIC_EVALUATOR_REGISTRY,
 	type EvaluatorConstructor,
 	MetricEvaluatorRegistry,
 } from "../../evaluation/metric-evaluator-registry";
+import { ResponseEvaluator } from "../../evaluation/response-evaluator";
 import { TrajectoryEvaluator } from "../../evaluation/trajectory-evaluator";
 
 class StubEvaluator {
@@ -84,5 +87,42 @@ describe("MetricEvaluatorRegistry", () => {
 			threshold: 1,
 		});
 		expect(evaluator).toBeInstanceOf(TrajectoryEvaluator);
+	});
+
+	it("resolves RESPONSE_MATCH_SCORE to ResponseEvaluator (Rouge path)", () => {
+		const evaluator = DEFAULT_METRIC_EVALUATOR_REGISTRY.getEvaluator({
+			metricName: PrebuiltMetrics.RESPONSE_MATCH_SCORE,
+			threshold: 0.7,
+		});
+		expect(evaluator).toBeInstanceOf(ResponseEvaluator);
+		// RougeEvaluator remains a standalone match implementation with the same metric name
+		expect(RougeEvaluator.getMetricInfo().metricName).toBe(
+			PrebuiltMetrics.RESPONSE_MATCH_SCORE,
+		);
+	});
+
+	it("resolves FINAL_RESPONSE_MATCH_V2 to FinalResponseMatchV2Evaluator", () => {
+		const evaluator = DEFAULT_METRIC_EVALUATOR_REGISTRY.getEvaluator({
+			metricName: PrebuiltMetrics.FINAL_RESPONSE_MATCH_V2,
+			threshold: 0.6,
+		});
+		expect(evaluator).toBeInstanceOf(FinalResponseMatchV2Evaluator);
+	});
+
+	it("exposes match metric info from the default registry", () => {
+		const metrics = DEFAULT_METRIC_EVALUATOR_REGISTRY.getRegisteredMetrics();
+		const rouge = metrics.find(
+			(metric) => metric.metricName === PrebuiltMetrics.RESPONSE_MATCH_SCORE,
+		);
+		const matchV2 = metrics.find(
+			(metric) => metric.metricName === PrebuiltMetrics.FINAL_RESPONSE_MATCH_V2,
+		);
+
+		expect(rouge?.description).toContain("Rouge_1");
+		expect(rouge?.metricValueInfo.interval?.minValue).toBe(0);
+		expect(rouge?.metricValueInfo.interval?.maxValue).toBe(1);
+		expect(matchV2?.description).toContain("LLM judge");
+		expect(matchV2?.metricValueInfo.interval?.minValue).toBe(0);
+		expect(matchV2?.metricValueInfo.interval?.maxValue).toBe(1);
 	});
 });
