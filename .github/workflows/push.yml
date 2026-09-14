@@ -35,6 +35,7 @@ jobs:
       - name: Build ADK package
         run: pnpm --filter @iqai/adk build
       - name: ADK runners/flows residual nineteenth leftover slice
+        # Shared nineteenth filter also covers tip #233 tools residual files.
         # Reversible focused gate for TOKENMAXX leftover deepen on this module slice.
         run: pnpm --filter @iqai/adk exec vitest run nineteenth-leftover-edges
       - name: ADK + CLI tests
