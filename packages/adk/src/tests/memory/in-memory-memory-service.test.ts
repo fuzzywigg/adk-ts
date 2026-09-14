@@ -459,4 +459,351 @@ describe("InMemoryMemoryService", () => {
 			}),
 		).toEqual({ memories: [] });
 	});
+
+	it("indexes empty parts arrays but yields no keyword matches from them", async () => {
+		const service = new InMemoryMemoryService();
+		await service.addSessionToMemory(
+			makeSession({
+				events: [
+					{
+						author: "user",
+						timestamp: 1,
+						content: { parts: [] },
+					} as any,
+					{
+						author: "user",
+						timestamp: 2,
+						content: { parts: [{ text: "Alive Rome marble" }] },
+					} as any,
+				],
+			}),
+		);
+
+		const hits = await service.searchMemory({
+			appName: "app",
+			userId: "user",
+			query: "rome",
+		});
+		expect(hits.memories).toHaveLength(1);
+		expect(hits.memories[0].content?.parts?.[0]?.text).toContain("Rome");
+	});
+
+	it("filters events whose content.parts is null at index time", async () => {
+		const service = new InMemoryMemoryService();
+		await service.addSessionToMemory(
+			makeSession({
+				events: [
+					{
+						author: "user",
+						timestamp: 1,
+						content: { parts: null },
+					} as any,
+					{
+						author: "user",
+						timestamp: 2,
+						content: { parts: [{ text: "Keep Vienna quiet" }] },
+					} as any,
+				],
+			}),
+		);
+
+		const hits = await service.searchMemory({
+			appName: "app",
+			userId: "user",
+			query: "vienna",
+		});
+		expect(hits.memories).toHaveLength(1);
+	});
+
+	it("does not match query tokens that retain punctuation", async () => {
+		const service = new InMemoryMemoryService();
+		await service.addSessionToMemory(makeSession());
+
+		const punctuated = await service.searchMemory({
+			appName: "app",
+			userId: "user",
+			query: "paris,",
+		});
+		expect(punctuated.memories).toEqual([]);
+
+		const clean = await service.searchMemory({
+			appName: "app",
+			userId: "user",
+			query: "paris",
+		});
+		expect(clean.memories).toHaveLength(1);
+	});
+
+	it("requires full word equality rather than substring matches", async () => {
+		const service = new InMemoryMemoryService();
+		await service.addSessionToMemory(makeSession());
+
+		const partial = await service.searchMemory({
+			appName: "app",
+			userId: "user",
+			query: "pari",
+		});
+		expect(partial.memories).toEqual([]);
+
+		const longer = await service.searchMemory({
+			appName: "app",
+			userId: "user",
+			query: "pariss",
+		});
+		expect(longer.memories).toEqual([]);
+	});
+
+	it("skips digit-only and symbol-heavy text that yields no letter words", async () => {
+		const service = new InMemoryMemoryService();
+		await service.addSessionToMemory(
+			makeSession({
+				events: [
+					{
+						author: "user",
+						timestamp: 1,
+						content: { parts: [{ text: "42 007 3.14" }] },
+					} as any,
+					{
+						author: "user",
+						timestamp: 2,
+						content: { parts: [{ text: "$$$ ### @@@" }] },
+					} as any,
+					{
+						author: "user",
+						timestamp: 3,
+						content: { parts: [{ text: "Cairo nights" }] },
+					} as any,
+				],
+			}),
+		);
+
+		const digits = await service.searchMemory({
+			appName: "app",
+			userId: "user",
+			query: "42",
+		});
+		expect(digits.memories).toEqual([]);
+
+		const cairo = await service.searchMemory({
+			appName: "app",
+			userId: "user",
+			query: "cairo",
+		});
+		expect(cairo.memories).toHaveLength(1);
+	});
+
+	it("extracts letter runs across hyphens and underscores as separate words", async () => {
+		const service = new InMemoryMemoryService();
+		await service.addSessionToMemory(
+			makeSession({
+				events: [
+					{
+						author: "user",
+						timestamp: 1,
+						content: {
+							parts: [{ text: "well-known foo_bar cityscape" }],
+						},
+					} as any,
+				],
+			}),
+		);
+
+		const well = await service.searchMemory({
+			appName: "app",
+			userId: "user",
+			query: "well",
+		});
+		const known = await service.searchMemory({
+			appName: "app",
+			userId: "user",
+			query: "known",
+		});
+		const foo = await service.searchMemory({
+			appName: "app",
+			userId: "user",
+			query: "foo",
+		});
+		const bar = await service.searchMemory({
+			appName: "app",
+			userId: "user",
+			query: "bar",
+		});
+		const joined = await service.searchMemory({
+			appName: "app",
+			userId: "user",
+			query: "well-known",
+		});
+
+		expect(well.memories).toHaveLength(1);
+		expect(known.memories).toHaveLength(1);
+		expect(foo.memories).toHaveLength(1);
+		expect(bar.memories).toHaveLength(1);
+		expect(joined.memories).toEqual([]);
+	});
+
+	it("stores empty-event sessions under the user key without searchable text", async () => {
+		const service = new InMemoryMemoryService();
+		await service.addSessionToMemory(makeSession({ events: [] }));
+
+		const hits = await service.searchMemory({
+			appName: "app",
+			userId: "user",
+			query: "paris",
+		});
+		expect(hits.memories).toEqual([]);
+	});
+
+	it("formats numeric epoch timestamps on matched memories", async () => {
+		const service = new InMemoryMemoryService();
+		const ms = Date.parse("2024-09-01T08:30:00.000Z");
+		await service.addSessionToMemory(
+			makeSession({
+				events: [
+					{
+						author: "historian",
+						timestamp: ms,
+						content: { parts: [{ text: "Lisbon archive note" }] },
+					} as any,
+				],
+			}),
+		);
+
+		const hits = await service.searchMemory({
+			appName: "app",
+			userId: "user",
+			query: "lisbon",
+		});
+		expect(hits.memories).toHaveLength(1);
+		expect(hits.memories[0].author).toBe("historian");
+		expect(hits.memories[0].timestamp).toBe("2024-09-01T08:30:00.000Z");
+	});
+
+	it("ignores empty query tokens created by consecutive spaces", async () => {
+		const service = new InMemoryMemoryService();
+		await service.addSessionToMemory(makeSession());
+
+		const hits = await service.searchMemory({
+			appName: "app",
+			userId: "user",
+			query: "paris   sunny",
+		});
+		expect(hits.memories).toHaveLength(1);
+	});
+
+	it("does not match author or metadata — only event text words", async () => {
+		const service = new InMemoryMemoryService();
+		await service.addSessionToMemory(
+			makeSession({
+				events: [
+					{
+						author: "specialAuthor",
+						timestamp: 1,
+						content: { parts: [{ text: "Only about rivers" }] },
+					} as any,
+				],
+			}),
+		);
+
+		const byAuthor = await service.searchMemory({
+			appName: "app",
+			userId: "user",
+			query: "specialauthor",
+		});
+		expect(byAuthor.memories).toEqual([]);
+
+		const byText = await service.searchMemory({
+			appName: "app",
+			userId: "user",
+			query: "rivers",
+		});
+		expect(byText.memories).toHaveLength(1);
+		expect(byText.memories[0].author).toBe("specialAuthor");
+	});
+
+	it("deprecated getters still warn and stay empty after sessions are indexed", async () => {
+		const service = new InMemoryMemoryService();
+		await service.addSessionToMemory(makeSession());
+		const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+
+		expect(service.getAllSessions()).toEqual([]);
+		expect(service.getSession("session-1")).toBeUndefined();
+		expect(warn).toHaveBeenCalledTimes(2);
+
+		warn.mockRestore();
+	});
+
+	it("skips parts with falsy text while still matching sibling text parts", async () => {
+		const service = new InMemoryMemoryService();
+		await service.addSessionToMemory(
+			makeSession({
+				events: [
+					{
+						author: "user",
+						timestamp: 1,
+						content: {
+							parts: [
+								{ text: "" },
+								{ text: undefined },
+								{ text: "Helsinki snow" },
+							],
+						},
+					} as any,
+				],
+			}),
+		);
+
+		const hits = await service.searchMemory({
+			appName: "app",
+			userId: "user",
+			query: "helsinki",
+		});
+		expect(hits.memories).toHaveLength(1);
+	});
+
+	it("returns empty when searching an unknown app even if userId collides", async () => {
+		const service = new InMemoryMemoryService();
+		await service.addSessionToMemory(makeSession());
+
+		const hits = await service.searchMemory({
+			appName: "missing-app",
+			userId: "user",
+			query: "paris",
+		});
+		expect(hits.memories).toEqual([]);
+	});
+
+	it("preserves encounter order of matching events across sessions", async () => {
+		const service = new InMemoryMemoryService();
+		await service.addSessionToMemory(
+			makeSession({
+				id: "s-a",
+				events: [
+					{
+						author: "a",
+						timestamp: 1,
+						content: { parts: [{ text: "Alpha mention of Zurich" }] },
+					} as any,
+				],
+			}),
+		);
+		await service.addSessionToMemory(
+			makeSession({
+				id: "s-b",
+				events: [
+					{
+						author: "b",
+						timestamp: 2,
+						content: { parts: [{ text: "Beta mention of Zurich" }] },
+					} as any,
+				],
+			}),
+		);
+
+		const hits = await service.searchMemory({
+			appName: "app",
+			userId: "user",
+			query: "zurich",
+		});
+		expect(hits.memories.map((m) => m.author)).toEqual(["a", "b"]);
+	});
 });

@@ -103,4 +103,82 @@ describe("experimental", () => {
 		expect(returned).toBe(anon);
 		expect(warn).toHaveBeenCalledWith("Warning: Using experimental feature ''");
 	});
+
+	it("returns descriptors with falsy value fields unchanged", () => {
+		const zeroValue = { value: 0 };
+		const emptyValue = { value: "" };
+		const falseValue = { value: false };
+		expect(experimental(zeroValue)).toBe(zeroValue);
+		expect(experimental(emptyValue)).toBe(emptyValue);
+		expect(experimental(falseValue)).toBe(falseValue);
+	});
+
+	it("preserves this binding when wrapping instance methods", () => {
+		const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+		class Host {
+			label = "bound";
+			read() {
+				return this.label;
+			}
+		}
+
+		const descriptor = Object.getOwnPropertyDescriptor(Host.prototype, "read")!;
+		experimental(descriptor);
+		Object.defineProperty(Host.prototype, "read", descriptor);
+
+		expect(new Host().read()).toBe("bound");
+		expect(warn).toHaveBeenCalledTimes(1);
+	});
+
+	it("still warns when the wrapped method throws", () => {
+		const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+		class Host {
+			fail() {
+				throw new Error("boom");
+			}
+		}
+
+		const descriptor = Object.getOwnPropertyDescriptor(Host.prototype, "fail")!;
+		experimental(descriptor);
+		Object.defineProperty(Host.prototype, "fail", descriptor);
+
+		expect(() => new Host().fail()).toThrow("boom");
+		expect(warn).toHaveBeenCalledWith("Warning: Using experimental feature");
+	});
+
+	it("returns the same descriptor object reference after wrapping", () => {
+		const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+		class Host {
+			ping() {
+				return "pong";
+			}
+		}
+		const descriptor = Object.getOwnPropertyDescriptor(Host.prototype, "ping")!;
+		const returned = experimental(descriptor);
+		expect(returned).toBe(descriptor);
+		expect(warn).not.toHaveBeenCalled();
+		Object.defineProperty(Host.prototype, "ping", returned);
+		expect(new Host().ping()).toBe("pong");
+		expect(warn).toHaveBeenCalledTimes(1);
+	});
+
+	it("warns for named function targets using their name", () => {
+		const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+		const namedArrow = function namedArrowFn() {
+			return 1;
+		};
+		expect(experimental(namedArrow)).toBe(namedArrow);
+		expect(warn).toHaveBeenCalledWith(
+			"Warning: Using experimental feature 'namedArrowFn'",
+		);
+	});
+
+	it("warns for anonymous class constructors with empty names", () => {
+		const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+		const Anon = experimental(class {});
+		expect(warn).toHaveBeenCalledWith("Warning: Using experimental feature ''");
+		expect(new Anon()).toBeInstanceOf(Anon);
+	});
 });

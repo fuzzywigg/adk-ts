@@ -704,4 +704,146 @@ describe("injectSessionState", () => {
 			expect(result).toContain('"city": "NYC"');
 		});
 	});
+
+	describe("leftover resolution edges", () => {
+		it("trims whitespace around optional markers before resolving", async () => {
+			mockContext.session.state = { userName: "Ada" };
+			const present = await injectSessionState(
+				"Hi {  userName?  }!",
+				readonlyContext,
+			);
+			expect(present).toBe("Hi Ada!");
+
+			mockContext.session.state = {};
+			const missing = await injectSessionState(
+				"Hi {  userName?  }!",
+				readonlyContext,
+			);
+			expect(missing).toBe("Hi !");
+		});
+
+		it("resolves nested properties under prefixed state roots", async () => {
+			mockContext.session.state = {
+				"user:profile": { city: "Lisbon", tags: ["a", "b"] },
+			};
+			const result = await injectSessionState(
+				"{user:profile.city}/{user:profile.tags[1]}",
+				readonlyContext,
+			);
+			expect(result).toBe("Lisbon/b");
+		});
+
+		it("treats dotted artifact filenames as a single artifact key", async () => {
+			mockContext.artifactService = {
+				loadArtifact: vi.fn().mockResolvedValue("csv-body"),
+			} as any;
+
+			const result = await injectSessionState(
+				"File={artifact.report.csv}",
+				readonlyContext,
+			);
+			expect(result).toBe("File=csv-body");
+			expect(mockContext.artifactService.loadArtifact).toHaveBeenCalledWith({
+				appName: "test-app",
+				userId: "test-user",
+				sessionId: "test-session",
+				filename: "report.csv",
+			});
+		});
+
+		it("treats empty-string artifact payloads as missing", async () => {
+			mockContext.artifactService = {
+				loadArtifact: vi.fn().mockResolvedValue(""),
+			} as any;
+
+			await expect(
+				injectSessionState("{artifact.empty}", readonlyContext),
+			).rejects.toThrow("Artifact empty not found.");
+
+			const optional = await injectSessionState(
+				"X={artifact.empty?}",
+				readonlyContext,
+			);
+			expect(optional).toBe("X=");
+		});
+
+		it("stringifies function state values via String()", async () => {
+			mockContext.session.state = {
+				fn() {
+					return 1;
+				},
+			};
+			const result = await injectSessionState("F={fn}", readonlyContext);
+			expect(result.startsWith("F=")).toBe(true);
+			expect(result).toMatch(/fn|function/);
+		});
+
+		it("repeats the same placeholder independently", async () => {
+			mockContext.session.state = { n: 3 };
+			const result = await injectSessionState("{n}+{n}={n}", readonlyContext);
+			expect(result).toBe("3+3=3");
+		});
+
+		it("injects present optional nested values without stripping them", async () => {
+			mockContext.session.state = { user: { age: 41 } };
+			const result = await injectSessionState(
+				"Age={user.age?}",
+				readonlyContext,
+			);
+			expect(result).toBe("Age=41");
+		});
+
+		it("formats whitespace-only strings without treating them as missing", async () => {
+			mockContext.session.state = { pad: "   " };
+			const result = await injectSessionState("[{pad}]", readonlyContext);
+			expect(result).toBe("[   ]");
+		});
+
+		it("leaves invalid optional roots as literals including the question mark", async () => {
+			const result = await injectSessionState(
+				"{bad-name?} {1bad?}",
+				readonlyContext,
+			);
+			expect(result).toBe("{bad-name?} {1bad?}");
+		});
+
+		it("resolves bracket paths that mix dots inside and outside quotes", async () => {
+			mockContext.session.state = {
+				cfg: {
+					"a.b": { "c.d": 9 },
+				},
+			};
+			const result = await injectSessionState(
+				"V={cfg['a.b']['c.d']}",
+				readonlyContext,
+			);
+			expect(result).toBe("V=9");
+		});
+
+		it("throws for required nested miss after an earlier optional success", async () => {
+			mockContext.session.state = { a: 1 };
+			await expect(
+				injectSessionState("{a?} then {missing.nested}", readonlyContext),
+			).rejects.toThrow("Context variable not found: `missing.nested`.");
+		});
+
+		it("formats deeply nested arrays as indented JSON when injected at root", async () => {
+			mockContext.session.state = {
+				grid: [
+					[1, 2],
+					[3, 4],
+				],
+			};
+			const result = await injectSessionState("{grid}", readonlyContext);
+			expect(result).toBe(
+				"[\n  [\n    1,\n    2\n  ],\n  [\n    3,\n    4\n  ]\n]",
+			);
+		});
+
+		it("accepts $ in the identifier portion of prefixed names", async () => {
+			mockContext.session.state = { "temp:$tmp": "ok" };
+			const result = await injectSessionState("{temp:$tmp}", readonlyContext);
+			expect(result).toBe("ok");
+		});
+	});
 });

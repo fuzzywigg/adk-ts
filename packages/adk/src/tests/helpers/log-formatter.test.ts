@@ -405,4 +405,134 @@ describe("LogFormatter", () => {
 			).toBe("empty -> {}");
 		});
 	});
+
+	describe("leftover formatter edges", () => {
+		it("returns empty string when every part lacks a functionCall", () => {
+			expect(
+				LogFormatter.formatFunctionCalls([
+					{ text: "only text" },
+					{ functionResponse: { name: "x", response: {} } } as Part,
+				]),
+			).toBe("");
+		});
+
+		it("returns no text content for empty parts arrays", () => {
+			expect(
+				LogFormatter.formatContentPreview({
+					role: "user",
+					parts: [],
+				}),
+			).toBe("no text content");
+		});
+
+		it("returns none for null content previews", () => {
+			expect(LogFormatter.formatContentPreview(null as any)).toBe("none");
+		});
+
+		it("does not ellipsize text that is exactly 80 characters", () => {
+			const text = "a".repeat(80);
+			const result = LogFormatter.formatContentPreview({
+				role: "user",
+				parts: [{ text }],
+			});
+			expect(result).toBe(text);
+			expect(result).not.toContain("...");
+		});
+
+		it("ellipsizes text that is 81 characters", () => {
+			const text = "a".repeat(81);
+			const result = LogFormatter.formatContentPreview({
+				role: "user",
+				parts: [{ text }],
+			});
+			expect(result).toBe(`${"a".repeat(80)}...`);
+		});
+
+		it("filters falsy text parts down to no text content", () => {
+			expect(
+				LogFormatter.formatContentPreview({
+					role: "user",
+					parts: [{ text: "" }, { text: undefined as any }],
+				}),
+			).toBe("no text content");
+		});
+
+		it("formatContentParts returns an empty array for empty parts", () => {
+			expect(
+				LogFormatter.formatContentParts({ role: "user", parts: [] }),
+			).toEqual([]);
+		});
+
+		it("does not ellipsize part text that is exactly 50 characters", () => {
+			const text = "b".repeat(50);
+			const [line] = LogFormatter.formatContentParts({
+				role: "user",
+				parts: [{ text }],
+			});
+			expect(line).toBe(`[0] text: "${text}"`);
+			expect(line).not.toContain("...");
+		});
+
+		it("ellipsizes part text longer than 50 characters", () => {
+			const text = "b".repeat(51);
+			const [line] = LogFormatter.formatContentParts({
+				role: "user",
+				parts: [{ text }],
+			});
+			expect(line).toBe(`[0] text: "${"b".repeat(50)}..."`);
+		});
+
+		it("pretty-prints function responses across multiple lines", () => {
+			const result = LogFormatter.formatFunctionResponse({
+				functionResponse: {
+					name: "lookup",
+					response: { a: 1, b: { c: 2 } },
+				},
+			});
+			expect(result).toContain("lookup ->");
+			expect(result.split("\n").length).toBeGreaterThan(1);
+			expect(result).toContain('"a": 1');
+		});
+
+		it("formatResponsePreview reports no text when content has only tool parts", () => {
+			const llmResponse = new LlmResponse({
+				content: {
+					role: "model",
+					parts: [
+						{
+							functionCall: {
+								name: "tool",
+								args: {},
+							} as FunctionCall,
+						},
+					],
+				},
+			});
+			expect(LogFormatter.formatResponsePreview(llmResponse)).toBe(
+				"no text content",
+			);
+		});
+
+		it("formats function calls whose name is missing as undefined(...)", () => {
+			const result = LogFormatter.formatFunctionCalls([
+				{ functionCall: { args: { x: 1 } } as FunctionCall },
+			]);
+			expect(result).toBe('undefined({"x":1})');
+		});
+
+		it("does not ellipsize JSON fallback content of exactly 80 chars", () => {
+			const content = { role: "user", blob: "x".repeat(55) } as Content;
+			const encoded = JSON.stringify(content);
+			expect(encoded.length).toBe(80);
+			expect(LogFormatter.formatContentPreview(content)).toBe(encoded);
+		});
+
+		it("joins multiple function calls with comma-space separators", () => {
+			const result = LogFormatter.formatFunctionCalls([
+				{ functionCall: { name: "a", args: {} } as FunctionCall },
+				{ functionCall: { name: "b", args: { z: 1 } } as FunctionCall },
+			]);
+			expect(result).toBe('a({}), b({"z":1})');
+		});
+	});
 });
