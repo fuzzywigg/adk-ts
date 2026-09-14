@@ -244,4 +244,241 @@ describe("HttpRequestTool", () => {
 		expect(fetchMock.mock.calls[0][1].signal).toBeDefined();
 		timeoutSpy.mockRestore();
 	});
+
+	it("declares full schema defaults for timeout and body/params/headers", () => {
+		const tool = new HttpRequestTool();
+		const props = tool.getDeclaration().parameters?.properties as Record<
+			string,
+			{ type?: unknown; default?: unknown; description?: string }
+		>;
+
+		expect(tool.description).toContain("HTTP requests");
+		expect(props.url.type).toBeTruthy();
+		expect(props.timeout.default).toBe(10000);
+		expect(props.headers.type).toBeTruthy();
+		expect(props.body.type).toBeTruthy();
+		expect(props.params.type).toBeTruthy();
+	});
+
+	it.each([
+		"POST",
+		"PUT",
+		"DELETE",
+		"PATCH",
+		"HEAD",
+		"OPTIONS",
+	] as const)("forwards HTTP method %s", async (method) => {
+		const tool = new HttpRequestTool();
+		const fetchMock = vi.fn().mockResolvedValue({
+			status: 204,
+			headers: new Headers(),
+			text: async () => "",
+		});
+		globalThis.fetch = fetchMock as typeof fetch;
+
+		await tool.runAsync(
+			{ url: "https://example.com/resource", method },
+			makeContext(),
+		);
+
+		expect(fetchMock).toHaveBeenCalledWith(
+			"https://example.com/resource",
+			expect.objectContaining({ method }),
+		);
+	});
+
+	it("defaults timeout to 10000 via AbortSignal.timeout", async () => {
+		const tool = new HttpRequestTool();
+		const timeoutSpy = vi
+			.spyOn(AbortSignal, "timeout")
+			.mockReturnValue(AbortSignal.abort() as AbortSignal);
+		globalThis.fetch = vi.fn().mockResolvedValue({
+			status: 200,
+			headers: new Headers(),
+			text: async () => "ok",
+		}) as typeof fetch;
+
+		await tool.runAsync({ url: "https://example.com/default" }, makeContext());
+
+		expect(timeoutSpy).toHaveBeenCalledWith(10000);
+		timeoutSpy.mockRestore();
+	});
+
+	it("appends multiple params with the same key", async () => {
+		const tool = new HttpRequestTool();
+		const fetchMock = vi.fn().mockResolvedValue({
+			status: 200,
+			headers: new Headers(),
+			text: async () => "",
+		});
+		globalThis.fetch = fetchMock as typeof fetch;
+
+		await tool.runAsync(
+			{
+				url: "https://example.com/tags",
+				params: { tag: "a" },
+			},
+			makeContext(),
+		);
+
+		expect(fetchMock.mock.calls[0][0]).toBe("https://example.com/tags?tag=a");
+	});
+
+	it("skips param mutation when params is undefined", async () => {
+		const tool = new HttpRequestTool();
+		const fetchMock = vi.fn().mockResolvedValue({
+			status: 200,
+			headers: new Headers(),
+			text: async () => "",
+		});
+		globalThis.fetch = fetchMock as typeof fetch;
+
+		await tool.runAsync(
+			{ url: "https://example.com/plain", headers: undefined, body: undefined },
+			makeContext(),
+		);
+
+		expect(fetchMock).toHaveBeenCalledWith(
+			"https://example.com/plain",
+			expect.objectContaining({
+				method: "GET",
+				headers: {},
+				body: undefined,
+			}),
+		);
+	});
+
+	it("maps all response headers into a plain object", async () => {
+		const tool = new HttpRequestTool();
+		globalThis.fetch = vi.fn().mockResolvedValue({
+			status: 200,
+			headers: new Headers({
+				"content-type": "application/json",
+				"x-request-id": "abc-123",
+				"cache-control": "no-store",
+			}),
+			text: async () => "{}",
+		}) as typeof fetch;
+
+		const result = await tool.runAsync(
+			{ url: "https://example.com/headers" },
+			makeContext(),
+		);
+
+		expect(result.headers).toEqual({
+			"content-type": "application/json",
+			"x-request-id": "abc-123",
+			"cache-control": "no-store",
+		});
+		expect(result.body).toBe("{}");
+	});
+
+	it("returns non-2xx status codes without treating them as errors", async () => {
+		const tool = new HttpRequestTool();
+		globalThis.fetch = vi.fn().mockResolvedValue({
+			status: 404,
+			headers: new Headers({ "content-type": "text/plain" }),
+			text: async () => "missing",
+		}) as typeof fetch;
+
+		const result = await tool.runAsync(
+			{ url: "https://example.com/missing" },
+			makeContext(),
+		);
+
+		expect(result).toEqual({
+			statusCode: 404,
+			headers: { "content-type": "text/plain" },
+			body: "missing",
+		});
+		expect(result.error).toBeUndefined();
+	});
+
+	it("auto-sets Content-Type for JSON arrays and primitives", async () => {
+		const tool = new HttpRequestTool();
+		const fetchMock = vi.fn().mockResolvedValue({
+			status: 200,
+			headers: new Headers(),
+			text: async () => "ok",
+		});
+		globalThis.fetch = fetchMock as typeof fetch;
+
+		await tool.runAsync(
+			{
+				url: "https://example.com/arr",
+				method: "POST",
+				body: "[1,2,3]",
+			},
+			makeContext(),
+		);
+		expect(fetchMock.mock.calls[0][1].headers).toEqual({
+			"Content-Type": "application/json",
+		});
+
+		await tool.runAsync(
+			{
+				url: "https://example.com/num",
+				method: "POST",
+				body: "42",
+			},
+			makeContext(),
+		);
+		expect(fetchMock.mock.calls[1][1].headers).toEqual({
+			"Content-Type": "application/json",
+		});
+
+		await tool.runAsync(
+			{
+				url: "https://example.com/bool",
+				method: "POST",
+				body: "true",
+			},
+			makeContext(),
+		);
+		expect(fetchMock.mock.calls[2][1].headers).toEqual({
+			"Content-Type": "application/json",
+		});
+	});
+
+	it("preserves existing query string when appending params", async () => {
+		const tool = new HttpRequestTool();
+		const fetchMock = vi.fn().mockResolvedValue({
+			status: 200,
+			headers: new Headers(),
+			text: async () => "",
+		});
+		globalThis.fetch = fetchMock as typeof fetch;
+
+		await tool.runAsync(
+			{
+				url: "https://example.com/search?q=base",
+				params: { page: "2" },
+			},
+			makeContext(),
+		);
+
+		const calledUrl = fetchMock.mock.calls[0][0] as string;
+		expect(calledUrl).toContain("q=base");
+		expect(calledUrl).toContain("page=2");
+	});
+
+	it("sends empty string body when body is empty", async () => {
+		const tool = new HttpRequestTool();
+		const fetchMock = vi.fn().mockResolvedValue({
+			status: 200,
+			headers: new Headers(),
+			text: async () => "",
+		});
+		globalThis.fetch = fetchMock as typeof fetch;
+
+		await tool.runAsync(
+			{ url: "https://example.com/empty", method: "POST", body: "" },
+			makeContext(),
+		);
+
+		expect(fetchMock).toHaveBeenCalledWith(
+			"https://example.com/empty",
+			expect.objectContaining({ body: "", headers: {} }),
+		);
+	});
 });
