@@ -7,7 +7,7 @@ function makeContext(): ToolContext {
 	return {} as ToolContext;
 }
 
-describe("GoogleSearch", () => {
+describe("GoogleSearch (declaration + mock contract)", () => {
 	it("exposes google_search declaration schema", () => {
 		const tool = new GoogleSearch();
 		const declaration = tool.getDeclaration();
@@ -21,6 +21,7 @@ describe("GoogleSearch", () => {
 		expect(declaration?.parameters?.properties?.num_results?.type).toBe(
 			Type.INTEGER,
 		);
+		expect(declaration?.parameters?.properties?.num_results?.default).toBe(5);
 	});
 
 	it("returns mock search results from runAsync", async () => {
@@ -34,5 +35,34 @@ describe("GoogleSearch", () => {
 		expect(result.results[0].title).toContain("adk");
 		expect(result.results[0].link).toMatch(/^https:\/\//);
 		expect(result.results[1].snippet).toContain("adk");
+	});
+
+	it("ignores num_results and always yields the fixed mock payload shape", async () => {
+		const tool = new GoogleSearch();
+		const result = await tool.runAsync(
+			{ query: "shape", num_results: 10 },
+			makeContext(),
+		);
+
+		expect(Object.keys(result)).toEqual(["results"]);
+		for (const item of result.results) {
+			expect(Object.keys(item).sort()).toEqual(["link", "snippet", "title"]);
+			expect(typeof item.title).toBe("string");
+			expect(typeof item.link).toBe("string");
+			expect(typeof item.snippet).toBe("string");
+		}
+	});
+
+	it("works when context is a bare object without actions", async () => {
+		const tool = new GoogleSearch();
+		const result = await tool.runAsync({ query: "bare" }, {} as ToolContext);
+		expect(result.results).toHaveLength(2);
+	});
+
+	it("produces distinct titles for result 1 and result 2", async () => {
+		const tool = new GoogleSearch();
+		const result = await tool.runAsync({ query: "distinct" }, makeContext());
+		expect(result.results[0].title).not.toBe(result.results[1].title);
+		expect(result.results[0].link).not.toBe(result.results[1].link);
 	});
 });
