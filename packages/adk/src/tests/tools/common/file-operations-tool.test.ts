@@ -572,15 +572,20 @@ describe("FileOperationsTool", () => {
 			makeContext(),
 		);
 
-		vi.spyOn(fs, "readFile").mockRejectedValueOnce("boom-string");
+		const readSpy = vi
+			.spyOn(fs, "readFile")
+			.mockRejectedValueOnce("boom-string");
 		await expect(
 			tool.runAsync({ operation: "read", filepath: "seed.txt" }, makeContext()),
 		).resolves.toEqual({
 			success: false,
 			error: "Failed to read file: boom-string",
 		});
+		readSpy.mockRestore();
 
-		vi.spyOn(fs, "writeFile").mockRejectedValueOnce("boom-string");
+		const writeSpy = vi
+			.spyOn(fs, "writeFile")
+			.mockRejectedValueOnce("boom-string");
 		await expect(
 			tool.runAsync(
 				{ operation: "write", filepath: "seed.txt", content: "x" },
@@ -590,8 +595,11 @@ describe("FileOperationsTool", () => {
 			success: false,
 			error: "Failed to write to file: boom-string",
 		});
+		writeSpy.mockRestore();
 
-		vi.spyOn(fs, "appendFile").mockRejectedValueOnce("boom-string");
+		const appendSpy = vi
+			.spyOn(fs, "appendFile")
+			.mockRejectedValueOnce("boom-string");
 		await expect(
 			tool.runAsync(
 				{ operation: "append", filepath: "seed.txt", content: "x" },
@@ -601,8 +609,11 @@ describe("FileOperationsTool", () => {
 			success: false,
 			error: "Failed to append to file: boom-string",
 		});
+		appendSpy.mockRestore();
 
-		vi.spyOn(fs, "unlink").mockRejectedValueOnce("boom-string");
+		const unlinkSpy = vi
+			.spyOn(fs, "unlink")
+			.mockRejectedValueOnce("boom-string");
 		await expect(
 			tool.runAsync(
 				{ operation: "delete", filepath: "seed.txt" },
@@ -612,16 +623,20 @@ describe("FileOperationsTool", () => {
 			success: false,
 			error: "Failed to delete file: boom-string",
 		});
+		unlinkSpy.mockRestore();
 
-		vi.spyOn(fs, "readdir").mockRejectedValueOnce("boom-string");
+		const readdirSpy = vi
+			.spyOn(fs, "readdir")
+			.mockRejectedValueOnce("boom-string");
 		await expect(
 			tool.runAsync({ operation: "list", filepath: "seed-dir" }, makeContext()),
 		).resolves.toEqual({
 			success: false,
 			error: "Failed to list directory: boom-string",
 		});
+		readdirSpy.mockRestore();
 
-		vi.spyOn(fs, "mkdir").mockRejectedValueOnce("boom-string");
+		const mkdirSpy = vi.spyOn(fs, "mkdir").mockRejectedValueOnce("boom-string");
 		await expect(
 			tool.runAsync(
 				{ operation: "mkdir", filepath: "new-fail-dir" },
@@ -631,6 +646,7 @@ describe("FileOperationsTool", () => {
 			success: false,
 			error: "Failed to create directory: boom-string",
 		});
+		mkdirSpy.mockRestore();
 	});
 
 	it("stringifies non-Error throws from the outer catch path", async () => {
