@@ -223,10 +223,16 @@ describe("MCP create-tool client retry edges", () => {
 		});
 	});
 
-	it("exhausts with maxRetryAttempts 0 (defaults via metadata ?? keep 0? uses 0)", async () => {
-		// metadata.maxRetryAttempts ?? 3 — explicit 0 is kept as 0
+	it("maxRetryAttempts 0 from metadata falls through BaseTool || 3 and still retries", async () => {
+		// Adapter passes metadata.maxRetryAttempts ?? 3 (keeps 0), then BaseTool
+		// applies config.maxRetryAttempts || 3 so effective max becomes 3.
+		let attempts = 0;
 		const callTool = vi.fn(async () => {
-			throw new Error("closed");
+			attempts++;
+			if (attempts <= 2) {
+				throw new Error("closed");
+			}
+			return { recovered: true };
 		});
 		vi.spyOn(console, "warn").mockImplementation(() => undefined);
 		const tool = await convertMcpToolToBaseTool({
@@ -239,12 +245,11 @@ describe("MCP create-tool client retry edges", () => {
 			client: { callTool } as any,
 		});
 
-		expect(tool.maxRetryAttempts).toBe(0);
-		await expect(tool.runAsync({}, makeContext())).rejects.toBeInstanceOf(
-			McpError,
-		);
-		// attempt <= 0 means only the first attempt runs
-		expect(callTool).toHaveBeenCalledTimes(1);
+		expect(tool.maxRetryAttempts).toBe(3);
+		await expect(tool.runAsync({}, makeContext())).resolves.toEqual({
+			recovered: true,
+		});
+		expect(callTool).toHaveBeenCalledTimes(3);
 	});
 
 	it("wraps non-Error closed throws without retry (non-Error is not closed-resource)", async () => {

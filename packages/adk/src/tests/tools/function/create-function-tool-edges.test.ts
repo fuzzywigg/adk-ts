@@ -1,7 +1,32 @@
-import { describe, expect, it, vi } from "vitest";
-import { FunctionTool } from "../../../tools/function/function-tool";
+import Module from "node:module";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { createFunctionTool } from "../../../tools/function";
+import * as functionToolModule from "../../../tools/function/function-tool";
+import { FunctionTool } from "../../../tools/function/function-tool";
 import type { ToolContext } from "../../../tools/tool-context";
+
+/**
+ * createFunctionTool uses CJS require("./function-tool") without an extension.
+ * Under Vitest's TypeScript ESM runner that relative id does not resolve, so
+ * we map it to the already-loaded ESM module namespace for this suite only.
+ */
+const originalRequire = Module.prototype.require;
+beforeAll(() => {
+	Module.prototype.require = function (
+		this: NodeModule,
+		id: string,
+		...rest: unknown[]
+	) {
+		if (id === "./function-tool" || id === "./function-tool.js") {
+			return functionToolModule;
+		}
+		return originalRequire.apply(this, [id, ...rest] as [string]);
+	} as typeof Module.prototype.require;
+});
+
+afterAll(() => {
+	Module.prototype.require = originalRequire;
+});
 
 function makeContext(): ToolContext {
 	return { actions: {} } as ToolContext;
@@ -452,9 +477,9 @@ describe("createFunctionTool factory", () => {
 			},
 		};
 
-		const tool = createFunctionTool(api.fetchItem.bind(api), {
+		const tool = createFunctionTool((id: string) => api.fetchItem(id), {
 			name: "fetch_item",
-			description: "Fetches an item by id via bound method",
+			description: "Fetches an item by id via method-style wrapper",
 		});
 
 		expect(tool.name).toBe("fetch_item");
@@ -462,6 +487,22 @@ describe("createFunctionTool factory", () => {
 			id: "42",
 			ok: true,
 		});
+	});
+
+	it("bound native methods lack parseable params so args are not forwarded", async () => {
+		const api = {
+			fetchItem(id: string) {
+				return { id, ok: true };
+			},
+		};
+		const bound = api.fetchItem.bind(api);
+		const tool = createFunctionTool(bound, {
+			name: "bound_fetch",
+			description: "Bound method with native toString",
+		});
+
+		const result = await tool.runAsync({ id: "42" }, makeContext());
+		expect(result).toEqual({ id: undefined, ok: true });
 	});
 
 	it("preserves custom name on anonymous async functions", async () => {
