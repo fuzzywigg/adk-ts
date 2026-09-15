@@ -3,10 +3,10 @@ import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 
 /**
- * Twenty-first leftover residual deepen (soft after tip #284 / #287):
+ * Twenty-first leftover residual deepen (soft after tip #292 / #287):
  * tip auth/memory owns focused `twentieth-leftover-edges` push.yml filter;
  * agents true-asymmetry residual deepen stays gated via full pnpm test.
- * Soften sibling nineteenth soft-pins left stale after #287 retarget.
+ * Soft pin only after #292 string-inf/obj-one/obj-false deepen — no steal.
  */
 describe("agents true-asymmetry ci workflow twenty-first residual deepen leftover edges", () => {
 	const root = resolve(__dirname, "../../../../..");
