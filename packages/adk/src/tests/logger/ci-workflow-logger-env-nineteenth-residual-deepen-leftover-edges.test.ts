@@ -3,9 +3,10 @@ import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 
 /**
- * Nineteenth leftover residual deepen (soft after tip #279 / 3a81cea):
- * tip logger/env owns focused `nineteenth-leftover-edges` push.yml filter;
- * residual deepen files share that gate via filename suffix; no steal.
+ * Nineteenth leftover residual deepen (soft after tip #287 / #292):
+ * tip auth/memory owns focused `twentieth-leftover-edges` push.yml filter;
+ * logger/env nineteenth residual deepen stays gated via full pnpm test;
+ * no focused-gate steal. Soften stale nineteenth hard pin after #287 retarget.
  */
 describe("logger/env ci workflow nineteenth residual deepen leftover edges", () => {
 	const root = resolve(__dirname, "../../../../..");
@@ -30,12 +31,12 @@ describe("logger/env ci workflow nineteenth residual deepen leftover edges", () 
 		expect(push).toMatch(/run:\s*pnpm test\b/);
 	});
 
-	it("push.yml focused gate pins nineteenth leftover edges (shared with tip #279)", () => {
+	it("push.yml focused gate pins twentieth leftover edges (auth/memory tip)", () => {
 		const push = readFileSync(
 			resolve(root, ".github/workflows/push.yml"),
 			"utf8",
 		);
-		expect(push).toContain("nineteenth-leftover-edges");
+		expect(push).toContain("twentieth-leftover-edges");
 	});
 
 	it("ci.yml still pins Node 22 and frozen lockfile", () => {
