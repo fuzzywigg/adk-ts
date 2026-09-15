@@ -62,6 +62,8 @@ describe("LlmAgent tools/outputKey infinity twenty-second leftover", () => {
 	it("SameValueZero -0 outputKey is falsy and skips state write", () => {
 		const agent = new LlmAgent({ name: "owner", outputKey: -0 as any });
 		const event = save(agent, "should-skip");
-		expect(event.actions.stateDelta).toBeUndefined();
+		expect(event.actions.stateDelta).toEqual({});
+		expect(event.actions.stateDelta?.["0"]).toBeUndefined();
+		expect(event.actions.stateDelta?.["-0"]).toBeUndefined();
 	});
 });

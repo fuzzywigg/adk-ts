@@ -1,36 +1,40 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { BaseAgent } from "../../agents/base-agent";
 import type { InvocationContext } from "../../agents/invocation-context";
 import { LangGraphAgent } from "../../agents/lang-graph-agent";
 import { Event } from "../../events/event";
-import { PluginManager } from "../../plugins/plugin-manager";
-import type { BaseSessionService } from "../../sessions/base-session-service";
+
+vi.mock("@adk/helpers/logger", () => ({
+	Logger: vi.fn(() => ({
+		debug: vi.fn(),
+		error: vi.fn(),
+		info: vi.fn(),
+		warn: vi.fn(),
+	})),
+}));
 
 class MockAgent extends BaseAgent {
 	executionCount = 0;
 
 	constructor(name: string) {
-		super({ name, description: "" });
+		super({ name, description: `Mock ${name}` });
 	}
 
-	protected async *runAsyncImpl(
+	async *runAsync(
 		_ctx: InvocationContext,
 	): AsyncGenerator<Event, void, unknown> {
 		this.executionCount++;
-		yield new Event({ author: this.name });
-	}
-
-	protected async *runLiveImpl(
-		_ctx: InvocationContext,
-	): AsyncGenerator<Event, void, unknown> {
-		yield* this.runAsyncImpl(_ctx);
+		yield new Event({
+			author: this.name,
+			content: { parts: [{ text: `from ${this.name}` }] },
+		});
 	}
 }
 
 function createMockContext(): InvocationContext {
 	return {
 		invocationId: "twenty-second-lg-posinf-inv",
-		agent: {} as any,
+		agent: {} as BaseAgent,
 		branch: "",
 		session: {
 			id: "ses-lg-22",
@@ -39,11 +43,13 @@ function createMockContext(): InvocationContext {
 			state: {},
 			events: [],
 			lastUpdateTime: 0,
-		} as any,
+		} as InvocationContext["session"],
 		endInvocation: false,
-		sessionService: {} as BaseSessionService,
-		pluginManager: new PluginManager(),
-		createChildContext: vi.fn(),
+		createChildContext: vi.fn((agent) => {
+			const child = createMockContext();
+			child.agent = agent;
+			return child;
+		}),
 	} as unknown as InvocationContext;
 }
 
@@ -65,6 +71,10 @@ async function drain(
  * terminal — residual +Inf asymmetry vs `-Infinity` zero-run.
  */
 describe("LangGraph maxSteps posinf twenty-second leftover", () => {
+	beforeEach(() => {
+		vi.clearAllMocks();
+	});
+
 	it("POSITIVE_INFINITY maxSteps is kept and executes the root node", async () => {
 		const only = new MockAgent("only");
 		const graph = new LangGraphAgent({
