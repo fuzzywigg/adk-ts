@@ -4,8 +4,9 @@ import { describe, expect, it } from "vitest";
 
 /**
  * Eighteenth leftover residual deepen (complements open #253):
- * soft reversible workflow pins — agents twenty-first still owns focused
- * push.yml filter; logger/env residual deepen stays gated via full pnpm test.
+ * soft reversible workflow pins — auth/memory twentieth residual owns
+ * focused push.yml filter; logger/env residual deepen stays gated via
+ * full pnpm test.
  */
 describe("logger/env ci workflow eighteenth residual deepen leftover edges", () => {
 	const root = resolve(__dirname, "../../../../..");
@@ -28,14 +29,6 @@ describe("logger/env ci workflow eighteenth residual deepen leftover edges", () 
 		expect(push).toMatch(/run:\s*pnpm lint\b/);
 		expect(push).toContain("pnpm --filter @iqai/adk build");
 		expect(push).toMatch(/run:\s*pnpm test\b/);
-	});
-
-	it("push.yml focused gate still pins twenty-first leftover edges (agents tip)", () => {
-		const push = readFileSync(
-			resolve(root, ".github/workflows/push.yml"),
-			"utf8",
-		);
-		expect(push).toContain("twenty-first-leftover-edges");
 	});
 
 	it("ci.yml still pins Node 22 and frozen lockfile", () => {

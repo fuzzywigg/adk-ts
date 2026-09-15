@@ -3,12 +3,13 @@ import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 
 /**
- * Twenty-first leftover: reversible workflow assertions for the agents
- * boolean-true / string-true / SameValueZero `-0` residual asymmetry Vitest
- * slice after tip #246. Softened while auth/memory twentieth residual owns
- * the focused filter pin — pins lint/build/test only.
+ * Twentieth leftover: reversible workflow assertions for the auth/memory
+ * HEAVY residual truthiness Vitest slice after tip #258 nineteenth /
+ * tip #261. Retargets the focused leftover gate on push checks to
+ * twentieth-leftover-edges; existing ci.yml `pnpm test` / ADK coverage
+ * steps still cover the full suite.
  */
-describe("agents true-asymmetry ci workflow twenty-first leftover edges", () => {
+describe("auth/memory ci workflow twentieth leftover edges", () => {
 	const root = resolve(__dirname, "../../../../..");
 
 	it("ci.yml build-and-test still runs pnpm test and ADK coverage", () => {
@@ -20,7 +21,7 @@ describe("agents true-asymmetry ci workflow twenty-first leftover edges", () => 
 		expect(ci).toContain("continue-on-error: true");
 	});
 
-	it("push.yml still runs Biome lint, ADK build, and pnpm test", () => {
+	it("push.yml runs focused twentieth leftover slice then pnpm test", () => {
 		const push = readFileSync(
 			resolve(root, ".github/workflows/push.yml"),
 			"utf8",
@@ -29,6 +30,7 @@ describe("agents true-asymmetry ci workflow twenty-first leftover edges", () => 
 		expect(push).toContain("- main");
 		expect(push).toMatch(/run:\s*pnpm lint\b/);
 		expect(push).toContain("pnpm --filter @iqai/adk build");
+		expect(push).toContain("twentieth-leftover-edges");
 		expect(push).toMatch(/run:\s*pnpm test\b/);
 	});
 
@@ -38,5 +40,11 @@ describe("agents true-asymmetry ci workflow twenty-first leftover edges", () => 
 		expect(ci).toMatch(
 			/group:\s*ci-\$\{\{\s*github\.workflow\s*\}\}-\$\{\{\s*github\.ref\s*\}\}/,
 		);
+	});
+
+	it("ci.yml still pins Node 22 and frozen lockfile", () => {
+		const ci = readFileSync(resolve(root, ".github/workflows/ci.yml"), "utf8");
+		expect(ci).toMatch(/node-version:\s*22\b/);
+		expect(ci).toContain("pnpm install --frozen-lockfile");
 	});
 });

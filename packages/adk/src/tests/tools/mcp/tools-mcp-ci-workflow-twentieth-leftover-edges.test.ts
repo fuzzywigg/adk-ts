@@ -6,8 +6,8 @@ import { describe, expect, it } from "vitest";
  * Twentieth leftover: reversible workflow assertions for the tools/mcp
  * boolean-true / string-true / SameValueZero `-0` / empty-array /
  * NEGATIVE_INFINITY residual Vitest slice after tip #251. Softened while
- * agents true-asymmetry twenty-first owns the focused filter pin — pins
- * lint/build/test only (no push.yml retarget; avoids #255 conflict).
+ * auth/memory twentieth residual owns the focused filter pin — pins
+ * lint/build/test only (focused gate shared via twentieth-leftover-edges).
  */
 describe("tools/mcp residual ci workflow twentieth leftover edges", () => {
 	const root = resolve(__dirname, "../../../../../..");
