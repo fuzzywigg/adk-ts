@@ -3,10 +3,9 @@ import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 
 /**
- * Nineteenth leftover (HEAVY tip-relaunch residual after providers tip #269):
- * soft reversible workflow pins — tip owns focused
- * `nineteenth-leftover-edges` push.yml filter; logger/env nineteenth files
- * share that gate via filename suffix; no focused-gate steal.
+ * Nineteenth leftover (soft after tip auth/memory twentieth / #287 + #289):
+ * tip auth/memory owns focused `twentieth-leftover-edges` push.yml filter;
+ * logger/env nineteenth suite stays gated via full `pnpm test` (no steal).
  */
 describe("logger/env ci workflow nineteenth leftover edges", () => {
 	const root = resolve(__dirname, "../../../../..");
@@ -31,12 +30,12 @@ describe("logger/env ci workflow nineteenth leftover edges", () => {
 		expect(push).toMatch(/run:\s*pnpm test\b/);
 	});
 
-	it("push.yml focused gate pins nineteenth leftover edges (shared with providers tip)", () => {
+	it("push.yml focused gate pins twentieth leftover edges (auth/memory tip)", () => {
 		const push = readFileSync(
 			resolve(root, ".github/workflows/push.yml"),
 			"utf8",
 		);
-		expect(push).toContain("nineteenth-leftover-edges");
+		expect(push).toContain("twentieth-leftover-edges");
 	});
 
 	it("ci.yml still pins Node 22 and frozen lockfile", () => {
