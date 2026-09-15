@@ -6,9 +6,8 @@ import { describe, expect, it } from "vitest";
  * Twentieth leftover (HEAVY tip-relaunch residual complement after providers
  * tip #269 / 03ff90a / merged #259): reversible workflow assertions for the
  * tools/mcp residual Vitest slice (PATH/env/maxTokens/messages/filter/schema).
- * Soft pin only — does not retarget push.yml focused gate (auth/memory #258
- * pins nineteenth-leftover-edges; providers #269 also soft-pinned). Vitest
- * stays on 3.x.
+ * Soft pin only — does not retarget push.yml focused gate (auth/memory
+ * pins twentieth-leftover-edges). Vitest stays on 3.x.
  */
 describe("tools/mcp residual complement ci workflow twentieth leftover edges", () => {
 	const root = resolve(__dirname, "../../../../../..");
@@ -34,13 +33,13 @@ describe("tools/mcp residual complement ci workflow twentieth leftover edges", (
 		expect(push).toMatch(/run:\s*pnpm test\b/);
 	});
 
-	it("push.yml focused gate still pins nineteenth leftover edges (auth/memory tip)", () => {
+	it("push.yml focused gate still pins twentieth leftover edges (auth/memory tip)", () => {
 		const push = readFileSync(
 			resolve(root, ".github/workflows/push.yml"),
 			"utf8",
 		);
-		expect(push).toContain("nineteenth-leftover-edges");
-		expect(push).toContain("auth/memory nineteenth leftover slice");
+		expect(push).toContain("twentieth-leftover-edges");
+		expect(push).toContain("auth/memory twentieth leftover slice");
 	});
 
 	it("ci.yml concurrency still cancels in-progress runs on the same ref", () => {

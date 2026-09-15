@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest";
 
 /**
  * Twenty-first leftover residual deepen (soft after tip #251 / #258):
- * tip auth/memory owns focused `nineteenth-leftover-edges` push.yml filter;
+ * tip auth/memory owns focused `twentieth-leftover-edges` push.yml filter;
  * agents true-asymmetry residual deepen stays gated via full pnpm test.
  */
 describe("agents true-asymmetry ci workflow twenty-first residual deepen leftover edges", () => {
@@ -31,12 +31,12 @@ describe("agents true-asymmetry ci workflow twenty-first residual deepen leftove
 		expect(push).toMatch(/run:\s*pnpm test\b/);
 	});
 
-	it("push.yml focused gate still pins nineteenth leftover edges (auth/memory tip)", () => {
+	it("push.yml focused gate still pins twentieth leftover edges (auth/memory tip)", () => {
 		const push = readFileSync(
 			resolve(root, ".github/workflows/push.yml"),
 			"utf8",
 		);
-		expect(push).toContain("nineteenth-leftover-edges");
+		expect(push).toContain("twentieth-leftover-edges");
 	});
 
 	it("ci.yml concurrency still cancels in-progress runs on the same ref", () => {

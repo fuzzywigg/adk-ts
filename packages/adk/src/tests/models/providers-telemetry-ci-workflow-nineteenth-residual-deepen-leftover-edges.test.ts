@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest";
 
 /**
  * Nineteenth leftover residual deepen (complements #269 / open tools #278):
- * soft reversible workflow pins — auth/memory nineteenth still owns focused
+ * soft reversible workflow pins — auth/memory twentieth owns focused
  * push.yml filter; providers/telemetry residual deepen stays gated via full
  * pnpm test. Vitest remains on 3.x (no 4.x bump).
  */
@@ -32,13 +32,13 @@ describe("providers/telemetry ci workflow nineteenth residual deepen leftover ed
 		expect(push).toMatch(/run:\s*pnpm test\b/);
 	});
 
-	it("push.yml focused gate still pins nineteenth leftover edges (auth/memory tip)", () => {
+	it("push.yml focused gate still pins twentieth leftover edges (auth/memory tip)", () => {
 		const push = readFileSync(
 			resolve(root, ".github/workflows/push.yml"),
 			"utf8",
 		);
-		expect(push).toContain("nineteenth-leftover-edges");
-		expect(push).toContain("auth/memory nineteenth leftover slice");
+		expect(push).toContain("twentieth-leftover-edges");
+		expect(push).toContain("auth/memory twentieth leftover slice");
 	});
 
 	it("root packageManager keeps vitest on 3.x (no accidental 4.x bump)", () => {
