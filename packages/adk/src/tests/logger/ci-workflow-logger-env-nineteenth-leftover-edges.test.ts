@@ -3,12 +3,12 @@ import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 
 /**
- * Eighteenth leftover residual deepen (complements #253; soft after #258/#261):
+ * Nineteenth leftover residual after tip #261:
  * soft reversible workflow pins — auth/memory nineteenth owns focused
- * push.yml filter post-#258; logger/env residual deepen stays gated via
- * full pnpm test (and shares nineteenth filename filter).
+ * `nineteenth-leftover-edges` push.yml filter; logger/env nineteenth files
+ * share that gate via filename suffix; no focused-gate steal.
  */
-describe("logger/env ci workflow eighteenth residual deepen leftover edges", () => {
+describe("logger/env ci workflow nineteenth leftover edges", () => {
 	const root = resolve(__dirname, "../../../../..");
 
 	it("ci.yml build-and-test still runs pnpm test and ADK coverage", () => {
@@ -31,7 +31,7 @@ describe("logger/env ci workflow eighteenth residual deepen leftover edges", () 
 		expect(push).toMatch(/run:\s*pnpm test\b/);
 	});
 
-	it("push.yml focused gate pins nineteenth leftover edges (auth/memory tip)", () => {
+	it("push.yml focused gate pins nineteenth leftover edges (shared with auth/memory tip)", () => {
 		const push = readFileSync(
 			resolve(root, ".github/workflows/push.yml"),
 			"utf8",
