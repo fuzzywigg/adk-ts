@@ -4,8 +4,8 @@ import { describe, expect, it } from "vitest";
 
 /**
  * Fourteenth leftover (HEAVY tip-relaunch residual): reversible workflow
- * assertions for the runners/flows Vitest slice. Softened while agents
- * true-asymmetry twentieth owns the focused filter pin — pins lint/build/test.
+ * assertions for the runners/flows Vitest slice. Softened while runners/flows
+ * residual fifteenth owns the focused filter pin — pins lint/build/test.
  */
 describe("runners/flows ci workflow fourteenth leftover edges", () => {
 	const root = resolve(__dirname, "../../../..");
