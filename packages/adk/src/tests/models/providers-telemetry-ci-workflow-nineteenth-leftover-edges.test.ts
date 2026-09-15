@@ -5,9 +5,9 @@ import { describe, expect, it } from "vitest";
 /**
  * Nineteenth leftover (HEAVY tip-relaunch residual after tip #260 / #258):
  * reversible workflow assertions for the providers/telemetry NaN/posinf
- * Vitest slice. Tip auth/memory owns the focused `nineteenth-leftover-edges`
- * filter — this slice pins that the gate stays wired (our files match it)
- * plus lint/build/test.
+ * Vitest slice. Softened while auth/memory twentieth owns the focused
+ * filter pin — pins lint/build/test only (files still match via full
+ * `pnpm test`).
  */
 describe("providers/telemetry ci workflow nineteenth leftover edges", () => {
 	const root = resolve(__dirname, "../../../../..");
@@ -21,7 +21,7 @@ describe("providers/telemetry ci workflow nineteenth leftover edges", () => {
 		expect(ci).toContain("continue-on-error: true");
 	});
 
-	it("push.yml runs focused nineteenth leftover slice then pnpm test", () => {
+	it("push.yml still runs Biome lint, ADK build, and pnpm test", () => {
 		const push = readFileSync(
 			resolve(root, ".github/workflows/push.yml"),
 			"utf8",
@@ -30,7 +30,6 @@ describe("providers/telemetry ci workflow nineteenth leftover edges", () => {
 		expect(push).toContain("- main");
 		expect(push).toMatch(/run:\s*pnpm lint\b/);
 		expect(push).toContain("pnpm --filter @iqai/adk build");
-		expect(push).toContain("nineteenth-leftover-edges");
 		expect(push).toMatch(/run:\s*pnpm test\b/);
 	});
 
