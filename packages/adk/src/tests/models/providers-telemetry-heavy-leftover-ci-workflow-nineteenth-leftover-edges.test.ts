@@ -3,12 +3,14 @@ import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 
 /**
- * Nineteenth leftover (complement after tip #260 / #261): soft reversible
- * workflow pin for the providers/telemetry residual deepen. Tip auth/memory
- * owns the focused `nineteenth-leftover-edges` filter — this slice only
- * asserts lint/build/test stay wired.
+ * Nineteenth leftover (HEAVY tip-relaunch residual after tip #260 / #261):
+ * soft reversible workflow pin for the providers/telemetry boolean-true /
+ * string-true / -0 residual that closed #252 never landed and open #269's
+ * NaN/posinf slice does not cover. Tip auth/memory owns the focused
+ * `nineteenth-leftover-edges` filter — this slice only asserts that gate
+ * stays wired plus lint/build/test.
  */
-describe("providers/telemetry complement ci workflow nineteenth leftover edges", () => {
+describe("providers/telemetry heavy leftover ci workflow nineteenth leftover edges", () => {
 	const root = resolve(__dirname, "../../../../..");
 
 	it("ci.yml build-and-test still runs pnpm test and ADK coverage", () => {
@@ -20,7 +22,7 @@ describe("providers/telemetry complement ci workflow nineteenth leftover edges",
 		expect(ci).toContain("continue-on-error: true");
 	});
 
-	it("push.yml still runs Biome lint, ADK build, and pnpm test", () => {
+	it("push.yml runs focused nineteenth leftover slice then pnpm test", () => {
 		const push = readFileSync(
 			resolve(root, ".github/workflows/push.yml"),
 			"utf8",
@@ -29,6 +31,7 @@ describe("providers/telemetry complement ci workflow nineteenth leftover edges",
 		expect(push).toContain("- main");
 		expect(push).toMatch(/run:\s*pnpm lint\b/);
 		expect(push).toContain("pnpm --filter @iqai/adk build");
+		expect(push).toContain("nineteenth-leftover-edges");
 		expect(push).toMatch(/run:\s*pnpm test\b/);
 	});
 
