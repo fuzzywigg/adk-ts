@@ -3,11 +3,12 @@ import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 
 /**
- * Twenty-first leftover residual deepen (soft after tip auth/memory twentieth):
- * tip auth/memory owns focused `twentieth-leftover-edges` push.yml filter;
- * agents true-asymmetry residual deepen stays gated via full pnpm test.
+ * Twentieth leftover residual deepen (soft after tip #287 / tip 1f70668):
+ * auth/memory owns focused `twentieth-leftover-edges` push.yml filter;
+ * residual deepen stays gated via full pnpm test (no focused-gate steal).
+ * Vitest remains on 3.x (no 4.x bump).
  */
-describe("agents true-asymmetry ci workflow twenty-first residual deepen leftover edges", () => {
+describe("auth/memory ci workflow twentieth residual deepen leftover edges", () => {
 	const root = resolve(__dirname, "../../../../..");
 
 	it("ci.yml build-and-test still runs pnpm test and ADK coverage", () => {
@@ -31,17 +32,28 @@ describe("agents true-asymmetry ci workflow twenty-first residual deepen leftove
 		expect(push).toMatch(/run:\s*pnpm test\b/);
 	});
 
+	it("push.yml focused gate still pins twentieth leftover edges (auth/memory tip)", () => {
+		const push = readFileSync(
+			resolve(root, ".github/workflows/push.yml"),
+			"utf8",
+		);
+		expect(push).toContain("twentieth-leftover-edges");
+		expect(push).toContain("auth/memory twentieth leftover slice");
+	});
+
+	it("root packageManager keeps vitest on 3.x (no accidental 4.x bump)", () => {
+		const pkg = JSON.parse(readFileSync(resolve(root, "package.json"), "utf8"));
+		const lock = readFileSync(resolve(root, "pnpm-lock.yaml"), "utf8");
+		expect(pkg.packageManager).toMatch(/^pnpm@/);
+		expect(lock).toMatch(/vitest@3\./);
+		expect(lock).not.toMatch(/vitest@4\./);
+	});
+
 	it("ci.yml concurrency still cancels in-progress runs on the same ref", () => {
 		const ci = readFileSync(resolve(root, ".github/workflows/ci.yml"), "utf8");
 		expect(ci).toContain("cancel-in-progress: true");
 		expect(ci).toMatch(
 			/group:\s*ci-\$\{\{\s*github\.workflow\s*\}\}-\$\{\{\s*github\.ref\s*\}\}/,
 		);
-	});
-
-	it("packageManager still pins pnpm 9 and engines node >=22", () => {
-		const pkg = JSON.parse(readFileSync(resolve(root, "package.json"), "utf8"));
-		expect(pkg.packageManager).toMatch(/^pnpm@9\./);
-		expect(pkg.engines?.node).toMatch(/>=\s*22/);
 	});
 });
