@@ -3,9 +3,10 @@ import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 
 /**
- * Twenty-first leftover residual deepen (soft after tip #251 / #258):
- * tip auth/memory owns focused `nineteenth-leftover-edges` push.yml filter;
+ * Twenty-first leftover residual deepen (soft after tip #284 / #287):
+ * tip auth/memory owns focused `twentieth-leftover-edges` push.yml filter;
  * agents true-asymmetry residual deepen stays gated via full pnpm test.
+ * Soften sibling nineteenth soft-pins left stale after #287 retarget.
  */
 describe("agents true-asymmetry ci workflow twenty-first residual deepen leftover edges", () => {
 	const root = resolve(__dirname, "../../../../..");
@@ -31,12 +32,13 @@ describe("agents true-asymmetry ci workflow twenty-first residual deepen leftove
 		expect(push).toMatch(/run:\s*pnpm test\b/);
 	});
 
-	it("push.yml focused gate still pins nineteenth leftover edges (auth/memory tip)", () => {
+	it("push.yml focused gate still pins twentieth leftover edges (auth/memory tip)", () => {
 		const push = readFileSync(
 			resolve(root, ".github/workflows/push.yml"),
 			"utf8",
 		);
-		expect(push).toContain("nineteenth-leftover-edges");
+		expect(push).toContain("twentieth-leftover-edges");
+		expect(push).toContain("auth/memory twentieth leftover slice");
 	});
 
 	it("ci.yml concurrency still cancels in-progress runs on the same ref", () => {
@@ -51,5 +53,11 @@ describe("agents true-asymmetry ci workflow twenty-first residual deepen leftove
 		const pkg = JSON.parse(readFileSync(resolve(root, "package.json"), "utf8"));
 		expect(pkg.packageManager).toMatch(/^pnpm@9\./);
 		expect(pkg.engines?.node).toMatch(/>=\s*22/);
+	});
+
+	it("root packageManager keeps vitest on 3.x (no accidental 4.x bump)", () => {
+		const lock = readFileSync(resolve(root, "pnpm-lock.yaml"), "utf8");
+		expect(lock).toMatch(/vitest@3\./);
+		expect(lock).not.toMatch(/vitest@4\./);
 	});
 });
