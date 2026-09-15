@@ -16,8 +16,9 @@ vi.mock("openai", () => ({
 
 /**
  * Nineteenth leftover residual deepen after tip #282 / 1f70668 (eighteenth
- * parse niche): `JSON.parse(arguments || "{}")` — Object(false)/Object(0)/
- * Object("")/Object(NaN)/"-Infinity"/-1 throw or parse asymmetries.
+ * parse niche): `JSON.parse(arguments || "{}")` — ToString-then-parse:
+ * Object(false)→false, Object(0)→0, -1→-1; Object("")/Object(NaN)/
+ * "-Infinity" throw.
  */
 describe("openai-llm arguments object-false/zero/empty nineteenth residual deepen", () => {
 	let llm: OpenAiLlm;
@@ -34,44 +35,51 @@ describe("openai-llm arguments object-false/zero/empty nineteenth residual deepe
 		vi.clearAllMocks();
 	});
 
-	it('string "-Infinity" throws on JSON.parse (both paths)', () => {
-		expect(() =>
-			(llm as any).createChunkResponse({
+	it.each([
+		{
+			label: "Object(false)",
+			arguments: Object(false) as any,
+			expected: false,
+		},
+		{ label: "Object(0)", arguments: Object(0) as any, expected: 0 },
+		{ label: "number -1", arguments: -1 as any, expected: -1 },
+	])("ToString-parse $label → $expected (both paths)", ({
+		arguments: args,
+		expected,
+	}) => {
+		const chunk = (llm as any).createChunkResponse({
+			tool_calls: [
+				{
+					index: 0,
+					id: "c1",
+					type: "function",
+					function: { name: "fn", arguments: args },
+				},
+			],
+		});
+		expect(chunk.content.parts[0].functionCall.args).toBe(expected);
+
+		const nonstream = (llm as any).openAiMessageToLlmResponse({
+			message: {
+				role: "assistant",
+				content: null,
 				tool_calls: [
 					{
-						index: 0,
 						id: "c1",
 						type: "function",
-						function: { name: "fn", arguments: "-Infinity" },
+						function: { name: "fn", arguments: args },
 					},
 				],
-			}),
-		).toThrow();
-
-		expect(() =>
-			(llm as any).openAiMessageToLlmResponse({
-				message: {
-					role: "assistant",
-					content: null,
-					tool_calls: [
-						{
-							id: "c1",
-							type: "function",
-							function: { name: "fn", arguments: "-Infinity" },
-						},
-					],
-				},
-				finish_reason: "tool_calls",
-			}),
-		).toThrow();
+			},
+			finish_reason: "tool_calls",
+		});
+		expect(nonstream.content.parts[0].functionCall.args).toBe(expected);
 	});
 
 	it.each([
-		{ label: "Object(false)", arguments: Object(false) as any },
-		{ label: "Object(0)", arguments: Object(0) as any },
 		{ label: 'Object("")', arguments: Object("") as any },
 		{ label: "Object(NaN)", arguments: Object(Number.NaN) as any },
-		{ label: "number -1", arguments: -1 as any },
+		{ label: 'string "-Infinity"', arguments: "-Infinity" as any },
 	])("truthy residual $label throws on JSON.parse", ({ arguments: args }) => {
 		expect(() =>
 			(llm as any).createChunkResponse({
