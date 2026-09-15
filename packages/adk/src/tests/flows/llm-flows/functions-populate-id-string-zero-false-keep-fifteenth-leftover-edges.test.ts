@@ -1,0 +1,45 @@
+import { describe, expect, it } from "vitest";
+import { Event } from "../../../events/event";
+import {
+	AF_FUNCTION_CALL_ID_PREFIX,
+	populateClientFunctionCallId,
+} from "../../../flows/llm-flows/functions";
+
+/**
+ * Fifteenth leftover (HEAVY tip-relaunch residual after tip #269 / 03ff90a8 after providers; supersedes closed #273/#262): functions adk-id leftover pins empty-string regenerate
+ * via `if (!functionCall.id)` and whitespace keep. String `"0"` / `"false"`
+ * are truthy so populateClientFunctionCallId preserves them.
+ */
+describe("functions populate-id string-zero/false keep fifteenth leftover", () => {
+	it.each([
+		{ label: '"0"', id: "0" },
+		{ label: '"false"', id: "false" },
+	])("preserves truthy string id $label", ({ id }) => {
+		const event = new Event({
+			author: "agent",
+			content: {
+				role: "model",
+				parts: [{ functionCall: { name: "tool", id } }],
+			},
+		});
+		populateClientFunctionCallId(event);
+		expect(event.getFunctionCalls()[0].id).toBe(id);
+		expect(
+			event.getFunctionCalls()[0].id?.startsWith(AF_FUNCTION_CALL_ID_PREFIX),
+		).toBe(false);
+	});
+
+	it("empty-string id still regenerates (prior control)", () => {
+		const event = new Event({
+			author: "agent",
+			content: {
+				role: "model",
+				parts: [{ functionCall: { name: "tool", id: "" } }],
+			},
+		});
+		populateClientFunctionCallId(event);
+		expect(
+			event.getFunctionCalls()[0].id?.startsWith(AF_FUNCTION_CALL_ID_PREFIX),
+		).toBe(true);
+	});
+});
