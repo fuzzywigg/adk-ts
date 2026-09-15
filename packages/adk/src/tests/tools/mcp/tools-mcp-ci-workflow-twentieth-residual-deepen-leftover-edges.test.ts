@@ -3,14 +3,14 @@ import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 
 /**
- * Twentieth leftover (HEAVY tip-relaunch residual complement after providers
- * tip #269 / 03ff90a / merged #259; soft-pin refreshed post #292 tip 5156762):
- * reversible workflow assertions for the tools/mcp residual Vitest slice
- * (PATH/env/maxTokens/messages/filter/schema). Soft pin only — does not
- * retarget push.yml focused gate (auth/memory #287 pins
- * twentieth-leftover-edges). Vitest stays on 3.x.
+ * HEAVY tip-relaunch residual deepen after tip 5156762 / post #292 (lands closed #290/#278 onto tip; complements #259 / merged #286 complement slice): soft
+ * reversible workflow pins — auth/memory #287 owns focused
+ * `twentieth-leftover-edges` push.yml filter; tools/mcp residual deepen uses
+ * distinct `twentieth-residual-deepen-leftover-edges` (no focused-gate steal)
+ * and stays gated via full pnpm test. Vitest remains on 3.x. Does not edit
+ * .github/workflows.
  */
-describe("tools/mcp residual complement ci workflow twentieth leftover edges", () => {
+describe("tools/mcp ci workflow twentieth residual deepen leftover edges", () => {
 	const root = resolve(__dirname, "../../../../../..");
 
 	it("ci.yml build-and-test still runs pnpm test and ADK coverage", () => {
@@ -41,20 +41,14 @@ describe("tools/mcp residual complement ci workflow twentieth leftover edges", (
 		);
 		expect(push).toContain("twentieth-leftover-edges");
 		expect(push).toContain("auth/memory twentieth leftover slice");
+		expect(push).not.toContain("twentieth-residual-deepen-leftover-edges");
 	});
 
-	it("ci.yml concurrency still cancels in-progress runs on the same ref", () => {
-		const ci = readFileSync(resolve(root, ".github/workflows/ci.yml"), "utf8");
-		expect(ci).toContain("cancel-in-progress: true");
-		expect(ci).toMatch(
-			/group:\s*ci-\$\{\{\s*github\.workflow\s*\}\}-\$\{\{\s*github\.ref\s*\}\}/,
-		);
-	});
-
-	it("vitest stays on 3.x (no 4.x bump in this residual)", () => {
-		const pkg = JSON.parse(
-			readFileSync(resolve(root, "packages/adk/package.json"), "utf8"),
-		);
-		expect(pkg.devDependencies.vitest).toMatch(/^\^?3\./);
+	it("root packageManager keeps vitest on 3.x (no accidental 4.x bump)", () => {
+		const pkg = JSON.parse(readFileSync(resolve(root, "package.json"), "utf8"));
+		const lock = readFileSync(resolve(root, "pnpm-lock.yaml"), "utf8");
+		expect(pkg.packageManager).toMatch(/^pnpm@/);
+		expect(lock).toMatch(/vitest@3\./);
+		expect(lock).not.toMatch(/vitest@4\./);
 	});
 });

@@ -3,14 +3,13 @@ import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 
 /**
- * Twentieth leftover (HEAVY tip-relaunch residual complement after providers
- * tip #269 / 03ff90a / merged #259; soft-pin refreshed post #292 tip 5156762):
- * reversible workflow assertions for the tools/mcp residual Vitest slice
- * (PATH/env/maxTokens/messages/filter/schema). Soft pin only — does not
- * retarget push.yml focused gate (auth/memory #287 pins
- * twentieth-leftover-edges). Vitest stays on 3.x.
+ * Twenty-first leftover residual deepen (soft after tip 5156762 / post #292):
+ * tip auth/memory owns focused `twentieth-leftover-edges` push.yml filter;
+ * tools/mcp string-infinity/object-one/object-false residual deepen stays
+ * gated via full pnpm test (`twenty-first-residual-deepen-leftover-edges`).
+ * Soft pin only — no push.yml retarget. Vitest stays on 3.x.
  */
-describe("tools/mcp residual complement ci workflow twentieth leftover edges", () => {
+describe("tools/mcp ci workflow twenty-first residual deepen leftover edges", () => {
 	const root = resolve(__dirname, "../../../../../..");
 
 	it("ci.yml build-and-test still runs pnpm test and ADK coverage", () => {
@@ -41,6 +40,7 @@ describe("tools/mcp residual complement ci workflow twentieth leftover edges", (
 		);
 		expect(push).toContain("twentieth-leftover-edges");
 		expect(push).toContain("auth/memory twentieth leftover slice");
+		expect(push).not.toContain("twenty-first-residual-deepen-leftover-edges");
 	});
 
 	it("ci.yml concurrency still cancels in-progress runs on the same ref", () => {
