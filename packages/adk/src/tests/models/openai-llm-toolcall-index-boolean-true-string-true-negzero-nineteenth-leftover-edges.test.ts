@@ -1,5 +1,5 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import OpenAI from "openai";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { LlmRequest } from "../../models/llm-request";
 import { LlmResponse } from "../../models/llm-response";
 import { OpenAiLlm } from "../../models/openai-llm";

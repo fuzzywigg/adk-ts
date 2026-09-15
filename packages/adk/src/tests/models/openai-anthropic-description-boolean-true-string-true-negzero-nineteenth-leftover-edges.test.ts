@@ -1,4 +1,3 @@
-import Anthropic from "@anthropic-ai/sdk";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AnthropicLlm } from "../../models/anthropic-llm";
 import { OpenAiLlm } from "../../models/openai-llm";
