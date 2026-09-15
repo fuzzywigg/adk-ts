@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { McpErrorType } from "../../../tools/mcp/types";
 import { McpSamplingHandler } from "../../../tools/mcp/sampling-handler";
+import { McpErrorType } from "../../../tools/mcp/types";
 
 vi.mock("@adk/logger", () => ({
 	Logger: vi.fn(() => ({
