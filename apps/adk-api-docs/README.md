@@ -133,7 +133,7 @@ The `package.json` contains scripts for building and serving documentation:
 
 ## 🚀 Deployment
 
-TypeDoc API docs are built and deployed to GitHub Pages via `.github/workflows/docs.yml` on pushes to `main` / `develop` (and TypeDoc-only on PRs).
+TypeDoc API docs are built and deployed to GitHub Pages via `.github/workflows/docs.yml` on pushes to `main` (and TypeDoc-only on PRs).
 
 The deployment workflow:
 
