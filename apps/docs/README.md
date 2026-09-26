@@ -21,7 +21,7 @@ If you're looking to **use** the ADK framework, visit the [live documentation](h
 
 Before contributing to the documentation, ensure you have:
 
-- [Node.js](https://nodejs.org) (version 18 or later)
+- [Node.js](https://nodejs.org) (version 22 or later)
 - [pnpm](https://pnpm.io) (recommended package manager)
 - Basic familiarity with [Markdown](https://www.markdownguide.org/) and [MDX](https://mdxjs.com/)
 
