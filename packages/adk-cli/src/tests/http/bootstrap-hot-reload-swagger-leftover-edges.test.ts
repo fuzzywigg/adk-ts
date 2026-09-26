@@ -68,7 +68,9 @@ vi.mock("node:fs", async () => {
 
 vi.mock("../../http/http.module", () => ({
 	HttpModule: {
-		register: vi.fn(() => ({ module: class HttpModule {} })),
+		register: vi.fn(function VitestMock() {
+			return { module: class HttpModule {} };
+		}),
 	},
 }));
 

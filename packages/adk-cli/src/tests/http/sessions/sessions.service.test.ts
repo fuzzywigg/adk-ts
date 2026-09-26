@@ -73,7 +73,9 @@ describe("SessionsService", () => {
 		const agentManager = {
 			getLoadedAgents: vi.fn(() => new Map([["demo", loaded]])),
 			startAgent: vi.fn(),
-			getInitialStateForAgent: vi.fn(() => ({ seeded: true })),
+			getInitialStateForAgent: vi.fn(function VitestMock() {
+				return { seeded: true };
+			}),
 		};
 		const hotReload = { broadcastState: vi.fn() };
 		const service = new SessionsService(
@@ -182,7 +184,9 @@ describe("SessionsService", () => {
 		const agentManager = {
 			getLoadedAgents: vi.fn(() => new Map([["demo", loaded]])),
 			startAgent: vi.fn(),
-			getInitialStateForAgent: vi.fn(() => ({ theme: "dark" })),
+			getInitialStateForAgent: vi.fn(function VitestMock() {
+				return { theme: "dark" };
+			}),
 		};
 		const hotReload = { broadcastState: vi.fn() };
 		const service = new SessionsService(
@@ -358,7 +362,9 @@ describe("SessionsService", () => {
 		const agentManager = {
 			getLoadedAgents: vi.fn(() => new Map([["demo", loaded]])),
 			startAgent: vi.fn(),
-			getInitialStateForAgent: vi.fn(() => ({ theme: "dark", keep: true })),
+			getInitialStateForAgent: vi.fn(function VitestMock() {
+				return { theme: "dark", keep: true };
+			}),
 		};
 		const service = new SessionsService(
 			agentManager as never,

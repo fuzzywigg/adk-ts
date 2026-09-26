@@ -7,7 +7,7 @@ import { describe, expect, it } from "vitest";
  * reversible workflow pins — auth/memory #287 owns focused
  * `twentieth-leftover-edges` push.yml filter; tools/mcp residual deepen uses
  * distinct `twentieth-residual-deepen-leftover-edges` (no focused-gate steal)
- * and stays gated via full pnpm test. Vitest remains on 3.x. Does not edit
+ * and stays gated via full pnpm test. Vitest is on 4.x. Does not edit
  * .github/workflows.
  */
 describe("tools/mcp ci workflow twentieth residual deepen leftover edges", () => {
@@ -44,11 +44,11 @@ describe("tools/mcp ci workflow twentieth residual deepen leftover edges", () =>
 		expect(push).not.toContain("twentieth-residual-deepen-leftover-edges");
 	});
 
-	it("root packageManager keeps vitest on 3.x (no accidental 4.x bump)", () => {
+	it("root lockfile keeps vitest on 4.x", () => {
 		const pkg = JSON.parse(readFileSync(resolve(root, "package.json"), "utf8"));
 		const lock = readFileSync(resolve(root, "pnpm-lock.yaml"), "utf8");
 		expect(pkg.packageManager).toMatch(/^pnpm@/);
-		expect(lock).toMatch(/vitest@3\./);
-		expect(lock).not.toMatch(/vitest@4\./);
+		expect(lock).toMatch(/vitest@4\./);
+		expect(lock).not.toMatch(/vitest@3\./);
 	});
 });

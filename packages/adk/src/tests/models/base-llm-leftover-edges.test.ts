@@ -42,7 +42,9 @@ const {
 });
 
 vi.mock("@adk/logger", () => ({
-	Logger: vi.fn(() => mockLogger),
+	Logger: vi.fn(function VitestMock() {
+		return mockLogger;
+	}),
 }));
 
 vi.mock("../../telemetry", () => ({

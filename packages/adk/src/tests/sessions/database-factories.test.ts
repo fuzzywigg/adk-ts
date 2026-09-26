@@ -11,12 +11,14 @@ import {
 } from "../../sessions/database-factories";
 
 vi.mock("../../logger", () => ({
-	Logger: vi.fn(() => ({
-		debug: vi.fn(),
-		error: vi.fn(),
-		warn: vi.fn(),
-		info: vi.fn(),
-	})),
+	Logger: vi.fn(function VitestMock() {
+		return {
+			debug: vi.fn(),
+			error: vi.fn(),
+			warn: vi.fn(),
+			info: vi.fn(),
+		};
+	}),
 }));
 
 describe("database-factories", () => {
@@ -114,11 +116,13 @@ describe("database-factories", () => {
 	});
 
 	it("passes options through to the postgres Pool when pg is present", () => {
-		const Pool = vi.fn().mockImplementation(() => ({
-			on: vi.fn(),
-			end: vi.fn(),
-			connect: vi.fn(),
-		}));
+		const Pool = vi.fn().mockImplementation(function VitestMock() {
+			return {
+				on: vi.fn(),
+				end: vi.fn(),
+				connect: vi.fn(),
+			};
+		});
 		Module.prototype.require = function (
 			this: NodeModule,
 			id: string,
@@ -169,10 +173,12 @@ describe("database-factories", () => {
 	});
 
 	it("passes sqlite options into better-sqlite3 constructor", () => {
-		const Database = vi.fn().mockImplementation(() => ({
-			close: vi.fn(),
-			prepare: vi.fn(),
-		}));
+		const Database = vi.fn().mockImplementation(function VitestMock() {
+			return {
+				close: vi.fn(),
+				prepare: vi.fn(),
+			};
+		});
 		Module.prototype.require = function (
 			this: NodeModule,
 			id: string,
@@ -190,11 +196,13 @@ describe("database-factories", () => {
 	});
 
 	it("createDatabaseSessionService forwards options to postgres routes", () => {
-		const Pool = vi.fn().mockImplementation(() => ({
-			on: vi.fn(),
-			end: vi.fn(),
-			connect: vi.fn(),
-		}));
+		const Pool = vi.fn().mockImplementation(function VitestMock() {
+			return {
+				on: vi.fn(),
+				end: vi.fn(),
+				connect: vi.fn(),
+			};
+		});
 		Module.prototype.require = function (
 			this: NodeModule,
 			id: string,

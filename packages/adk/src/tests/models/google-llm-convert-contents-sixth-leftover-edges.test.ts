@@ -5,10 +5,12 @@ import { LlmRequest } from "../../models/llm-request";
 import { LlmResponse } from "../../models/llm-response";
 
 vi.mock("@adk/helpers/logger", () => ({
-	Logger: vi.fn(() => ({
-		debug: vi.fn(),
-		error: vi.fn(),
-	})),
+	Logger: vi.fn(function VitestMock() {
+		return {
+			debug: vi.fn(),
+			error: vi.fn(),
+		};
+	}),
 }));
 
 vi.mock("@google/genai", () => ({
@@ -33,12 +35,14 @@ describe("GoogleLlm convertContents sixth leftover edges (post #150)", () => {
 			candidates: [{ content: { role: "model", parts: [{ text: "ok" }] } }],
 		});
 		(GoogleGenAI as unknown as ReturnType<typeof vi.fn>).mockImplementation(
-			() => ({
-				models: {
-					generateContent: mockGenerateContent,
-					generateContentStream: vi.fn(),
-				},
-			}),
+			function VitestMock() {
+				return {
+					models: {
+						generateContent: mockGenerateContent,
+						generateContentStream: vi.fn(),
+					},
+				};
+			},
 		);
 	});
 

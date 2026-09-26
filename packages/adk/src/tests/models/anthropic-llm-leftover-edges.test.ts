@@ -5,10 +5,12 @@ import { LlmRequest } from "../../models/llm-request";
 import { LlmResponse } from "../../models/llm-response";
 
 vi.mock("@adk/helpers/logger", () => ({
-	Logger: vi.fn(() => ({
-		debug: vi.fn(),
-		error: vi.fn(),
-	})),
+	Logger: vi.fn(function VitestMock() {
+		return {
+			debug: vi.fn(),
+			error: vi.fn(),
+		};
+	}),
 }));
 
 vi.mock("@anthropic-ai/sdk");
@@ -23,16 +25,20 @@ describe("AnthropicLlm leftover edges (overnight TOKENMAXX post #142)", () => {
 		process.env.ANTHROPIC_API_KEY = "test-key";
 		mockMessagesCreate = vi.fn();
 		(Anthropic as unknown as ReturnType<typeof vi.fn>).mockImplementation(
-			() => ({
-				messages: { create: mockMessagesCreate },
-			}),
+			function VitestMock() {
+				return {
+					messages: { create: mockMessagesCreate },
+				};
+			},
 		);
 		llm = new AnthropicLlm();
 		vi.clearAllMocks();
 		(Anthropic as unknown as ReturnType<typeof vi.fn>).mockImplementation(
-			() => ({
-				messages: { create: mockMessagesCreate },
-			}),
+			function VitestMock() {
+				return {
+					messages: { create: mockMessagesCreate },
+				};
+			},
 		);
 	});
 

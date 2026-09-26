@@ -3,10 +3,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AnthropicLlm } from "../../models/anthropic-llm";
 
 vi.mock("@adk/helpers/logger", () => ({
-	Logger: vi.fn(() => ({
-		debug: vi.fn(),
-		error: vi.fn(),
-	})),
+	Logger: vi.fn(function VitestMock() {
+		return {
+			debug: vi.fn(),
+			error: vi.fn(),
+		};
+	}),
 }));
 
 vi.mock("@anthropic-ai/sdk", () => ({
@@ -22,9 +24,11 @@ describe("AnthropicLlm toAnthropicRole case sensitivity fifth leftover", () => {
 		process.env.ANTHROPIC_API_KEY = "fifth-anthropic";
 		vi.clearAllMocks();
 		(Anthropic as unknown as ReturnType<typeof vi.fn>).mockImplementation(
-			() => ({
-				messages: { create: vi.fn() },
-			}),
+			function VitestMock() {
+				return {
+					messages: { create: vi.fn() },
+				};
+			},
 		);
 		llm = new AnthropicLlm("claude-3-5-sonnet-20241022");
 	});

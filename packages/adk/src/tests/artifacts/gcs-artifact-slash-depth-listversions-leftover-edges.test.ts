@@ -4,13 +4,17 @@ const { saveMock, getFilesMock, fileMock, bucketMock, StorageMock } =
 	vi.hoisted(() => {
 		const saveMock = vi.fn().mockResolvedValue(undefined);
 		const getFilesMock = vi.fn();
-		const fileMock = vi.fn(() => ({
-			save: saveMock,
-		}));
-		const bucketMock = vi.fn(() => ({
-			file: fileMock,
-			getFiles: getFilesMock,
-		}));
+		const fileMock = vi.fn(function VitestMock() {
+			return {
+				save: saveMock,
+			};
+		});
+		const bucketMock = vi.fn(function VitestMock() {
+			return {
+				file: fileMock,
+				getFiles: getFilesMock,
+			};
+		});
 		const StorageMock = vi.fn(function Storage(this: any) {
 			this.bucket = bucketMock;
 		});
@@ -32,11 +36,15 @@ describe("GcsArtifactService leftover: slash filename → 6-segment blob → lis
 
 	beforeEach(() => {
 		vi.clearAllMocks();
-		bucketMock.mockImplementation(() => ({
-			file: fileMock,
-			getFiles: getFilesMock,
-		}));
-		fileMock.mockImplementation(() => ({ save: saveMock }));
+		bucketMock.mockImplementation(function VitestMock() {
+			return {
+				file: fileMock,
+				getFiles: getFilesMock,
+			};
+		});
+		fileMock.mockImplementation(function VitestMock() {
+			return { save: saveMock };
+		});
 		saveMock.mockResolvedValue(undefined);
 	});
 

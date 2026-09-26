@@ -8,12 +8,14 @@ import {
 } from "../../sessions/database-factories";
 
 vi.mock("../../logger", () => ({
-	Logger: vi.fn(() => ({
-		debug: vi.fn(),
-		error: vi.fn(),
-		warn: vi.fn(),
-		info: vi.fn(),
-	})),
+	Logger: vi.fn(function VitestMock() {
+		return {
+			debug: vi.fn(),
+			error: vi.fn(),
+			warn: vi.fn(),
+			info: vi.fn(),
+		};
+	}),
 }));
 
 describe("database-factories leftover edges", () => {
@@ -46,10 +48,12 @@ describe("database-factories leftover edges", () => {
 	});
 
 	it("strips sqlite:// prefix for relative and absolute-looking filenames", () => {
-		const Database = vi.fn().mockImplementation(() => ({
-			close: vi.fn(),
-			prepare: vi.fn(),
-		}));
+		const Database = vi.fn().mockImplementation(function VitestMock() {
+			return {
+				close: vi.fn(),
+				prepare: vi.fn(),
+			};
+		});
 		Module.prototype.require = function (
 			this: NodeModule,
 			id: string,
@@ -70,10 +74,12 @@ describe("database-factories leftover edges", () => {
 	});
 
 	it("routes bare .db paths without a scheme to sqlite", () => {
-		const Database = vi.fn().mockImplementation(() => ({
-			close: vi.fn(),
-			prepare: vi.fn(),
-		}));
+		const Database = vi.fn().mockImplementation(function VitestMock() {
+			return {
+				close: vi.fn(),
+				prepare: vi.fn(),
+			};
+		});
 		Module.prototype.require = function (
 			this: NodeModule,
 			id: string,
@@ -90,11 +96,13 @@ describe("database-factories leftover edges", () => {
 	});
 
 	it("routes postgres:// the same as postgresql://", () => {
-		const Pool = vi.fn().mockImplementation(() => ({
-			on: vi.fn(),
-			end: vi.fn(),
-			connect: vi.fn(),
-		}));
+		const Pool = vi.fn().mockImplementation(function VitestMock() {
+			return {
+				on: vi.fn(),
+				end: vi.fn(),
+				connect: vi.fn(),
+			};
+		});
 		Module.prototype.require = function (
 			this: NodeModule,
 			id: string,
@@ -148,11 +156,13 @@ describe("database-factories leftover edges", () => {
 	});
 
 	it("createPostgresSessionService without options only passes connectionString", () => {
-		const Pool = vi.fn().mockImplementation(() => ({
-			on: vi.fn(),
-			end: vi.fn(),
-			connect: vi.fn(),
-		}));
+		const Pool = vi.fn().mockImplementation(function VitestMock() {
+			return {
+				on: vi.fn(),
+				end: vi.fn(),
+				connect: vi.fn(),
+			};
+		});
 		Module.prototype.require = function (
 			this: NodeModule,
 			id: string,
@@ -171,10 +181,12 @@ describe("database-factories leftover edges", () => {
 	});
 
 	it("createSqliteSessionService without options omits the second ctor arg", () => {
-		const Database = vi.fn().mockImplementation(() => ({
-			close: vi.fn(),
-			prepare: vi.fn(),
-		}));
+		const Database = vi.fn().mockImplementation(function VitestMock() {
+			return {
+				close: vi.fn(),
+				prepare: vi.fn(),
+			};
+		});
 		Module.prototype.require = function (
 			this: NodeModule,
 			id: string,
@@ -191,10 +203,12 @@ describe("database-factories leftover edges", () => {
 	});
 
 	it("createMysqlSessionService without options omits the second ctor arg", () => {
-		const createPool = vi.fn(() => ({
-			end: vi.fn(),
-			execute: vi.fn(),
-		}));
+		const createPool = vi.fn(function VitestMock() {
+			return {
+				end: vi.fn(),
+				execute: vi.fn(),
+			};
+		});
 		Module.prototype.require = function (
 			this: NodeModule,
 			id: string,
@@ -213,11 +227,13 @@ describe("database-factories leftover edges", () => {
 	});
 
 	it("createPostgresSessionService spreads empty options object without extra keys", () => {
-		const Pool = vi.fn().mockImplementation(() => ({
-			end: vi.fn(),
-			query: vi.fn(),
-			connect: vi.fn(),
-		}));
+		const Pool = vi.fn().mockImplementation(function VitestMock() {
+			return {
+				end: vi.fn(),
+				query: vi.fn(),
+				connect: vi.fn(),
+			};
+		});
 		Module.prototype.require = function (
 			this: NodeModule,
 			id: string,

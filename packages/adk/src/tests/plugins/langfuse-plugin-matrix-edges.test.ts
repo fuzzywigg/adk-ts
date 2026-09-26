@@ -17,20 +17,24 @@ const { eventMock, updateMock, LangfuseMock } = vi.hoisted(() => {
 		update: updateMock,
 		end: endMock,
 	};
-	const spanMock = vi.fn(() => ({
-		update: updateMock,
-		end: endMock,
-		event: eventMock,
-		span: vi.fn(() => toolSpan),
-		generation: vi.fn(() => generation),
-	}));
+	const spanMock = vi.fn(function VitestMock() {
+		return {
+			update: updateMock,
+			end: endMock,
+			event: eventMock,
+			span: vi.fn(() => toolSpan),
+			generation: vi.fn(() => generation),
+		};
+	});
 	const generationMock = vi.fn(() => generation);
-	const traceMock = vi.fn(() => ({
-		update: updateMock,
-		event: eventMock,
-		span: spanMock,
-		generation: generationMock,
-	}));
+	const traceMock = vi.fn(function VitestMock() {
+		return {
+			update: updateMock,
+			event: eventMock,
+			span: spanMock,
+			generation: generationMock,
+		};
+	});
 	const flushAsync = vi.fn().mockResolvedValue(undefined);
 	const shutdownAsync = vi.fn().mockResolvedValue(undefined);
 	const LangfuseMock = vi.fn(function Langfuse(this: any) {

@@ -3,10 +3,12 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const { getFilesMock, fileMock, bucketMock, StorageMock } = vi.hoisted(() => {
 	const getFilesMock = vi.fn();
 	const fileMock = vi.fn();
-	const bucketMock = vi.fn(() => ({
-		file: fileMock,
-		getFiles: getFilesMock,
-	}));
+	const bucketMock = vi.fn(function VitestMock() {
+		return {
+			file: fileMock,
+			getFiles: getFilesMock,
+		};
+	});
 	const StorageMock = vi.fn(function Storage(this: any) {
 		this.bucket = bucketMock;
 	});
@@ -28,10 +30,12 @@ describe("GcsArtifactService leftover: slash-depth blobs invisible to listArtifa
 
 	beforeEach(() => {
 		vi.clearAllMocks();
-		bucketMock.mockImplementation(() => ({
-			file: fileMock,
-			getFiles: getFilesMock,
-		}));
+		bucketMock.mockImplementation(function VitestMock() {
+			return {
+				file: fileMock,
+				getFiles: getFilesMock,
+			};
+		});
 	});
 
 	it("skips natural slash-filename blobs (depth>5) so keys never surface", async () => {

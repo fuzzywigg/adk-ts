@@ -3,12 +3,14 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDatabaseSessionService } from "../../sessions/database-factories";
 
 vi.mock("../../logger", () => ({
-	Logger: vi.fn(() => ({
-		debug: vi.fn(),
-		error: vi.fn(),
-		warn: vi.fn(),
-		info: vi.fn(),
-	})),
+	Logger: vi.fn(function VitestMock() {
+		return {
+			debug: vi.fn(),
+			error: vi.fn(),
+			warn: vi.fn(),
+			info: vi.fn(),
+		};
+	}),
 }));
 
 /**
@@ -23,10 +25,12 @@ describe("database-factories uppercase scheme + .db trap leftover edges", () => 
 	});
 
 	function mockSqlite(): ReturnType<typeof vi.fn> {
-		const Database = vi.fn().mockImplementation(() => ({
-			close: vi.fn(),
-			prepare: vi.fn(),
-		}));
+		const Database = vi.fn().mockImplementation(function VitestMock() {
+			return {
+				close: vi.fn(),
+				prepare: vi.fn(),
+			};
+		});
 		Module.prototype.require = function (
 			this: NodeModule,
 			id: string,
@@ -41,10 +45,12 @@ describe("database-factories uppercase scheme + .db trap leftover edges", () => 
 	}
 
 	function mockPg(): ReturnType<typeof vi.fn> {
-		const Pool = vi.fn().mockImplementation(() => ({
-			end: vi.fn(),
-			connect: vi.fn(),
-		}));
+		const Pool = vi.fn().mockImplementation(function VitestMock() {
+			return {
+				end: vi.fn(),
+				connect: vi.fn(),
+			};
+		});
 		Module.prototype.require = function (
 			this: NodeModule,
 			id: string,

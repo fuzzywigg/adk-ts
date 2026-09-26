@@ -15,16 +15,20 @@ const {
 	const downloadMock = vi.fn();
 	const deleteMock = vi.fn().mockResolvedValue(undefined);
 	const getFilesMock = vi.fn();
-	const fileMock = vi.fn(() => ({
-		save: saveMock,
-		getMetadata: getMetadataMock,
-		download: downloadMock,
-		delete: deleteMock,
-	}));
-	const bucketMock = vi.fn(() => ({
-		file: fileMock,
-		getFiles: getFilesMock,
-	}));
+	const fileMock = vi.fn(function VitestMock() {
+		return {
+			save: saveMock,
+			getMetadata: getMetadataMock,
+			download: downloadMock,
+			delete: deleteMock,
+		};
+	});
+	const bucketMock = vi.fn(function VitestMock() {
+		return {
+			file: fileMock,
+			getFiles: getFilesMock,
+		};
+	});
 	const StorageMock = vi.fn(function Storage(this: any) {
 		this.bucket = bucketMock;
 	});
@@ -55,16 +59,20 @@ describe("GcsArtifactService contentType || octet-stream fifth leftover", () => 
 
 	beforeEach(() => {
 		vi.clearAllMocks();
-		bucketMock.mockImplementation(() => ({
-			file: fileMock,
-			getFiles: getFilesMock,
-		}));
-		fileMock.mockImplementation(() => ({
-			save: saveMock,
-			getMetadata: getMetadataMock,
-			download: downloadMock,
-			delete: deleteMock,
-		}));
+		bucketMock.mockImplementation(function VitestMock() {
+			return {
+				file: fileMock,
+				getFiles: getFilesMock,
+			};
+		});
+		fileMock.mockImplementation(function VitestMock() {
+			return {
+				save: saveMock,
+				getMetadata: getMetadataMock,
+				download: downloadMock,
+				delete: deleteMock,
+			};
+		});
 		downloadMock.mockResolvedValue([Buffer.from("raw")]);
 	});
 

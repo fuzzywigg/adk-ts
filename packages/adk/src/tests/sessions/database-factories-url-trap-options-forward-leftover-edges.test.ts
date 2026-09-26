@@ -8,12 +8,14 @@ import {
 } from "../../sessions/database-factories";
 
 vi.mock("../../logger", () => ({
-	Logger: vi.fn(() => ({
-		debug: vi.fn(),
-		error: vi.fn(),
-		warn: vi.fn(),
-		info: vi.fn(),
-	})),
+	Logger: vi.fn(function VitestMock() {
+		return {
+			debug: vi.fn(),
+			error: vi.fn(),
+			warn: vi.fn(),
+			info: vi.fn(),
+		};
+	}),
 }));
 
 /**
@@ -28,10 +30,12 @@ describe("database-factories url-trap options-forward leftover edges", () => {
 	});
 
 	function mockSqlite(): ReturnType<typeof vi.fn> {
-		const Database = vi.fn().mockImplementation(() => ({
-			close: vi.fn(),
-			prepare: vi.fn(),
-		}));
+		const Database = vi.fn().mockImplementation(function VitestMock() {
+			return {
+				close: vi.fn(),
+				prepare: vi.fn(),
+			};
+		});
 		Module.prototype.require = function (
 			this: NodeModule,
 			id: string,
@@ -46,10 +50,12 @@ describe("database-factories url-trap options-forward leftover edges", () => {
 	}
 
 	function mockPg(): ReturnType<typeof vi.fn> {
-		const Pool = vi.fn().mockImplementation(() => ({
-			end: vi.fn(),
-			connect: vi.fn(),
-		}));
+		const Pool = vi.fn().mockImplementation(function VitestMock() {
+			return {
+				end: vi.fn(),
+				connect: vi.fn(),
+			};
+		});
 		Module.prototype.require = function (
 			this: NodeModule,
 			id: string,
@@ -64,7 +70,9 @@ describe("database-factories url-trap options-forward leftover edges", () => {
 	}
 
 	function mockMysql(): ReturnType<typeof vi.fn> {
-		const createPool = vi.fn(() => ({ end: vi.fn() }));
+		const createPool = vi.fn(function VitestMock() {
+			return { end: vi.fn() };
+		});
 		Module.prototype.require = function (
 			this: NodeModule,
 			id: string,

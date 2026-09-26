@@ -55,9 +55,9 @@ describe("agents true-asymmetry ci workflow twenty-first residual deepen leftove
 		expect(pkg.engines?.node).toMatch(/>=\s*22/);
 	});
 
-	it("root packageManager keeps vitest on 3.x (no accidental 4.x bump)", () => {
+	it("root lockfile keeps vitest on 4.x", () => {
 		const lock = readFileSync(resolve(root, "pnpm-lock.yaml"), "utf8");
-		expect(lock).toMatch(/vitest@3\./);
-		expect(lock).not.toMatch(/vitest@4\./);
+		expect(lock).toMatch(/vitest@4\./);
+		expect(lock).not.toMatch(/vitest@3\./);
 	});
 });

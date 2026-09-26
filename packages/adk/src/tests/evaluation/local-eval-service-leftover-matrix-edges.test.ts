@@ -447,26 +447,23 @@ describe("LocalEvalService leftover matrix edges", () => {
 			vi.spyOn(
 				DEFAULT_METRIC_EVALUATOR_REGISTRY,
 				"getEvaluator",
-			).mockImplementation(
-				(metric: any) =>
-					({
-						evaluateInvocations: async () => {
-							calls.push(metric.metricName);
-							return {
-								overallScore: 1,
-								overallEvalStatus: EvalStatus.PASSED,
-								perInvocationResults: [
-									{
-										actualInvocation: { creationTimestamp: 1 },
-										expectedInvocation: { creationTimestamp: 1 },
-										score: 1,
-										evalStatus: EvalStatus.PASSED,
-									},
-								],
-							};
-						},
-					}) as any,
-			);
+			).mockImplementation(((metric: any) => ({
+				evaluateInvocations: async () => {
+					calls.push(metric.metricName);
+					return {
+						overallScore: 1,
+						overallEvalStatus: EvalStatus.PASSED,
+						perInvocationResults: [
+							{
+								actualInvocation: { creationTimestamp: 1 },
+								expectedInvocation: { creationTimestamp: 1 },
+								score: 1,
+								evalStatus: EvalStatus.PASSED,
+							},
+						],
+					};
+				},
+			})) as any);
 
 			const metrics = [
 				{ metricName: PrebuiltMetrics.RESPONSE_MATCH_SCORE, threshold: 0.5 },

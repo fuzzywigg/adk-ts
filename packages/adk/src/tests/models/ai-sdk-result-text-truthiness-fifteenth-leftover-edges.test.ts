@@ -4,10 +4,12 @@ import { AiSdkLlm } from "../../models/ai-sdk";
 import { LlmRequest } from "../../models/llm-request";
 
 vi.mock("@adk/helpers/logger", () => ({
-	Logger: vi.fn(() => ({
-		debug: vi.fn(),
-		error: vi.fn(),
-	})),
+	Logger: vi.fn(function VitestMock() {
+		return {
+			debug: vi.fn(),
+			error: vi.fn(),
+		};
+	}),
 }));
 
 const { generateText, streamText } = vi.hoisted(() => ({

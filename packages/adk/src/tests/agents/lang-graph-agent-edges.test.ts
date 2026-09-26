@@ -8,12 +8,14 @@ import { Event } from "../../events/event";
 import type { InvocationContext } from "../../agents/invocation-context";
 
 vi.mock("@adk/helpers/logger", () => ({
-	Logger: vi.fn(() => ({
-		debug: vi.fn(),
-		error: vi.fn(),
-		info: vi.fn(),
-		warn: vi.fn(),
-	})),
+	Logger: vi.fn(function VitestMock() {
+		return {
+			debug: vi.fn(),
+			error: vi.fn(),
+			info: vi.fn(),
+			warn: vi.fn(),
+		};
+	}),
 }));
 
 class MockAgent extends BaseAgent {

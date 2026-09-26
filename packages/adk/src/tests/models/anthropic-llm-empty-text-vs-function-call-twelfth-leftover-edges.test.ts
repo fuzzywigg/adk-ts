@@ -3,10 +3,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AnthropicLlm } from "../../models/anthropic-llm";
 
 vi.mock("@adk/helpers/logger", () => ({
-	Logger: vi.fn(() => ({
-		debug: vi.fn(),
-		error: vi.fn(),
-	})),
+	Logger: vi.fn(function VitestMock() {
+		return {
+			debug: vi.fn(),
+			error: vi.fn(),
+		};
+	}),
 }));
 
 vi.mock("@anthropic-ai/sdk");
@@ -23,9 +25,11 @@ describe("anthropic-llm empty-text vs function-call twelfth leftover edges", () 
 		originalEnv = { ...process.env };
 		process.env.ANTHROPIC_API_KEY = "test-key";
 		(Anthropic as unknown as ReturnType<typeof vi.fn>).mockImplementation(
-			() => ({
-				messages: { create: vi.fn() },
-			}),
+			function VitestMock() {
+				return {
+					messages: { create: vi.fn() },
+				};
+			},
 		);
 		llm = new AnthropicLlm();
 	});

@@ -12,12 +12,14 @@ import {
 } from "../../sessions/database-factories";
 
 vi.mock("../../logger", () => ({
-	Logger: vi.fn(() => ({
-		debug: vi.fn(),
-		error: vi.fn(),
-		warn: vi.fn(),
-		info: vi.fn(),
-	})),
+	Logger: vi.fn(function VitestMock() {
+		return {
+			debug: vi.fn(),
+			error: vi.fn(),
+			warn: vi.fn(),
+			info: vi.fn(),
+		};
+	}),
 }));
 
 function invocation(opts: {
@@ -225,10 +227,12 @@ describe("database-factories leftover edges (overnight TOKENMAXX post #150)", ()
 	});
 
 	it("SQLite://file.db still routes via .db substring to sqlite", () => {
-		const Database = vi.fn().mockImplementation(() => ({
-			close: vi.fn(),
-			prepare: vi.fn(),
-		}));
+		const Database = vi.fn().mockImplementation(function VitestMock() {
+			return {
+				close: vi.fn(),
+				prepare: vi.fn(),
+			};
+		});
 		Module.prototype.require = function (
 			this: NodeModule,
 			id: string,
@@ -245,10 +249,12 @@ describe("database-factories leftover edges (overnight TOKENMAXX post #150)", ()
 	});
 
 	it("routes http URLs containing .db mid-path to sqlite", () => {
-		const Database = vi.fn().mockImplementation(() => ({
-			close: vi.fn(),
-			prepare: vi.fn(),
-		}));
+		const Database = vi.fn().mockImplementation(function VitestMock() {
+			return {
+				close: vi.fn(),
+				prepare: vi.fn(),
+			};
+		});
 		Module.prototype.require = function (
 			this: NodeModule,
 			id: string,
@@ -268,10 +274,12 @@ describe("database-factories leftover edges (overnight TOKENMAXX post #150)", ()
 	});
 
 	it("sqlite:// with empty remainder still constructs sqlite service", () => {
-		const Database = vi.fn().mockImplementation(() => ({
-			close: vi.fn(),
-			prepare: vi.fn(),
-		}));
+		const Database = vi.fn().mockImplementation(function VitestMock() {
+			return {
+				close: vi.fn(),
+				prepare: vi.fn(),
+			};
+		});
 		Module.prototype.require = function (
 			this: NodeModule,
 			id: string,
@@ -288,10 +296,12 @@ describe("database-factories leftover edges (overnight TOKENMAXX post #150)", ()
 	});
 
 	it("createDatabaseSessionService forwards options for :memory:", () => {
-		const Database = vi.fn().mockImplementation(() => ({
-			close: vi.fn(),
-			prepare: vi.fn(),
-		}));
+		const Database = vi.fn().mockImplementation(function VitestMock() {
+			return {
+				close: vi.fn(),
+				prepare: vi.fn(),
+			};
+		});
 		Module.prototype.require = function (
 			this: NodeModule,
 			id: string,
@@ -354,11 +364,13 @@ describe("database-factories leftover edges (overnight TOKENMAXX post #150)", ()
 	});
 
 	it("createPostgresSessionService spreads options onto Pool config", () => {
-		const Pool = vi.fn().mockImplementation(() => ({
-			on: vi.fn(),
-			end: vi.fn(),
-			connect: vi.fn(),
-		}));
+		const Pool = vi.fn().mockImplementation(function VitestMock() {
+			return {
+				on: vi.fn(),
+				end: vi.fn(),
+				connect: vi.fn(),
+			};
+		});
 		Module.prototype.require = function (
 			this: NodeModule,
 			id: string,

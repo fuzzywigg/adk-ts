@@ -5,10 +5,12 @@ import { AnthropicLlm, type LlmRequest, LlmResponse } from "@adk/models";
 
 vi.mock("@anthropic-ai/sdk");
 vi.mock("@adk/helpers/logger", () => ({
-	Logger: vi.fn(() => ({
-		debug: vi.fn(),
-		error: vi.fn(),
-	})),
+	Logger: vi.fn(function VitestMock() {
+		return {
+			debug: vi.fn(),
+			error: vi.fn(),
+		};
+	}),
 }));
 
 describe("AnthropicLlm", () => {
@@ -70,11 +72,13 @@ describe("AnthropicLlm", () => {
 
 		beforeEach(() => {
 			mockMessagesCreate = vi.fn().mockResolvedValue(mockAnthropicResponse);
-			(Anthropic as any).mockImplementation(() => ({
-				messages: {
-					create: mockMessagesCreate,
-				},
-			}));
+			(Anthropic as any).mockImplementation(function VitestMock() {
+				return {
+					messages: {
+						create: mockMessagesCreate,
+					},
+				};
+			});
 		});
 
 		it("should generate content with default model", async () => {
@@ -527,9 +531,11 @@ describe("AnthropicLlm", () => {
 				usage: { input_tokens: 1, output_tokens: 1 },
 				stop_reason: "end_turn",
 			});
-			(Anthropic as any).mockImplementation(() => ({
-				messages: { create: mockMessagesCreate },
-			}));
+			(Anthropic as any).mockImplementation(function VitestMock() {
+				return {
+					messages: { create: mockMessagesCreate },
+				};
+			});
 		});
 
 		it("forwards temperature and topP into messages.create", async () => {

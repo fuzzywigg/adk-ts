@@ -20,12 +20,14 @@ import type { LlmResponse } from "../../../models/llm-response";
 import { State } from "../../../sessions/state";
 
 vi.mock("../../../logger", () => ({
-	Logger: vi.fn(() => ({
-		debug: vi.fn(),
-		error: vi.fn(),
-		warn: vi.fn(),
-		info: vi.fn(),
-	})),
+	Logger: vi.fn(function VitestMock() {
+		return {
+			debug: vi.fn(),
+			error: vi.fn(),
+			warn: vi.fn(),
+			info: vi.fn(),
+		};
+	}),
 }));
 
 class StubExecutor extends BaseCodeExecutor {

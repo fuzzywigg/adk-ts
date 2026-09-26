@@ -3,12 +3,14 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const { eventMock, updateMock, LangfuseMock } = vi.hoisted(() => {
 	const updateMock = vi.fn();
 	const eventMock = vi.fn();
-	const traceMock = vi.fn(() => ({
-		update: updateMock,
-		event: eventMock,
-		span: vi.fn(),
-		generation: vi.fn(),
-	}));
+	const traceMock = vi.fn(function VitestMock() {
+		return {
+			update: updateMock,
+			event: eventMock,
+			span: vi.fn(),
+			generation: vi.fn(),
+		};
+	});
 	const LangfuseMock = vi.fn(function Langfuse(this: any) {
 		this.trace = traceMock;
 		this.flushAsync = vi.fn().mockResolvedValue(undefined);

@@ -9,12 +9,14 @@ import { LlmRequest } from "../models/llm-request";
 import { telemetryService } from "../telemetry";
 
 vi.mock("../logger", () => ({
-	Logger: vi.fn(() => ({
-		debug: vi.fn(),
-		error: vi.fn(),
-		warn: vi.fn(),
-		info: vi.fn(),
-	})),
+	Logger: vi.fn(function VitestMock() {
+		return {
+			debug: vi.fn(),
+			error: vi.fn(),
+			warn: vi.fn(),
+			info: vi.fn(),
+		};
+	}),
 }));
 
 describe("misc leftover edges (post #124)", () => {

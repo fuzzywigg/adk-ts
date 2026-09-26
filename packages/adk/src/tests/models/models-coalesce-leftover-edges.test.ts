@@ -11,21 +11,25 @@ import { LlmResponse } from "../../models/llm-response";
 import { OpenAiLlm } from "../../models/openai-llm";
 
 vi.mock("@adk/helpers/logger", () => ({
-	Logger: vi.fn(() => ({
-		debug: vi.fn(),
-		error: vi.fn(),
-		warn: vi.fn(),
-	})),
+	Logger: vi.fn(function VitestMock() {
+		return {
+			debug: vi.fn(),
+			error: vi.fn(),
+			warn: vi.fn(),
+		};
+	}),
 }));
 
 vi.mock("openai", () => ({
-	default: vi.fn(() => ({
-		chat: {
-			completions: {
-				create: vi.fn(),
+	default: vi.fn(function VitestMock() {
+		return {
+			chat: {
+				completions: {
+					create: vi.fn(),
+				},
 			},
-		},
-	})),
+		};
+	}),
 }));
 
 vi.mock("@anthropic-ai/sdk");
@@ -68,13 +72,15 @@ describe("models coalesce leftover edges", () => {
 			process.env.OPENAI_API_KEY = "test-key";
 			mockCreate = vi.fn();
 			(OpenAI as unknown as ReturnType<typeof vi.fn>).mockImplementation(
-				() => ({
-					chat: {
-						completions: {
-							create: mockCreate,
+				function VitestMock() {
+					return {
+						chat: {
+							completions: {
+								create: mockCreate,
+							},
 						},
-					},
-				}),
+					};
+				},
 			);
 			llm = new OpenAiLlm();
 		});
@@ -325,9 +331,11 @@ describe("models coalesce leftover edges", () => {
 				usage: { input_tokens: 1, output_tokens: 1 },
 				stop_reason: "end_turn",
 			});
-			(Anthropic as any).mockImplementation(() => ({
-				messages: { create: mockMessagesCreate },
-			}));
+			(Anthropic as any).mockImplementation(function VitestMock() {
+				return {
+					messages: { create: mockMessagesCreate },
+				};
+			});
 		});
 
 		const missingContentsCases: Array<{
@@ -435,12 +443,14 @@ describe("models coalesce leftover edges", () => {
 					},
 				});
 				(GoogleGenAI as unknown as ReturnType<typeof vi.fn>).mockImplementation(
-					() => ({
-						models: {
-							generateContent,
-							generateContentStream: vi.fn(),
-						},
-					}),
+					function VitestMock() {
+						return {
+							models: {
+								generateContent,
+								generateContentStream: vi.fn(),
+							},
+						};
+					},
 				);
 
 				const llm = new GoogleLlm();

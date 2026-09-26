@@ -3,10 +3,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { GoogleLlm } from "../../models/google-llm";
 
 vi.mock("@adk/helpers/logger", () => ({
-	Logger: vi.fn(() => ({
-		debug: vi.fn(),
-		error: vi.fn(),
-	})),
+	Logger: vi.fn(function VitestMock() {
+		return {
+			debug: vi.fn(),
+			error: vi.fn(),
+		};
+	}),
 }));
 
 vi.mock("@google/genai", () => ({
@@ -25,12 +27,14 @@ describe("GoogleLlm GOOGLE_GENAI_USE_VERTEXAI case-sensitivity seventh leftover 
 		originalEnv = { ...process.env };
 		vi.clearAllMocks();
 		(GoogleGenAI as unknown as ReturnType<typeof vi.fn>).mockImplementation(
-			() => ({
-				models: {
-					generateContent: vi.fn(),
-					generateContentStream: vi.fn(),
-				},
-			}),
+			function VitestMock() {
+				return {
+					models: {
+						generateContent: vi.fn(),
+						generateContentStream: vi.fn(),
+					},
+				};
+			},
 		);
 		process.env.GOOGLE_CLOUD_PROJECT = "proj";
 		process.env.GOOGLE_CLOUD_LOCATION = "loc";

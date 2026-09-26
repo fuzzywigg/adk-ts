@@ -13,25 +13,29 @@ const populateClientFunctionCallIdMock = vi.hoisted(() => vi.fn());
 const getLongRunningFunctionCallsMock = vi.hoisted(() => vi.fn());
 
 vi.mock("@adk/helpers/logger", () => ({
-	Logger: vi.fn(() => ({
-		debug: vi.fn(),
-		error: vi.fn(),
-		warn: vi.fn(),
-		info: vi.fn(),
-		debugArray: vi.fn(),
-		debugStructured: vi.fn(),
-	})),
+	Logger: vi.fn(function VitestMock() {
+		return {
+			debug: vi.fn(),
+			error: vi.fn(),
+			warn: vi.fn(),
+			info: vi.fn(),
+			debugArray: vi.fn(),
+			debugStructured: vi.fn(),
+		};
+	}),
 }));
 
 vi.mock("@adk/logger", () => ({
-	Logger: vi.fn(() => ({
-		debug: vi.fn(),
-		error: vi.fn(),
-		warn: vi.fn(),
-		info: vi.fn(),
-		debugArray: vi.fn(),
-		debugStructured: vi.fn(),
-	})),
+	Logger: vi.fn(function VitestMock() {
+		return {
+			debug: vi.fn(),
+			error: vi.fn(),
+			warn: vi.fn(),
+			info: vi.fn(),
+			debugArray: vi.fn(),
+			debugStructured: vi.fn(),
+		};
+	}),
 }));
 
 vi.mock("@adk/flows/llm-flows/functions", async (importOriginal) => {

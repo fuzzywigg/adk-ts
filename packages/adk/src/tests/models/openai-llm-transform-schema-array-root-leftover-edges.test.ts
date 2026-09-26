@@ -3,20 +3,24 @@ import OpenAI from "openai";
 import { OpenAiLlm } from "../../models/openai-llm";
 
 vi.mock("@adk/helpers/logger", () => ({
-	Logger: vi.fn(() => ({
-		debug: vi.fn(),
-		error: vi.fn(),
-	})),
+	Logger: vi.fn(function VitestMock() {
+		return {
+			debug: vi.fn(),
+			error: vi.fn(),
+		};
+	}),
 }));
 
 vi.mock("openai", () => ({
-	default: vi.fn(() => ({
-		chat: {
-			completions: {
-				create: vi.fn(),
+	default: vi.fn(function VitestMock() {
+		return {
+			chat: {
+				completions: {
+					create: vi.fn(),
+				},
 			},
-		},
-	})),
+		};
+	}),
 }));
 
 describe("OpenAiLlm sixth leftover: transformSchema array-root (post #151)", () => {
@@ -26,13 +30,17 @@ describe("OpenAiLlm sixth leftover: transformSchema array-root (post #151)", () 
 	beforeEach(() => {
 		originalEnv = { ...process.env };
 		process.env.OPENAI_API_KEY = "test-key";
-		(OpenAI as unknown as ReturnType<typeof vi.fn>).mockImplementation(() => ({
-			chat: {
-				completions: {
-					create: vi.fn(),
-				},
+		(OpenAI as unknown as ReturnType<typeof vi.fn>).mockImplementation(
+			function VitestMock() {
+				return {
+					chat: {
+						completions: {
+							create: vi.fn(),
+						},
+					},
+				};
 			},
-		}));
+		);
 		llm = new OpenAiLlm("gpt-4o-mini");
 	});
 

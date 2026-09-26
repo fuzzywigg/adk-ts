@@ -15,23 +15,29 @@ const {
 	const updateMock = vi.fn();
 	const endMock = vi.fn();
 	const eventMock = vi.fn();
-	const spanMock = vi.fn(() => ({
-		update: updateMock,
-		end: endMock,
-		event: eventMock,
-		span: vi.fn(),
-		generation: vi.fn(),
-	}));
-	const generationMock = vi.fn(() => ({
-		update: updateMock,
-		end: endMock,
-	}));
-	const traceMock = vi.fn(() => ({
-		update: updateMock,
-		event: eventMock,
-		span: spanMock,
-		generation: generationMock,
-	}));
+	const spanMock = vi.fn(function VitestMock() {
+		return {
+			update: updateMock,
+			end: endMock,
+			event: eventMock,
+			span: vi.fn(),
+			generation: vi.fn(),
+		};
+	});
+	const generationMock = vi.fn(function VitestMock() {
+		return {
+			update: updateMock,
+			end: endMock,
+		};
+	});
+	const traceMock = vi.fn(function VitestMock() {
+		return {
+			update: updateMock,
+			event: eventMock,
+			span: spanMock,
+			generation: generationMock,
+		};
+	});
 	const flushAsync = vi.fn().mockResolvedValue(undefined);
 	const shutdownAsync = vi.fn().mockResolvedValue(undefined);
 	const LangfuseMock = vi.fn(function Langfuse(this: any) {
@@ -80,23 +86,29 @@ function makeInvocation(overrides: Record<string, unknown> = {}) {
 describe("LangfusePlugin leftover edges", () => {
 	beforeEach(() => {
 		vi.clearAllMocks();
-		spanMock.mockImplementation(() => ({
-			update: updateMock,
-			end: endMock,
-			event: eventMock,
-			span: spanMock,
-			generation: generationMock,
-		}));
-		generationMock.mockImplementation(() => ({
-			update: updateMock,
-			end: endMock,
-		}));
-		traceMock.mockImplementation(() => ({
-			update: updateMock,
-			event: eventMock,
-			span: spanMock,
-			generation: generationMock,
-		}));
+		spanMock.mockImplementation(function VitestMock() {
+			return {
+				update: updateMock,
+				end: endMock,
+				event: eventMock,
+				span: spanMock,
+				generation: generationMock,
+			};
+		});
+		generationMock.mockImplementation(function VitestMock() {
+			return {
+				update: updateMock,
+				end: endMock,
+			};
+		});
+		traceMock.mockImplementation(function VitestMock() {
+			return {
+				update: updateMock,
+				event: eventMock,
+				span: spanMock,
+				generation: generationMock,
+			};
+		});
 	});
 
 	it("toPlainText unwraps nested content and double-nested wrappers", () => {

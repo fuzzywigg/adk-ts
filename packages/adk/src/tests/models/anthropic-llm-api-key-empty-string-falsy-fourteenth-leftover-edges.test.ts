@@ -4,10 +4,12 @@ import { AnthropicLlm } from "../../models/anthropic-llm";
 import { LlmRequest } from "../../models/llm-request";
 
 vi.mock("@adk/helpers/logger", () => ({
-	Logger: vi.fn(() => ({
-		debug: vi.fn(),
-		error: vi.fn(),
-	})),
+	Logger: vi.fn(function VitestMock() {
+		return {
+			debug: vi.fn(),
+			error: vi.fn(),
+		};
+	}),
 }));
 
 vi.mock("@anthropic-ai/sdk");
@@ -23,9 +25,11 @@ describe("anthropic-llm api-key empty-string falsy fourteenth leftover edges", (
 	beforeEach(() => {
 		originalEnv = { ...process.env };
 		(Anthropic as unknown as ReturnType<typeof vi.fn>).mockImplementation(
-			() => ({
-				messages: { create: vi.fn() },
-			}),
+			function VitestMock() {
+				return {
+					messages: { create: vi.fn() },
+				};
+			},
 		);
 	});
 
@@ -70,9 +74,11 @@ describe("anthropic-llm api-key empty-string falsy fourteenth leftover edges", (
 			stop_reason: "end_turn",
 		});
 		(Anthropic as unknown as ReturnType<typeof vi.fn>).mockImplementation(
-			() => ({
-				messages: { create },
-			}),
+			function VitestMock() {
+				return {
+					messages: { create },
+				};
+			},
 		);
 		const llm = new AnthropicLlm();
 		for await (const _ of (llm as any).generateContentAsyncImpl(

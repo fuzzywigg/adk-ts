@@ -6,23 +6,27 @@ import type { ToolContext } from "../../../tools/tool-context";
 import { handleFunctionCallsAsync } from "../../../flows/llm-flows/functions";
 
 vi.mock("../../../logger", () => ({
-	Logger: vi.fn(() => ({
-		debug: vi.fn(),
-		error: vi.fn(),
-		warn: vi.fn(),
-		info: vi.fn(),
-	})),
+	Logger: vi.fn(function VitestMock() {
+		return {
+			debug: vi.fn(),
+			error: vi.fn(),
+			warn: vi.fn(),
+			info: vi.fn(),
+		};
+	}),
 }));
 
 vi.mock("../../../telemetry", () => ({
 	telemetryService: {
-		getTracer: vi.fn(() => ({
-			startSpan: () => ({
-				setStatus: vi.fn(),
-				recordException: vi.fn(),
-				end: vi.fn(),
-			}),
-		})),
+		getTracer: vi.fn(function VitestMock() {
+			return {
+				startSpan: () => ({
+					setStatus: vi.fn(),
+					recordException: vi.fn(),
+					end: vi.fn(),
+				}),
+			};
+		}),
 		traceToolCall: vi.fn(),
 	},
 }));

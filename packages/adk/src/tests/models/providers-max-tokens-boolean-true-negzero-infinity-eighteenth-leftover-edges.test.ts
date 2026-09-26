@@ -9,18 +9,22 @@ import { LlmRequest } from "../../models/llm-request";
 import { OpenAiLlm } from "../../models/openai-llm";
 
 vi.mock("@adk/helpers/logger", () => ({
-	Logger: vi.fn(() => ({
-		debug: vi.fn(),
-		error: vi.fn(),
-	})),
+	Logger: vi.fn(function VitestMock() {
+		return {
+			debug: vi.fn(),
+			error: vi.fn(),
+		};
+	}),
 }));
 
 vi.mock("@anthropic-ai/sdk");
 
 vi.mock("openai", () => ({
-	default: vi.fn(() => ({
-		chat: { completions: { create: vi.fn() } },
-	})),
+	default: vi.fn(function VitestMock() {
+		return {
+			chat: { completions: { create: vi.fn() } },
+		};
+	}),
 }));
 
 vi.mock("ai", () => ({
@@ -53,9 +57,11 @@ describe("providers max-tokens boolean-true negzero infinity eighteenth leftover
 			stop_reason: "end_turn",
 		});
 		(Anthropic as unknown as ReturnType<typeof vi.fn>).mockImplementation(
-			() => ({
-				messages: { create: anthropicCreate },
-			}),
+			function VitestMock() {
+				return {
+					messages: { create: anthropicCreate },
+				};
+			},
 		);
 		openaiCreate = vi.fn().mockResolvedValue({
 			choices: [
@@ -65,9 +71,13 @@ describe("providers max-tokens boolean-true negzero infinity eighteenth leftover
 				},
 			],
 		});
-		(OpenAI as unknown as ReturnType<typeof vi.fn>).mockImplementation(() => ({
-			chat: { completions: { create: openaiCreate } },
-		}));
+		(OpenAI as unknown as ReturnType<typeof vi.fn>).mockImplementation(
+			function VitestMock() {
+				return {
+					chat: { completions: { create: openaiCreate } },
+				};
+			},
+		);
 		(generateText as unknown as ReturnType<typeof vi.fn>).mockResolvedValue({
 			text: "ok",
 			usage: { promptTokens: 1, completionTokens: 1 },

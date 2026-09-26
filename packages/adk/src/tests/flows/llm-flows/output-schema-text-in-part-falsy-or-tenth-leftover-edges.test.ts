@@ -5,12 +5,14 @@ import { responseProcessor } from "../../../flows/llm-flows/output-schema";
 import { LlmResponse } from "../../../models/llm-response";
 
 vi.mock("../../../logger", () => ({
-	Logger: vi.fn(() => ({
-		debug: vi.fn(),
-		error: vi.fn(),
-		warn: vi.fn(),
-		info: vi.fn(),
-	})),
+	Logger: vi.fn(function VitestMock() {
+		return {
+			debug: vi.fn(),
+			error: vi.fn(),
+			warn: vi.fn(),
+			info: vi.fn(),
+		};
+	}),
 }));
 
 async function collect(gen: AsyncGenerator<unknown, void, unknown>) {

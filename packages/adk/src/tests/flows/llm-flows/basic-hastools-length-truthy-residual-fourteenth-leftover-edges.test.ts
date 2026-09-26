@@ -6,12 +6,14 @@ import { LlmRequest } from "../../../models/llm-request";
 const debugMock = vi.fn();
 
 vi.mock("../../../logger", () => ({
-	Logger: vi.fn(() => ({
-		debug: debugMock,
-		error: vi.fn(),
-		warn: vi.fn(),
-		info: vi.fn(),
-	})),
+	Logger: vi.fn(function VitestMock() {
+		return {
+			debug: debugMock,
+			error: vi.fn(),
+			warn: vi.fn(),
+			info: vi.fn(),
+		};
+	}),
 }));
 
 async function drain(

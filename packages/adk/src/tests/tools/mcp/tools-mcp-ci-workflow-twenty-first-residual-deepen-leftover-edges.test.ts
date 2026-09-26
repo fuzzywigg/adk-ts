@@ -7,7 +7,7 @@ import { describe, expect, it } from "vitest";
  * tip auth/memory owns focused `twentieth-leftover-edges` push.yml filter;
  * tools/mcp string-infinity/object-one/object-false residual deepen stays
  * gated via full pnpm test (`twenty-first-residual-deepen-leftover-edges`).
- * Soft pin only — no push.yml retarget. Vitest stays on 3.x.
+ * Soft pin only — no push.yml retarget. Vitest is on 4.x.
  */
 describe("tools/mcp ci workflow twenty-first residual deepen leftover edges", () => {
 	const root = resolve(__dirname, "../../../../../..");
@@ -51,10 +51,10 @@ describe("tools/mcp ci workflow twenty-first residual deepen leftover edges", ()
 		);
 	});
 
-	it("vitest stays on 3.x (no 4.x bump in this residual)", () => {
+	it("vitest is on 4.x", () => {
 		const pkg = JSON.parse(
 			readFileSync(resolve(root, "packages/adk/package.json"), "utf8"),
 		);
-		expect(pkg.devDependencies.vitest).toMatch(/^\^?3\./);
+		expect(pkg.devDependencies.vitest).toMatch(/^\^?4\./);
 	});
 });

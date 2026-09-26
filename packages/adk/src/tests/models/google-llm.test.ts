@@ -3,10 +3,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { GoogleLlm } from "../../models/google-llm";
 
 vi.mock("@adk/helpers/logger", () => ({
-	Logger: vi.fn(() => ({
-		debug: vi.fn(),
-		error: vi.fn(),
-	})),
+	Logger: vi.fn(function VitestMock() {
+		return {
+			debug: vi.fn(),
+			error: vi.fn(),
+		};
+	}),
 }));
 
 vi.mock("@google/genai", () => ({
@@ -361,12 +363,14 @@ describe("GoogleLlm", () => {
 				usageMetadata: { candidatesTokenCount: 7, totalTokenCount: 11 },
 			});
 			(GoogleGenAI as unknown as ReturnType<typeof vi.fn>).mockImplementation(
-				() => ({
-					models: {
-						generateContent,
-						generateContentStream: vi.fn(),
-					},
-				}),
+				function VitestMock() {
+					return {
+						models: {
+							generateContent,
+							generateContentStream: vi.fn(),
+						},
+					};
+				},
 			);
 
 			const llm = new GoogleLlm("gemini-2.0-flash");
@@ -424,12 +428,14 @@ describe("GoogleLlm", () => {
 
 			const generateContentStream = vi.fn().mockResolvedValue(stream);
 			(GoogleGenAI as unknown as ReturnType<typeof vi.fn>).mockImplementation(
-				() => ({
-					models: {
-						generateContent: vi.fn(),
-						generateContentStream,
-					},
-				}),
+				function VitestMock() {
+					return {
+						models: {
+							generateContent: vi.fn(),
+							generateContentStream,
+						},
+					};
+				},
 			);
 
 			const llm = new GoogleLlm();
@@ -492,12 +498,14 @@ describe("GoogleLlm", () => {
 
 			const generateContentStream = vi.fn().mockResolvedValue(stream);
 			(GoogleGenAI as unknown as ReturnType<typeof vi.fn>).mockImplementation(
-				() => ({
-					models: {
-						generateContent: vi.fn(),
-						generateContentStream,
-					},
-				}),
+				function VitestMock() {
+					return {
+						models: {
+							generateContent: vi.fn(),
+							generateContentStream,
+						},
+					};
+				},
 			);
 
 			const llm = new GoogleLlm();
@@ -559,12 +567,14 @@ describe("GoogleLlm", () => {
 
 			const generateContentStream = vi.fn().mockResolvedValue(stream);
 			(GoogleGenAI as unknown as ReturnType<typeof vi.fn>).mockImplementation(
-				() => ({
-					models: {
-						generateContent: vi.fn(),
-						generateContentStream,
-					},
-				}),
+				function VitestMock() {
+					return {
+						models: {
+							generateContent: vi.fn(),
+							generateContentStream,
+						},
+					};
+				},
 			);
 
 			const llm = new GoogleLlm();
@@ -626,12 +636,14 @@ describe("GoogleLlm", () => {
 
 			const generateContentStream = vi.fn().mockResolvedValue(stream);
 			(GoogleGenAI as unknown as ReturnType<typeof vi.fn>).mockImplementation(
-				() => ({
-					models: {
-						generateContent: vi.fn(),
-						generateContentStream,
-					},
-				}),
+				function VitestMock() {
+					return {
+						models: {
+							generateContent: vi.fn(),
+							generateContentStream,
+						},
+					};
+				},
 			);
 
 			const llm = new GoogleLlm();
@@ -665,9 +677,11 @@ describe("GoogleLlm", () => {
 				candidates: [{ content: { parts: [{ text: "ok" }] } }],
 			});
 			(GoogleGenAI as unknown as ReturnType<typeof vi.fn>).mockImplementation(
-				() => ({
-					models: { generateContent, generateContentStream: vi.fn() },
-				}),
+				function VitestMock() {
+					return {
+						models: { generateContent, generateContentStream: vi.fn() },
+					};
+				},
 			);
 
 			const llm = new GoogleLlm("gemini-2.5-flash");
@@ -702,12 +716,14 @@ describe("GoogleLlm", () => {
 
 			const generateContentStream = vi.fn().mockResolvedValue(stream);
 			(GoogleGenAI as unknown as ReturnType<typeof vi.fn>).mockImplementation(
-				() => ({
-					models: {
-						generateContent: vi.fn(),
-						generateContentStream,
-					},
-				}),
+				function VitestMock() {
+					return {
+						models: {
+							generateContent: vi.fn(),
+							generateContentStream,
+						},
+					};
+				},
 			);
 
 			const llm = new GoogleLlm();
@@ -767,12 +783,14 @@ describe("GoogleLlm", () => {
 
 			const generateContentStream = vi.fn().mockResolvedValue(stream);
 			(GoogleGenAI as unknown as ReturnType<typeof vi.fn>).mockImplementation(
-				() => ({
-					models: {
-						generateContent: vi.fn(),
-						generateContentStream,
-					},
-				}),
+				function VitestMock() {
+					return {
+						models: {
+							generateContent: vi.fn(),
+							generateContentStream,
+						},
+					};
+				},
 			);
 
 			const llm = new GoogleLlm();
@@ -814,12 +832,14 @@ describe("GoogleLlm", () => {
 
 			const generateContentStream = vi.fn().mockResolvedValue(stream);
 			(GoogleGenAI as unknown as ReturnType<typeof vi.fn>).mockImplementation(
-				() => ({
-					models: {
-						generateContent: vi.fn(),
-						generateContentStream,
-					},
-				}),
+				function VitestMock() {
+					return {
+						models: {
+							generateContent: vi.fn(),
+							generateContentStream,
+						},
+					};
+				},
 			);
 
 			const llm = new GoogleLlm();
@@ -854,12 +874,14 @@ describe("GoogleLlm", () => {
 				candidates: [{ content: { parts: [{ text: "ok" }] } }],
 			});
 			(GoogleGenAI as unknown as ReturnType<typeof vi.fn>).mockImplementation(
-				() => ({
-					models: {
-						generateContent,
-						generateContentStream: vi.fn(),
-					},
-				}),
+				function VitestMock() {
+					return {
+						models: {
+							generateContent,
+							generateContentStream: vi.fn(),
+						},
+					};
+				},
 			);
 
 			const llm = new GoogleLlm("gemini-2.5-flash");

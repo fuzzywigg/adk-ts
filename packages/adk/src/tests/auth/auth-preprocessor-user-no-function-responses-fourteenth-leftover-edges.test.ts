@@ -7,12 +7,14 @@ import { LlmRequest } from "../../models/llm-request";
 const handleFunctionCallsAsyncMock = vi.hoisted(() => vi.fn());
 
 vi.mock("../../logger", () => ({
-	Logger: vi.fn(() => ({
-		debug: vi.fn(),
-		error: vi.fn(),
-		warn: vi.fn(),
-		info: vi.fn(),
-	})),
+	Logger: vi.fn(function VitestMock() {
+		return {
+			debug: vi.fn(),
+			error: vi.fn(),
+			warn: vi.fn(),
+			info: vi.fn(),
+		};
+	}),
 }));
 
 vi.mock("../../flows/llm-flows/functions", async (importOriginal) => {

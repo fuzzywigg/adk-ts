@@ -6,16 +6,20 @@ import { LlmRequest } from "../../models/llm-request";
 import { OpenAiLlm } from "../../models/openai-llm";
 
 vi.mock("@adk/helpers/logger", () => ({
-	Logger: vi.fn(() => ({
-		debug: vi.fn(),
-		error: vi.fn(),
-	})),
+	Logger: vi.fn(function VitestMock() {
+		return {
+			debug: vi.fn(),
+			error: vi.fn(),
+		};
+	}),
 }));
 
 vi.mock("openai", () => ({
-	default: vi.fn(() => ({
-		chat: { completions: { create: vi.fn() } },
-	})),
+	default: vi.fn(function VitestMock() {
+		return {
+			chat: { completions: { create: vi.fn() } },
+		};
+	}),
 }));
 
 const { generateText } = vi.hoisted(() => ({
@@ -89,9 +93,13 @@ describe("ai-sdk empty tools undefined vs openai empty array sixteenth leftover 
 		const create = vi.fn().mockResolvedValue({
 			choices: [{ message: { content: "ok" }, finish_reason: "stop" }],
 		});
-		(OpenAI as unknown as ReturnType<typeof vi.fn>).mockImplementation(() => ({
-			chat: { completions: { create } },
-		}));
+		(OpenAI as unknown as ReturnType<typeof vi.fn>).mockImplementation(
+			function VitestMock() {
+				return {
+					chat: { completions: { create } },
+				};
+			},
+		);
 		const llm = new OpenAiLlm("gpt-4o-mini");
 		for await (const _ of (llm as any).generateContentAsyncImpl(
 			new LlmRequest({
@@ -112,9 +120,13 @@ describe("ai-sdk empty tools undefined vs openai empty array sixteenth leftover 
 		const create = vi.fn().mockResolvedValue({
 			choices: [{ message: { content: "ok" }, finish_reason: "stop" }],
 		});
-		(OpenAI as unknown as ReturnType<typeof vi.fn>).mockImplementation(() => ({
-			chat: { completions: { create } },
-		}));
+		(OpenAI as unknown as ReturnType<typeof vi.fn>).mockImplementation(
+			function VitestMock() {
+				return {
+					chat: { completions: { create } },
+				};
+			},
+		);
 		const llm = new OpenAiLlm("gpt-4o-mini");
 		for await (const _ of (llm as any).generateContentAsyncImpl(
 			new LlmRequest({

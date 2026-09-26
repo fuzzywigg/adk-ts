@@ -278,7 +278,9 @@ describe("BaseAgent leftover matrix edges (TOKENMAXX deepen)", () => {
 
 	describe("endInvocation mid-callback / mid-impl matrices", () => {
 		it("before content short-circuit sets endInvocation and skips after callbacks", async () => {
-			const after = vi.fn(() => ({ parts: [{ text: "after" }] }));
+			const after = vi.fn(function VitestMock() {
+				return { parts: [{ text: "after" }] };
+			});
 			const agent = new TestAgent({
 				name: "end_before",
 				beforeAgentCallback: () => ({ parts: [{ text: "early" }] }),
@@ -291,7 +293,9 @@ describe("BaseAgent leftover matrix edges (TOKENMAXX deepen)", () => {
 		});
 
 		it("endInvocation during runAsyncImpl skips after callbacks", async () => {
-			const after = vi.fn(() => ({ parts: [{ text: "after" }] }));
+			const after = vi.fn(function VitestMock() {
+				return { parts: [{ text: "after" }] };
+			});
 			const agent = new TestAgent({
 				name: "end_mid_impl",
 				afterAgentCallback: after,
@@ -310,7 +314,9 @@ describe("BaseAgent leftover matrix edges (TOKENMAXX deepen)", () => {
 		});
 
 		it("runLiveInternal still invokes after callbacks even if endInvocation set mid-impl", async () => {
-			const after = vi.fn(() => ({ parts: [{ text: "live-after" }] }));
+			const after = vi.fn(function VitestMock() {
+				return { parts: [{ text: "live-after" }] };
+			});
 			const agent = new TestAgent({
 				name: "live_end",
 				afterAgentCallback: after,

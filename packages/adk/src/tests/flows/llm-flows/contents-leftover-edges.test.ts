@@ -6,12 +6,14 @@ import { REQUEST_EUC_FUNCTION_CALL_NAME } from "../../../flows/llm-flows/functio
 import { LlmRequest } from "../../../models/llm-request";
 
 vi.mock("../../../logger", () => ({
-	Logger: vi.fn(() => ({
-		debug: vi.fn(),
-		error: vi.fn(),
-		warn: vi.fn(),
-		info: vi.fn(),
-	})),
+	Logger: vi.fn(function VitestMock() {
+		return {
+			debug: vi.fn(),
+			error: vi.fn(),
+			warn: vi.fn(),
+			info: vi.fn(),
+		};
+	}),
 }));
 
 async function drain(

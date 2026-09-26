@@ -19,7 +19,9 @@ const {
 		startMock,
 		shutdownMock,
 		NodeSDKMock,
-		getTracerSpy: vi.fn(() => ({ startSpan: vi.fn() })),
+		getTracerSpy: vi.fn(function VitestMock() {
+			return { startSpan: vi.fn() };
+		}),
 		resourceFromAttributes: vi.fn((attrs: Record<string, unknown>) => attrs),
 	};
 });

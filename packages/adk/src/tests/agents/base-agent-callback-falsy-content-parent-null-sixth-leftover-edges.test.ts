@@ -153,7 +153,9 @@ describe("BaseAgent callback-falsy / parent-null sixth leftover", () => {
 	])("before callback returning $label is skipped (if (result) falsy)", async ({
 		value,
 	}) => {
-		const later = vi.fn(() => ({ parts: [{ text: "later-win" }] }));
+		const later = vi.fn(function VitestMock() {
+			return { parts: [{ text: "later-win" }] };
+		});
 		const agent = new TestAgent({
 			name: "before_falsy_result",
 			beforeAgentCallback: [() => value as any, later],
@@ -165,7 +167,9 @@ describe("BaseAgent callback-falsy / parent-null sixth leftover", () => {
 	});
 
 	it("before callback returning {} is truthy and short-circuits impl", async () => {
-		const later = vi.fn(() => ({ parts: [{ text: "never" }] }));
+		const later = vi.fn(function VitestMock() {
+			return { parts: [{ text: "never" }] };
+		});
 		const agent = new TestAgent({
 			name: "before_empty_obj",
 			beforeAgentCallback: [() => ({}) as any, later],
@@ -185,7 +189,9 @@ describe("BaseAgent callback-falsy / parent-null sixth leftover", () => {
 	});
 
 	it("missing pluginManager is skipped via optional chaining so canonical callbacks still run", async () => {
-		const before = vi.fn(() => ({ parts: [{ text: "no-plugin" }] }));
+		const before = vi.fn(function VitestMock() {
+			return { parts: [{ text: "no-plugin" }] };
+		});
 		const agent = new TestAgent({
 			name: "no_plugin_mgr",
 			beforeAgentCallback: before,

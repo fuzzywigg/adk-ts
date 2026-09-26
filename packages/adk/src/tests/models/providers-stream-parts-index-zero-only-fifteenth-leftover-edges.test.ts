@@ -6,16 +6,20 @@ import { LlmRequest } from "../../models/llm-request";
 import { OpenAiLlm } from "../../models/openai-llm";
 
 vi.mock("@adk/helpers/logger", () => ({
-	Logger: vi.fn(() => ({
-		debug: vi.fn(),
-		error: vi.fn(),
-	})),
+	Logger: vi.fn(function VitestMock() {
+		return {
+			debug: vi.fn(),
+			error: vi.fn(),
+		};
+	}),
 }));
 
 vi.mock("openai", () => ({
-	default: vi.fn(() => ({
-		chat: { completions: { create: vi.fn() } },
-	})),
+	default: vi.fn(function VitestMock() {
+		return {
+			chat: { completions: { create: vi.fn() } },
+		};
+	}),
 }));
 
 vi.mock("@google/genai", () => ({
@@ -64,9 +68,13 @@ describe("providers stream parts index-zero only fifteenth leftover edges", () =
 				};
 			})(),
 		);
-		(OpenAI as unknown as ReturnType<typeof vi.fn>).mockImplementation(() => ({
-			chat: { completions: { create } },
-		}));
+		(OpenAI as unknown as ReturnType<typeof vi.fn>).mockImplementation(
+			function VitestMock() {
+				return {
+					chat: { completions: { create } },
+				};
+			},
+		);
 
 		const llm = new OpenAiLlm("gpt-4o-mini");
 		const responses = [
@@ -136,12 +144,14 @@ describe("providers stream parts index-zero only fifteenth leftover edges", () =
 			})(),
 		);
 		(GoogleGenAI as unknown as ReturnType<typeof vi.fn>).mockImplementation(
-			() => ({
-				models: {
-					generateContent: vi.fn(),
-					generateContentStream: stream,
-				},
-			}),
+			function VitestMock() {
+				return {
+					models: {
+						generateContent: vi.fn(),
+						generateContentStream: stream,
+					},
+				};
+			},
 		);
 
 		const llm = new GoogleLlm();

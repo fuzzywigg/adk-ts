@@ -652,28 +652,29 @@ describe("LocalEvalService", () => {
 		);
 		const spy = vi
 			.spyOn(DEFAULT_METRIC_EVALUATOR_REGISTRY, "getEvaluator")
-			.mockImplementation((metric) => {
-				return {
-					evaluateInvocations: async () => ({
-						overallScore: metric.threshold,
-						overallEvalStatus: EvalStatus.PASSED,
-						perInvocationResults: [
-							{
-								actualInvocation: {
-									invocationId: "case-actual",
-									creationTimestamp: 1,
+			.mockImplementation(
+				(metric) =>
+					({
+						evaluateInvocations: async () => ({
+							overallScore: metric.threshold,
+							overallEvalStatus: EvalStatus.PASSED,
+							perInvocationResults: [
+								{
+									actualInvocation: {
+										invocationId: "case-actual",
+										creationTimestamp: 1,
+									},
+									expectedInvocation: {
+										invocationId: "case-expected",
+										creationTimestamp: 1,
+									},
+									score: 1,
+									evalStatus: EvalStatus.PASSED,
 								},
-								expectedInvocation: {
-									invocationId: "case-expected",
-									creationTimestamp: 1,
-								},
-								score: 1,
-								evalStatus: EvalStatus.PASSED,
-							},
-						],
-					}),
-				} as any;
-			});
+							],
+						}),
+					}) as any,
+			);
 
 		const results: {
 			evalCaseResults: { evalMetricResultPerInvocation: unknown[] }[];
