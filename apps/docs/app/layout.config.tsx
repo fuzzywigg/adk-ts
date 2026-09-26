@@ -27,7 +27,7 @@ export const baseOptions: BaseLayoutProps = {
 		},
 		{
 			text: "API Reference",
-			url: "https://iqaicom.github.io/adk-ts/",
+			url: "https://fuzzywigg.github.io/adk-ts/",
 			external: true,
 			icon: <Code className="w-4 h-4" />,
 		},
