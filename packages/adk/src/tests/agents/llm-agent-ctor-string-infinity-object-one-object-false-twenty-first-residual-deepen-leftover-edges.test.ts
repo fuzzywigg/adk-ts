@@ -5,11 +5,13 @@ import { AiSdkLlm } from "../../models/ai-sdk";
 import { LLMRegistry } from "../../models/llm-registry";
 
 vi.mock("@adk/helpers/logger", () => ({
-	Logger: vi.fn(() => ({
-		debug: vi.fn(),
-		error: vi.fn(),
-		warn: vi.fn(),
-	})),
+	Logger: vi.fn(function VitestMock() {
+		return {
+			debug: vi.fn(),
+			error: vi.fn(),
+			warn: vi.fn(),
+		};
+	}),
 }));
 
 vi.mock("../../flows/llm-flows", () => ({

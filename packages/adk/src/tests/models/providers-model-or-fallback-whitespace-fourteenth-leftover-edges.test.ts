@@ -8,22 +8,28 @@ import { LlmRequest } from "../../models/llm-request";
 import { OpenAiLlm } from "../../models/openai-llm";
 
 vi.mock("@adk/helpers/logger", () => ({
-	Logger: vi.fn(() => ({
-		debug: vi.fn(),
-		error: vi.fn(),
-	})),
+	Logger: vi.fn(function VitestMock() {
+		return {
+			debug: vi.fn(),
+			error: vi.fn(),
+		};
+	}),
 }));
 
 vi.mock("openai", () => ({
-	default: vi.fn(() => ({
-		chat: { completions: { create: vi.fn() } },
-	})),
+	default: vi.fn(function VitestMock() {
+		return {
+			chat: { completions: { create: vi.fn() } },
+		};
+	}),
 }));
 
 vi.mock("@anthropic-ai/sdk", () => ({
-	default: vi.fn(() => ({
-		messages: { create: vi.fn() },
-	})),
+	default: vi.fn(function VitestMock() {
+		return {
+			messages: { create: vi.fn() },
+		};
+	}),
 }));
 
 vi.mock("@google/genai", () => ({
@@ -56,9 +62,13 @@ describe("providers model || fallback whitespace fourteenth leftover edges", () 
 		openaiCreate = vi.fn().mockResolvedValue({
 			choices: [{ message: { content: "ok" }, finish_reason: "stop" }],
 		});
-		(OpenAI as unknown as ReturnType<typeof vi.fn>).mockImplementation(() => ({
-			chat: { completions: { create: openaiCreate } },
-		}));
+		(OpenAI as unknown as ReturnType<typeof vi.fn>).mockImplementation(
+			function VitestMock() {
+				return {
+					chat: { completions: { create: openaiCreate } },
+				};
+			},
+		);
 
 		anthropicCreate = vi.fn().mockResolvedValue({
 			content: [{ type: "text", text: "ok" }],
@@ -66,21 +76,25 @@ describe("providers model || fallback whitespace fourteenth leftover edges", () 
 			stop_reason: "end_turn",
 		});
 		(Anthropic as unknown as ReturnType<typeof vi.fn>).mockImplementation(
-			() => ({
-				messages: { create: anthropicCreate },
-			}),
+			function VitestMock() {
+				return {
+					messages: { create: anthropicCreate },
+				};
+			},
 		);
 
 		googleGenerate = vi.fn().mockResolvedValue({
 			candidates: [{ content: { role: "model", parts: [{ text: "ok" }] } }],
 		});
 		(GoogleGenAI as unknown as ReturnType<typeof vi.fn>).mockImplementation(
-			() => ({
-				models: {
-					generateContent: googleGenerate,
-					generateContentStream: vi.fn(),
-				},
-			}),
+			function VitestMock() {
+				return {
+					models: {
+						generateContent: googleGenerate,
+						generateContentStream: vi.fn(),
+					},
+				};
+			},
 		);
 	});
 

@@ -2,16 +2,20 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AnthropicLlm } from "../../models/anthropic-llm";
 
 vi.mock("@adk/helpers/logger", () => ({
-	Logger: vi.fn(() => ({
-		debug: vi.fn(),
-		error: vi.fn(),
-	})),
+	Logger: vi.fn(function VitestMock() {
+		return {
+			debug: vi.fn(),
+			error: vi.fn(),
+		};
+	}),
 }));
 
 vi.mock("@anthropic-ai/sdk", () => ({
-	default: vi.fn(() => ({
-		messages: { create: vi.fn() },
-	})),
+	default: vi.fn(function VitestMock() {
+		return {
+			messages: { create: vi.fn() },
+		};
+	}),
 }));
 
 /**

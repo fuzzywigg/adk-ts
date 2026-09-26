@@ -4,16 +4,20 @@ import { LlmRequest } from "../../models/llm-request";
 import { OpenAiLlm } from "../../models/openai-llm";
 
 vi.mock("@adk/helpers/logger", () => ({
-	Logger: vi.fn(() => ({
-		debug: vi.fn(),
-		error: vi.fn(),
-	})),
+	Logger: vi.fn(function VitestMock() {
+		return {
+			debug: vi.fn(),
+			error: vi.fn(),
+		};
+	}),
 }));
 
 vi.mock("openai", () => ({
-	default: vi.fn(() => ({
-		chat: { completions: { create: vi.fn() } },
-	})),
+	default: vi.fn(function VitestMock() {
+		return {
+			chat: { completions: { create: vi.fn() } },
+		};
+	}),
 }));
 
 /**
@@ -41,9 +45,13 @@ describe("openai-llm choices index-zero only sixteenth leftover edges", () => {
 				{ message: { content: "late" }, finish_reason: "stop" },
 			],
 		});
-		(OpenAI as unknown as ReturnType<typeof vi.fn>).mockImplementation(() => ({
-			chat: { completions: { create } },
-		}));
+		(OpenAI as unknown as ReturnType<typeof vi.fn>).mockImplementation(
+			function VitestMock() {
+				return {
+					chat: { completions: { create } },
+				};
+			},
+		);
 		const llm = new OpenAiLlm("gpt-4o-mini");
 		const out: any[] = [];
 		for await (const resp of (llm as any).generateContentAsyncImpl(
@@ -59,9 +67,13 @@ describe("openai-llm choices index-zero only sixteenth leftover edges", () => {
 
 	it("non-stream empty choices yields nothing", async () => {
 		const create = vi.fn().mockResolvedValue({ choices: [] });
-		(OpenAI as unknown as ReturnType<typeof vi.fn>).mockImplementation(() => ({
-			chat: { completions: { create } },
-		}));
+		(OpenAI as unknown as ReturnType<typeof vi.fn>).mockImplementation(
+			function VitestMock() {
+				return {
+					chat: { completions: { create } },
+				};
+			},
+		);
 		const llm = new OpenAiLlm("gpt-4o-mini");
 		const out: any[] = [];
 		for await (const resp of (llm as any).generateContentAsyncImpl(
@@ -89,9 +101,13 @@ describe("openai-llm choices index-zero only sixteenth leftover edges", () => {
 				};
 			})(),
 		);
-		(OpenAI as unknown as ReturnType<typeof vi.fn>).mockImplementation(() => ({
-			chat: { completions: { create } },
-		}));
+		(OpenAI as unknown as ReturnType<typeof vi.fn>).mockImplementation(
+			function VitestMock() {
+				return {
+					chat: { completions: { create } },
+				};
+			},
+		);
 		const llm = new OpenAiLlm("gpt-4o-mini");
 		const out: any[] = [];
 		for await (const resp of (llm as any).generateContentAsyncImpl(

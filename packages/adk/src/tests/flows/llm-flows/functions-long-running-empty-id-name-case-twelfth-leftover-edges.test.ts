@@ -4,12 +4,14 @@ import { BaseTool } from "../../../tools/base/base-tool";
 import type { ToolContext } from "../../../tools/tool-context";
 
 vi.mock("../../../logger", () => ({
-	Logger: vi.fn(() => ({
-		debug: vi.fn(),
-		error: vi.fn(),
-		warn: vi.fn(),
-		info: vi.fn(),
-	})),
+	Logger: vi.fn(function VitestMock() {
+		return {
+			debug: vi.fn(),
+			error: vi.fn(),
+			warn: vi.fn(),
+			info: vi.fn(),
+		};
+	}),
 }));
 
 class SlowTool extends BaseTool {

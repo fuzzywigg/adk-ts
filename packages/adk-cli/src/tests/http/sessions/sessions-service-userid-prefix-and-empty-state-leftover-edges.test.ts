@@ -27,7 +27,9 @@ describe("SessionsService userId prefix / empty state leftover edges", () => {
 		const agentManager = {
 			getLoadedAgents: vi.fn(() => new Map([["user_demo", loaded]])),
 			startAgent: vi.fn(),
-			getInitialStateForAgent: vi.fn(() => ({ fromAgent: true })),
+			getInitialStateForAgent: vi.fn(function VitestMock() {
+				return { fromAgent: true };
+			}),
 		};
 		const hotReload = { broadcastState: vi.fn() };
 		const service = new SessionsService(
@@ -76,7 +78,9 @@ describe("SessionsService userId prefix / empty state leftover edges", () => {
 		const agentManager = {
 			getLoadedAgents: vi.fn(() => new Map([["demo", loaded]])),
 			startAgent: vi.fn(),
-			getInitialStateForAgent: vi.fn(() => ({ theme: "dark" })),
+			getInitialStateForAgent: vi.fn(function VitestMock() {
+				return { theme: "dark" };
+			}),
 		};
 		const hotReload = { broadcastState: vi.fn() };
 		const service = new SessionsService(

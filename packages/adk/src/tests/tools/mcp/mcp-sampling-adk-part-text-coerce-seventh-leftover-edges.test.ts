@@ -6,12 +6,14 @@ import {
 } from "../../../tools/mcp/sampling-handler";
 
 vi.mock("@adk/logger", () => ({
-	Logger: vi.fn(() => ({
-		debug: vi.fn(),
-		error: vi.fn(),
-		warn: vi.fn(),
-		info: vi.fn(),
-	})),
+	Logger: vi.fn(function VitestMock() {
+		return {
+			debug: vi.fn(),
+			error: vi.fn(),
+			warn: vi.fn(),
+			info: vi.fn(),
+		};
+	}),
 }));
 
 describe("McpSamplingHandler ADK part.text coerce seventh leftover (post #158)", () => {

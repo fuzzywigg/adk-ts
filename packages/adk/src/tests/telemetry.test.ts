@@ -114,7 +114,9 @@ describe("TelemetryService.traceAsyncGenerator", () => {
 		const end = vi.fn();
 		const recordException = vi.fn();
 		const setStatus = vi.fn();
-		const startSpan = vi.fn(() => ({ end, recordException, setStatus }));
+		const startSpan = vi.fn(function VitestMock() {
+			return { end, recordException, setStatus };
+		});
 
 		const service = new TelemetryService();
 		(service as any).tracer = { startSpan };
@@ -139,7 +141,9 @@ describe("TelemetryService.traceAsyncGenerator", () => {
 		const end = vi.fn();
 		const recordException = vi.fn();
 		const setStatus = vi.fn();
-		const startSpan = vi.fn(() => ({ end, recordException, setStatus }));
+		const startSpan = vi.fn(function VitestMock() {
+			return { end, recordException, setStatus };
+		});
 
 		const service = new TelemetryService();
 		(service as any).tracer = { startSpan };

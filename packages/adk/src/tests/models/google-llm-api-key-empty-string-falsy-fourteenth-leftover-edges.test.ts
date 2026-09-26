@@ -3,10 +3,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { GoogleLlm } from "../../models/google-llm";
 
 vi.mock("@adk/helpers/logger", () => ({
-	Logger: vi.fn(() => ({
-		debug: vi.fn(),
-		error: vi.fn(),
-	})),
+	Logger: vi.fn(function VitestMock() {
+		return {
+			debug: vi.fn(),
+			error: vi.fn(),
+		};
+	}),
 }));
 
 vi.mock("@google/genai", () => ({
@@ -32,12 +34,14 @@ describe("google-llm api-key empty-string falsy fourteenth leftover edges", () =
 		delete process.env.GOOGLE_CLOUD_PROJECT;
 		delete process.env.GOOGLE_CLOUD_LOCATION;
 		(GoogleGenAI as unknown as ReturnType<typeof vi.fn>).mockImplementation(
-			() => ({
-				models: {
-					generateContent: vi.fn(),
-					generateContentStream: vi.fn(),
-				},
-			}),
+			function VitestMock() {
+				return {
+					models: {
+						generateContent: vi.fn(),
+						generateContentStream: vi.fn(),
+					},
+				};
+			},
 		);
 	});
 

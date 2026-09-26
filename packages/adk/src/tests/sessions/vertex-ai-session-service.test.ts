@@ -739,9 +739,11 @@ describe("VertexAiSessionService", () => {
 		const Module = require("node:module") as typeof import("node:module");
 		const originalRequire = Module.prototype.require;
 		const asyncRequest = vi.fn();
-		const GoogleGenAI = vi.fn().mockImplementation(() => ({
-			_api_client: { async_request: asyncRequest },
-		}));
+		const GoogleGenAI = vi.fn().mockImplementation(function VitestMock() {
+			return {
+				_api_client: { async_request: asyncRequest },
+			};
+		});
 
 		Module.prototype.require = function (
 			this: NodeModule,

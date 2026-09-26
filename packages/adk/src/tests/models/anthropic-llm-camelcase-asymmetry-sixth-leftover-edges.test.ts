@@ -5,22 +5,26 @@ import { LlmRequest } from "../../models/llm-request";
 import { OpenAiLlm } from "../../models/openai-llm";
 
 vi.mock("@adk/helpers/logger", () => ({
-	Logger: vi.fn(() => ({
-		debug: vi.fn(),
-		error: vi.fn(),
-	})),
+	Logger: vi.fn(function VitestMock() {
+		return {
+			debug: vi.fn(),
+			error: vi.fn(),
+		};
+	}),
 }));
 
 vi.mock("@anthropic-ai/sdk");
 
 vi.mock("openai", () => ({
-	default: vi.fn(() => ({
-		chat: {
-			completions: {
-				create: vi.fn(),
+	default: vi.fn(function VitestMock() {
+		return {
+			chat: {
+				completions: {
+					create: vi.fn(),
+				},
 			},
-		},
-	})),
+		};
+	}),
 }));
 
 describe("AnthropicLlm camelCase/maxTokens sixth leftover edges (post #150)", () => {
@@ -35,9 +39,11 @@ describe("AnthropicLlm camelCase/maxTokens sixth leftover edges (post #150)", ()
 		process.env.OPENAI_API_KEY = "test-key";
 		mockMessagesCreate = vi.fn();
 		(Anthropic as unknown as ReturnType<typeof vi.fn>).mockImplementation(
-			() => ({
-				messages: { create: mockMessagesCreate },
-			}),
+			function VitestMock() {
+				return {
+					messages: { create: mockMessagesCreate },
+				};
+			},
 		);
 		llm = new AnthropicLlm();
 		openai = new OpenAiLlm("gpt-4o-mini");

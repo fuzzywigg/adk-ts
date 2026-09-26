@@ -5,19 +5,23 @@ import { LlmResponse } from "../../models/llm-response";
 import { OpenAiLlm } from "../../models/openai-llm";
 
 vi.mock("@adk/helpers/logger", () => ({
-	Logger: vi.fn(() => ({
-		debug: vi.fn(),
-		error: vi.fn(),
-	})),
+	Logger: vi.fn(function VitestMock() {
+		return {
+			debug: vi.fn(),
+			error: vi.fn(),
+		};
+	}),
 }));
 vi.mock("openai", () => ({
-	default: vi.fn(() => ({
-		chat: {
-			completions: {
-				create: vi.fn(),
+	default: vi.fn(function VitestMock() {
+		return {
+			chat: {
+				completions: {
+					create: vi.fn(),
+				},
 			},
-		},
-	})),
+		};
+	}),
 }));
 
 describe("OpenAiLlm matrix edges (TOKENMAXX leftovers)", () => {
@@ -29,13 +33,17 @@ describe("OpenAiLlm matrix edges (TOKENMAXX leftovers)", () => {
 		originalEnv = { ...process.env };
 		process.env.OPENAI_API_KEY = "test-key";
 		mockCreate = vi.fn();
-		(OpenAI as unknown as ReturnType<typeof vi.fn>).mockImplementation(() => ({
-			chat: {
-				completions: {
-					create: mockCreate,
-				},
+		(OpenAI as unknown as ReturnType<typeof vi.fn>).mockImplementation(
+			function VitestMock() {
+				return {
+					chat: {
+						completions: {
+							create: mockCreate,
+						},
+					},
+				};
 			},
-		}));
+		);
 		llm = new OpenAiLlm();
 	});
 

@@ -330,7 +330,9 @@ describe("createTool", () => {
 	});
 
 	it("returns ZodError envelope without invoking fn when parse fails", async () => {
-		const fn = vi.fn(() => ({ ok: true }));
+		const fn = vi.fn(function VitestMock() {
+			return { ok: true };
+		});
 		const tool = createTool({
 			name: "guarded",
 			description: "Guards fn",

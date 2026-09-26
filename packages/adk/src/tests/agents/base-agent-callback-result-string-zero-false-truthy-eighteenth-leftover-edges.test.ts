@@ -88,7 +88,9 @@ describe("BaseAgent callback-result string-zero/false truthy eighteenth leftover
 	])("before callback returning $label short-circuits as truthy content", async ({
 		value,
 	}) => {
-		const later = vi.fn(() => ({ parts: [{ text: "never" }] }));
+		const later = vi.fn(function VitestMock() {
+			return { parts: [{ text: "never" }] };
+		});
 		const agent = new TestAgent({
 			name: "before_str_truthy",
 			beforeAgentCallback: [() => value as any, later],
@@ -102,7 +104,9 @@ describe("BaseAgent callback-result string-zero/false truthy eighteenth leftover
 	});
 
 	it("before callback returning numeric 0 still continues (sixth control)", async () => {
-		const later = vi.fn(() => ({ parts: [{ text: "later-win" }] }));
+		const later = vi.fn(function VitestMock() {
+			return { parts: [{ text: "later-win" }] };
+		});
 		const agent = new TestAgent({
 			name: "before_num_zero",
 			beforeAgentCallback: [() => 0 as any, later],

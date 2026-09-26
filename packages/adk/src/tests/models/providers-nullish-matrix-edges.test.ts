@@ -7,10 +7,12 @@ import { GoogleLlm } from "../../models/google-llm";
 import { LlmRequest } from "../../models/llm-request";
 
 vi.mock("@adk/helpers/logger", () => ({
-	Logger: vi.fn(() => ({
-		debug: vi.fn(),
-		error: vi.fn(),
-	})),
+	Logger: vi.fn(function VitestMock() {
+		return {
+			debug: vi.fn(),
+			error: vi.fn(),
+		};
+	}),
 }));
 
 vi.mock("@google/genai", () => ({
@@ -63,9 +65,11 @@ describe("Provider nullish matrix edges (TOKENMAXX leftovers)", () => {
 				],
 			});
 			(GoogleGenAI as unknown as ReturnType<typeof vi.fn>).mockImplementation(
-				() => ({
-					models: { generateContent, generateContentStream: vi.fn() },
-				}),
+				function VitestMock() {
+					return {
+						models: { generateContent, generateContentStream: vi.fn() },
+					};
+				},
 			);
 
 			const llm = new GoogleLlm();
@@ -115,9 +119,11 @@ describe("Provider nullish matrix edges (TOKENMAXX leftovers)", () => {
 				usage: { input_tokens: 1, output_tokens: 1 },
 			});
 			(Anthropic as unknown as ReturnType<typeof vi.fn>).mockImplementation(
-				() => ({
-					messages: { create },
-				}),
+				function VitestMock() {
+					return {
+						messages: { create },
+					};
+				},
 			);
 
 			const llm = new AnthropicLlm();

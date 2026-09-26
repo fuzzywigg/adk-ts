@@ -13,7 +13,9 @@ const { startMock, shutdownMock, NodeSDKMock, getTracerSpy } = vi.hoisted(
 			startMock,
 			shutdownMock,
 			NodeSDKMock,
-			getTracerSpy: vi.fn(() => ({ startSpan: vi.fn() })),
+			getTracerSpy: vi.fn(function VitestMock() {
+				return { startSpan: vi.fn() };
+			}),
 		};
 	},
 );

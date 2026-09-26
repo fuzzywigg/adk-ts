@@ -4,11 +4,13 @@ import { AiSdkLlm } from "../../models/ai-sdk";
 import { LlmRequest } from "../../models/llm-request";
 
 vi.mock("@adk/helpers/logger", () => ({
-	Logger: vi.fn(() => ({
-		debug: vi.fn(),
-		error: vi.fn(),
-		warn: vi.fn(),
-	})),
+	Logger: vi.fn(function VitestMock() {
+		return {
+			debug: vi.fn(),
+			error: vi.fn(),
+			warn: vi.fn(),
+		};
+	}),
 }));
 
 const generateText = vi.fn();

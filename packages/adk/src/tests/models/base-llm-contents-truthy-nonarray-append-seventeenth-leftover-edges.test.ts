@@ -4,10 +4,12 @@ import { LlmRequest } from "../../models/llm-request";
 import type { LlmResponse } from "../../models/llm-response";
 
 vi.mock("@adk/helpers/logger", () => ({
-	Logger: vi.fn(() => ({
-		debug: vi.fn(),
-		error: vi.fn(),
-	})),
+	Logger: vi.fn(function VitestMock() {
+		return {
+			debug: vi.fn(),
+			error: vi.fn(),
+		};
+	}),
 }));
 
 class TestLlm extends BaseLlm {

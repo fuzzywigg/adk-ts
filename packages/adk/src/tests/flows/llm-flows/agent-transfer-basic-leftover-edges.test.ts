@@ -6,12 +6,14 @@ import { requestProcessor as basicProcessor } from "../../../flows/llm-flows/bas
 import { LlmRequest } from "../../../models/llm-request";
 
 vi.mock("../../../logger", () => ({
-	Logger: vi.fn(() => ({
-		debug: vi.fn(),
-		error: vi.fn(),
-		warn: vi.fn(),
-		info: vi.fn(),
-	})),
+	Logger: vi.fn(function VitestMock() {
+		return {
+			debug: vi.fn(),
+			error: vi.fn(),
+			warn: vi.fn(),
+			info: vi.fn(),
+		};
+	}),
 }));
 
 class StubAgent extends BaseAgent {
@@ -250,14 +252,16 @@ describe("basic requestProcessor leftover edges (overnight TOKENMAXX post #150)"
 	it("ignores logger.debug failures while skipping output schema", async () => {
 		const { Logger } = await import("../../../logger");
 		(Logger as unknown as ReturnType<typeof vi.fn>).mockImplementationOnce(
-			() => ({
-				debug: () => {
-					throw new Error("logger down");
-				},
-				error: vi.fn(),
-				warn: vi.fn(),
-				info: vi.fn(),
-			}),
+			function VitestMock() {
+				return {
+					debug: () => {
+						throw new Error("logger down");
+					},
+					error: vi.fn(),
+					warn: vi.fn(),
+					info: vi.fn(),
+				};
+			},
 		);
 
 		const schema = { type: "object" };

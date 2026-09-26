@@ -5,12 +5,14 @@ const { LangfuseMock, flushAsync, shutdownAsync } = vi.hoisted(() => {
 	const shutdownAsync = vi.fn().mockResolvedValue(undefined);
 	const LangfuseMock = vi.fn(function Langfuse(this: any, opts: any) {
 		this.opts = opts;
-		this.trace = vi.fn(() => ({
-			update: vi.fn(),
-			event: vi.fn(),
-			span: vi.fn(),
-			generation: vi.fn(),
-		}));
+		this.trace = vi.fn(function VitestMock() {
+			return {
+				update: vi.fn(),
+				event: vi.fn(),
+				span: vi.fn(),
+				generation: vi.fn(),
+			};
+		});
 		this.flushAsync = flushAsync;
 		this.shutdownAsync = shutdownAsync;
 	});

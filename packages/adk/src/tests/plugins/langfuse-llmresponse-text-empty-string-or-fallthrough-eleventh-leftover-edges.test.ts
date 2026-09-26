@@ -6,23 +6,29 @@ const { spanMock, generationMock, updateMock, endMock, LangfuseMock } =
 	vi.hoisted(() => {
 		const updateMock = vi.fn();
 		const endMock = vi.fn();
-		const generationMock = vi.fn(() => ({
-			update: updateMock,
-			end: endMock,
-		}));
-		const spanMock = vi.fn(() => ({
-			update: updateMock,
-			end: endMock,
-			event: vi.fn(),
-			span: vi.fn(),
-			generation: generationMock,
-		}));
-		const traceMock = vi.fn(() => ({
-			update: updateMock,
-			event: vi.fn(),
-			span: spanMock,
-			generation: generationMock,
-		}));
+		const generationMock = vi.fn(function VitestMock() {
+			return {
+				update: updateMock,
+				end: endMock,
+			};
+		});
+		const spanMock = vi.fn(function VitestMock() {
+			return {
+				update: updateMock,
+				end: endMock,
+				event: vi.fn(),
+				span: vi.fn(),
+				generation: generationMock,
+			};
+		});
+		const traceMock = vi.fn(function VitestMock() {
+			return {
+				update: updateMock,
+				event: vi.fn(),
+				span: spanMock,
+				generation: generationMock,
+			};
+		});
 		const flushAsync = vi.fn().mockResolvedValue(undefined);
 		const shutdownAsync = vi.fn().mockResolvedValue(undefined);
 		const LangfuseMock = vi.fn(function Langfuse(this: any) {
@@ -80,17 +86,21 @@ function makeCallbackContext(invocation = makeInvocation()) {
 describe("langfuse llmResponse.text empty-string or fallthrough eleventh leftover", () => {
 	beforeEach(() => {
 		vi.clearAllMocks();
-		spanMock.mockImplementation(() => ({
-			update: updateMock,
-			end: endMock,
-			event: vi.fn(),
-			span: vi.fn(),
-			generation: generationMock,
-		}));
-		generationMock.mockImplementation(() => ({
-			update: updateMock,
-			end: endMock,
-		}));
+		spanMock.mockImplementation(function VitestMock() {
+			return {
+				update: updateMock,
+				end: endMock,
+				event: vi.fn(),
+				span: vi.fn(),
+				generation: generationMock,
+			};
+		});
+		generationMock.mockImplementation(function VitestMock() {
+			return {
+				update: updateMock,
+				end: endMock,
+			};
+		});
 	});
 
 	async function runAfterModel(llmResponse: LlmResponse) {

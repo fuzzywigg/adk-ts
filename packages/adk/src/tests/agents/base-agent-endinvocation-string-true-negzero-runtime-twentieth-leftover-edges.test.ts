@@ -13,7 +13,9 @@ class TestAgent extends BaseAgent {
 		});
 	});
 
-	afterCallback = vi.fn(() => ({ parts: [{ text: "after" }] }));
+	afterCallback = vi.fn(function VitestMock() {
+		return { parts: [{ text: "after" }] };
+	});
 
 	constructor(name: string) {
 		super({ name, description: "" });

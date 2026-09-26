@@ -19,23 +19,29 @@ const {
 	const updateMock = vi.fn();
 	const endMock = vi.fn();
 	const eventMock = vi.fn();
-	const spanMock = vi.fn(() => ({
-		update: updateMock,
-		end: endMock,
-		event: eventMock,
-		span: vi.fn(),
-		generation: vi.fn(),
-	}));
-	const generationMock = vi.fn(() => ({
-		update: updateMock,
-		end: endMock,
-	}));
-	const traceMock = vi.fn(() => ({
-		update: updateMock,
-		event: eventMock,
-		span: spanMock,
-		generation: generationMock,
-	}));
+	const spanMock = vi.fn(function VitestMock() {
+		return {
+			update: updateMock,
+			end: endMock,
+			event: eventMock,
+			span: vi.fn(),
+			generation: vi.fn(),
+		};
+	});
+	const generationMock = vi.fn(function VitestMock() {
+		return {
+			update: updateMock,
+			end: endMock,
+		};
+	});
+	const traceMock = vi.fn(function VitestMock() {
+		return {
+			update: updateMock,
+			event: eventMock,
+			span: spanMock,
+			generation: generationMock,
+		};
+	});
 	const flushAsync = vi.fn().mockResolvedValue(undefined);
 	const shutdownAsync = vi.fn().mockResolvedValue(undefined);
 	const LangfuseMock = vi.fn(function Langfuse(this: any) {
@@ -103,23 +109,29 @@ function makeTool(name = "search"): BaseTool {
 describe("LangfusePlugin", () => {
 	beforeEach(() => {
 		vi.clearAllMocks();
-		spanMock.mockImplementation(() => ({
-			update: updateMock,
-			end: endMock,
-			event: eventMock,
-			span: spanMock,
-			generation: generationMock,
-		}));
-		generationMock.mockImplementation(() => ({
-			update: updateMock,
-			end: endMock,
-		}));
-		traceMock.mockImplementation(() => ({
-			update: updateMock,
-			event: eventMock,
-			span: spanMock,
-			generation: generationMock,
-		}));
+		spanMock.mockImplementation(function VitestMock() {
+			return {
+				update: updateMock,
+				end: endMock,
+				event: eventMock,
+				span: spanMock,
+				generation: generationMock,
+			};
+		});
+		generationMock.mockImplementation(function VitestMock() {
+			return {
+				update: updateMock,
+				end: endMock,
+			};
+		});
+		traceMock.mockImplementation(function VitestMock() {
+			return {
+				update: updateMock,
+				event: eventMock,
+				span: spanMock,
+				generation: generationMock,
+			};
+		});
 	});
 
 	it("applies defaults for name, baseUrl, and flush settings", () => {
@@ -738,13 +750,15 @@ describe("LangfusePlugin", () => {
 		const callbackContext = makeCallbackContext(inv);
 
 		const agentEventSpy = vi.fn();
-		spanMock.mockImplementationOnce(() => ({
-			update: updateMock,
-			end: endMock,
-			event: agentEventSpy,
-			span: spanMock,
-			generation: generationMock,
-		}));
+		spanMock.mockImplementationOnce(function VitestMock() {
+			return {
+				update: updateMock,
+				end: endMock,
+				event: agentEventSpy,
+				span: spanMock,
+				generation: generationMock,
+			};
+		});
 
 		await plugin.beforeAgentCallback({ agent: inv.agent, callbackContext });
 		eventMock.mockClear();

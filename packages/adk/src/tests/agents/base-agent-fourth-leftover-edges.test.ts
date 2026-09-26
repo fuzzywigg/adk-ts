@@ -268,8 +268,12 @@ describe("BaseAgent fourth leftover edges — runAsync / runLive early returns",
 
 	it("before callback chain stops at first truthy content", async () => {
 		const first = vi.fn(() => undefined);
-		const second = vi.fn(() => ({ parts: [{ text: "second" }] }));
-		const third = vi.fn(() => ({ parts: [{ text: "third" }] }));
+		const second = vi.fn(function VitestMock() {
+			return { parts: [{ text: "second" }] };
+		});
+		const third = vi.fn(function VitestMock() {
+			return { parts: [{ text: "third" }] };
+		});
 		const agent = new TestAgent({
 			name: "before_chain",
 			beforeAgentCallback: [first, second, third],
@@ -284,8 +288,12 @@ describe("BaseAgent fourth leftover edges — runAsync / runLive early returns",
 
 	it("after callback chain stops at first truthy content", async () => {
 		const first = vi.fn(() => undefined);
-		const second = vi.fn(() => ({ parts: [{ text: "after-second" }] }));
-		const third = vi.fn(() => ({ parts: [{ text: "after-third" }] }));
+		const second = vi.fn(function VitestMock() {
+			return { parts: [{ text: "after-second" }] };
+		});
+		const third = vi.fn(function VitestMock() {
+			return { parts: [{ text: "after-third" }] };
+		});
 		const agent = new TestAgent({
 			name: "after_chain",
 			afterAgentCallback: [first, second, third],

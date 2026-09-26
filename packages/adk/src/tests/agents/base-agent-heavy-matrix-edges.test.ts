@@ -194,7 +194,9 @@ describe("BaseAgent heavy matrix leftover edges", () => {
 		});
 
 		it("endInvocation after runAsyncImpl skips after callback", async () => {
-			const after = vi.fn(() => ({ parts: [{ text: "after" }] }));
+			const after = vi.fn(function VitestMock() {
+				return { parts: [{ text: "after" }] };
+			});
 			const agent = new TestAgent({
 				name: "end_after_impl",
 				afterAgentCallback: after,

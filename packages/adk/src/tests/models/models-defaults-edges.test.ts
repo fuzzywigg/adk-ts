@@ -7,10 +7,12 @@ import { GoogleLlm } from "../../models/google-llm";
 import { LlmRequest } from "../../models/llm-request";
 
 vi.mock("@adk/helpers/logger", () => ({
-	Logger: vi.fn(() => ({
-		debug: vi.fn(),
-		error: vi.fn(),
-	})),
+	Logger: vi.fn(function VitestMock() {
+		return {
+			debug: vi.fn(),
+			error: vi.fn(),
+		};
+	}),
 }));
 
 vi.mock("@google/genai", () => ({
@@ -83,9 +85,11 @@ describe("model defaults leftover edges (post #124)", () => {
 			],
 		});
 		(GoogleGenAI as unknown as ReturnType<typeof vi.fn>).mockImplementation(
-			() => ({
-				models: { generateContent, generateContentStream: vi.fn() },
-			}),
+			function VitestMock() {
+				return {
+					models: { generateContent, generateContentStream: vi.fn() },
+				};
+			},
 		);
 
 		const llm = new GoogleLlm("gemini-2.0-flash");
@@ -117,9 +121,11 @@ describe("model defaults leftover edges (post #124)", () => {
 			stop_reason: "end_turn",
 			usage: { input_tokens: 1, output_tokens: 1 },
 		});
-		(Anthropic as any).mockImplementation(() => ({
-			messages: { create },
-		}));
+		(Anthropic as any).mockImplementation(function VitestMock() {
+			return {
+				messages: { create },
+			};
+		});
 
 		const llm = new AnthropicLlm("claude-3-5-sonnet-latest");
 		const req = new LlmRequest({

@@ -188,7 +188,9 @@ describe("BaseAgent", () => {
 
 	describe("Callback Handling", () => {
 		it("should execute beforeAgentCallback and skip runAsyncImpl if content is returned", async () => {
-			const beforeCb = vi.fn(() => ({ parts: [{ text: "skipped" }] }));
+			const beforeCb = vi.fn(function VitestMock() {
+				return { parts: [{ text: "skipped" }] };
+			});
 			agent.beforeAgentCallback = beforeCb;
 
 			const events = [];
@@ -203,7 +205,9 @@ describe("BaseAgent", () => {
 		});
 
 		it("should execute afterAgentCallback after runAsyncImpl", async () => {
-			const afterCb = vi.fn(() => ({ parts: [{ text: "after" }] }));
+			const afterCb = vi.fn(function VitestMock() {
+				return { parts: [{ text: "after" }] };
+			});
 			agent.afterAgentCallback = afterCb;
 
 			const events = [];
@@ -219,8 +223,12 @@ describe("BaseAgent", () => {
 
 		it("should handle an array of callbacks and stop at the first one that returns content", async () => {
 			const cb1 = vi.fn(() => undefined);
-			const cb2 = vi.fn(() => ({ parts: [{ text: "from cb2" }] }));
-			const cb3 = vi.fn(() => ({ parts: [{ text: "from cb3" }] }));
+			const cb2 = vi.fn(function VitestMock() {
+				return { parts: [{ text: "from cb2" }] };
+			});
+			const cb3 = vi.fn(function VitestMock() {
+				return { parts: [{ text: "from cb3" }] };
+			});
 			agent.beforeAgentCallback = [cb1, cb2, cb3];
 
 			for await (const _ of agent["runAsyncInternal"](mockContext)) {
@@ -256,7 +264,9 @@ describe("BaseAgent", () => {
 		});
 
 		it("prefers plugin afterAgentCallback over agent after callback", async () => {
-			const afterCb = vi.fn(() => ({ parts: [{ text: "agent-after" }] }));
+			const afterCb = vi.fn(function VitestMock() {
+				return { parts: [{ text: "agent-after" }] };
+			});
 			agent.afterAgentCallback = afterCb;
 			mockContext.pluginManager = {
 				runBeforeAgentCallback: vi.fn(async () => undefined),
@@ -330,7 +340,9 @@ describe("BaseAgent", () => {
 		});
 
 		it("skips afterAgentCallback when endInvocation is set during runAsyncImpl", async () => {
-			const afterCb = vi.fn(() => ({ parts: [{ text: "should-not-run" }] }));
+			const afterCb = vi.fn(function VitestMock() {
+				return { parts: [{ text: "should-not-run" }] };
+			});
 			agent.afterAgentCallback = afterCb;
 			agent.runAsyncImplMock.mockImplementation(async function* (
 				ctx: InvocationContext,
@@ -350,7 +362,9 @@ describe("BaseAgent", () => {
 		});
 
 		it("runLiveInternal short-circuits when before callback returns content", async () => {
-			const beforeCb = vi.fn(() => ({ parts: [{ text: "live-skip" }] }));
+			const beforeCb = vi.fn(function VitestMock() {
+				return { parts: [{ text: "live-skip" }] };
+			});
 			agent.beforeAgentCallback = beforeCb;
 
 			const events = [];

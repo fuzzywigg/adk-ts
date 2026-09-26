@@ -153,8 +153,12 @@ describe("BaseAgent leftover edges", () => {
 
 	it("stops callback chain at first beforeAgentCallback that returns content", async () => {
 		const first = vi.fn(() => undefined);
-		const second = vi.fn(() => ({ parts: [{ text: "second wins" }] }));
-		const third = vi.fn(() => ({ parts: [{ text: "never" }] }));
+		const second = vi.fn(function VitestMock() {
+			return { parts: [{ text: "second wins" }] };
+		});
+		const third = vi.fn(function VitestMock() {
+			return { parts: [{ text: "never" }] };
+		});
 		const agent = new TestAgent({
 			name: "cb_chain",
 			beforeAgentCallback: [first, second, third],
