@@ -11,15 +11,13 @@ vi.mock("@adk/helpers/logger", () => ({
 	})),
 }));
 vi.mock("openai", () => ({
-	default: vi.fn(() => {
-		return {
-			chat: {
-				completions: {
-					create: vi.fn(),
-				},
+	default: vi.fn(() => ({
+		chat: {
+			completions: {
+				create: vi.fn(),
 			},
-		};
-	}),
+		},
+	})),
 }));
 
 describe("OpenAiLlm", () => {

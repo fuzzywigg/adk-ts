@@ -8,7 +8,7 @@ import { describe, expect, it } from "vitest";
  * reversible workflow assertions for the tools/mcp residual Vitest slice
  * (PATH/env/maxTokens/messages/filter/schema). Soft pin only — does not
  * retarget push.yml focused gate (auth/memory #287 pins
- * twentieth-leftover-edges). Vitest stays on 3.x.
+ * twentieth-leftover-edges). Vitest is on 4.x.
  */
 describe("tools/mcp residual complement ci workflow twentieth leftover edges", () => {
 	const root = resolve(__dirname, "../../../../../..");
@@ -51,10 +51,10 @@ describe("tools/mcp residual complement ci workflow twentieth leftover edges", (
 		);
 	});
 
-	it("vitest stays on 3.x (no 4.x bump in this residual)", () => {
+	it("vitest is on 4.x", () => {
 		const pkg = JSON.parse(
 			readFileSync(resolve(root, "packages/adk/package.json"), "utf8"),
 		);
-		expect(pkg.devDependencies.vitest).toMatch(/^\^?3\./);
+		expect(pkg.devDependencies.vitest).toMatch(/^\^?4\./);
 	});
 });

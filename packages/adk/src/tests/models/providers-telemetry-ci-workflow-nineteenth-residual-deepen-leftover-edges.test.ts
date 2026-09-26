@@ -6,7 +6,7 @@ import { describe, expect, it } from "vitest";
  * Nineteenth leftover residual deepen (soft after tip #282 / #287):
  * soft reversible workflow pins — auth/memory twentieth owns focused
  * push.yml filter; providers/telemetry residual deepen stays gated via full
- * pnpm test. Vitest remains on 3.x (no 4.x bump).
+ * pnpm test. Vitest is on 4.x.
  */
 describe("providers/telemetry ci workflow nineteenth residual deepen leftover edges", () => {
 	const root = resolve(__dirname, "../../../../..");
@@ -41,11 +41,11 @@ describe("providers/telemetry ci workflow nineteenth residual deepen leftover ed
 		expect(push).toContain("auth/memory twentieth leftover slice");
 	});
 
-	it("root packageManager keeps vitest on 3.x (no accidental 4.x bump)", () => {
+	it("root lockfile keeps vitest on 4.x", () => {
 		const pkg = JSON.parse(readFileSync(resolve(root, "package.json"), "utf8"));
 		const lock = readFileSync(resolve(root, "pnpm-lock.yaml"), "utf8");
 		expect(pkg.packageManager).toMatch(/^pnpm@/);
-		expect(lock).toMatch(/vitest@3\./);
-		expect(lock).not.toMatch(/vitest@4\./);
+		expect(lock).toMatch(/vitest@4\./);
+		expect(lock).not.toMatch(/vitest@3\./);
 	});
 });
