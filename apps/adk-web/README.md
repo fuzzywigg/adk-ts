@@ -91,7 +91,7 @@ apps/adk-web/
 
 Before contributing to ADK-TS Web, ensure you have:
 
-- **[Node.js](https://nodejs.org)** (version 18 or later)
+- **[Node.js](https://nodejs.org)** (version 22 or later)
 - **[pnpm](https://pnpm.io)** (recommended package manager)
 - Basic familiarity with [Next.js](https://nextjs.org), [React](https://react.dev), and [TypeScript](https://www.typescriptlang.org)
 
