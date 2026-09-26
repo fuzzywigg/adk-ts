@@ -133,17 +133,19 @@ The `package.json` contains scripts for building and serving documentation:
 
 ## 🚀 Deployment
 
-Documentation is automatically built and deployed to GitHub Pages via GitHub Actions when changes are pushed to the main or develop branches.
+TypeDoc API docs are built and deployed to GitHub Pages via `.github/workflows/docs.yml` on pushes to `main` / `develop` (and TypeDoc-only on PRs).
 
-The deployment workflow (`.github/workflows/docs.yml`):
+The deployment workflow:
 
-1. Triggers on changes to ADK source code or documentation files
-2. Installs Node.js 20 and pnpm dependencies
+1. Triggers on changes to ADK source, `apps/adk-api-docs`, or the workflow itself
+2. Installs Node.js 22 and pnpm dependencies (`pnpm install --frozen-lockfile`)
 3. Builds the `@iqai/adk` package
 4. Generates TypeDoc documentation in `apps/adk-api-docs/api`
-5. Deploys to GitHub Pages (main branch only)
+5. Deploys to GitHub Pages (`main` only; Pages setup/upload skipped on PRs)
 
-The documentation is automatically published at the configured GitHub Pages URL.
+**Live tip URL (this fork):** [https://fuzzywigg.github.io/adk-ts/](https://fuzzywigg.github.io/adk-ts/)
+
+Product guides (Fumadocs / `apps/docs`) remain at [https://adk.iqai.com](https://adk.iqai.com) — separate from this Pages TypeDoc deploy.
 
 ## 🎨 Customization
 

@@ -27,4 +27,10 @@ A robust multi-provider TypeScript framework for building AI agents, supporting 
 - Install: `pnpm install --frozen-lockfile` (see `.cursor/environment.json`)
 - Lint: `pnpm exec biome lint .`
 - Build: `pnpm build`
-- Test: `pnpm test`
+- Test: `pnpm test` (Vitest **4.x** on tip — `@iqai/adk` / `@iqai/adk-cli` pin `^4.1.11`; soft CI asserts `vitest@4.` in lockfile)
+
+## Docs / Pages (tip honesty)
+- **GitHub Pages:** enabled (`build_type: workflow`). Live TypeDoc API site: https://fuzzywigg.github.io/adk-ts/
+- **Workflow:** `.github/workflows/docs.yml` builds `apps/adk-api-docs` and deploys on `main` only
+- **Guides site:** https://adk.iqai.com (`apps/docs`, Vercel) — not the Pages deploy
+- Do **not** reopen Dependabot majors overnight (e.g. closed Vitest #23); tip already on Vitest 4 via repair merge

@@ -64,7 +64,8 @@ console.log(response);
 
 ## 📚 Documentation
 
-For detailed documentation on how to use ADK-TS, please visit our [official documentation site](https://adk.iqai.com/docs/framework/get-started).
+- **Guides / tutorials:** [https://adk.iqai.com/docs/framework/get-started](https://adk.iqai.com/docs/framework/get-started) (Fumadocs site from `apps/docs`)
+- **API reference (TypeDoc on GitHub Pages):** [https://fuzzywigg.github.io/adk-ts/](https://fuzzywigg.github.io/adk-ts/) — tip `main` deploys via [`.github/workflows/docs.yml`](.github/workflows/docs.yml) (Pages enabled on this repo)
 
 ## 🚀 Key Features
 
