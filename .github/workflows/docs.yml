@@ -2,7 +2,7 @@ name: Build and Deploy ADK API Documentation
 
 on:
   push:
-    branches: [ main, develop ]
+    branches: [ main ]
     paths:
       - 'packages/adk/src/**'
       - 'apps/adk-api-docs/**'
