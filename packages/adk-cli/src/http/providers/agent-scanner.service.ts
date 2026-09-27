@@ -1,8 +1,9 @@
-import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { existsSync, readdirSync, statSync } from "node:fs";
 import { join, normalize, relative, resolve } from "node:path";
 import { Injectable, Logger } from "@nestjs/common";
 import { findProjectRoot } from "../../common/find-project-root";
 import type { Agent, LoadedAgent } from "../../common/types";
+import { extractAgentNameFromFile } from "./agent-name-utils";
 
 export const DIRECTORIES_TO_SKIP = [
 	"node_modules",
@@ -100,7 +101,7 @@ export class AgentScanner {
 							try {
 								const agentFilePath = normalize(join(dir, item));
 								agentName =
-									this.extractAgentNameFromFile(agentFilePath) || agentName;
+									extractAgentNameFromFile(agentFilePath) || agentName;
 							} catch (error) {
 								if (!this.quiet) {
 									this.logger.warn(
@@ -157,23 +158,5 @@ export class AgentScanner {
 		}
 
 		return agents;
-	}
-
-	private extractAgentNameFromFile(filePath: string): string | null {
-		try {
-			const content = readFileSync(filePath, "utf-8");
-
-			// Look for agent name in export statements
-			// Match patterns like: name: "agent_name" or name:"agent_name"
-			const nameMatch = content.match(/name\s*:\s*["']([^"']+)["']/);
-			if (nameMatch?.[1]) {
-				return nameMatch[1];
-			}
-
-			return null;
-		} catch (_error) {
-			// Return null instead of throwing to allow fallback to directory name
-			return null;
-		}
 	}
 }
