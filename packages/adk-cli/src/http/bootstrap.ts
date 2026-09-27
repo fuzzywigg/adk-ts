@@ -1,53 +1,21 @@
 import "reflect-metadata";
 import type { FSWatcher } from "node:fs";
-import { existsSync, readFileSync, watch } from "node:fs";
-import { resolve, sep } from "node:path";
+import { watch } from "node:fs";
+import { resolve } from "node:path";
 import { NestFactory } from "@nestjs/core";
 import type { NestExpressApplication } from "@nestjs/platform-express";
 import { DocumentBuilder, SwaggerModule } from "@nestjs/swagger";
 import z from "zod";
 import { environmentEnum, envSchema } from "../common/schema";
-import { HttpModule } from "./http.module";
 import { PrettyErrorFilter } from "./filters/pretty-error.filter";
+import { HttpModule } from "./http.module";
 import { AgentManager } from "./providers/agent-manager.service";
-import { DIRECTORIES_TO_SKIP } from "./providers/agent-scanner.service";
 import { HotReloadService } from "./reload/hot-reload.service";
+import {
+	loadGitignorePrefixes,
+	shouldIgnorePath,
+} from "./reload/watch-path-filters";
 import type { RuntimeConfig } from "./runtime-config";
-
-function pathHasSkippedDir(p: string): boolean {
-	const parts = p.split(sep).filter(Boolean);
-	return parts.some((part) =>
-		(DIRECTORIES_TO_SKIP as readonly string[]).includes(part),
-	);
-}
-
-function loadGitignorePrefixes(rootDir: string): string[] {
-	try {
-		const igPath = resolve(rootDir, ".gitignore");
-		if (!existsSync(igPath)) return [];
-		const lines = readFileSync(igPath, "utf8").split("\n");
-		const prefixes: string[] = [];
-		for (const raw of lines) {
-			const line = raw.trim();
-			if (!line || line.startsWith("#")) continue;
-			if (/[?*[\]]/.test(line)) continue;
-			const normalized = line.replace(/\/+$/, "");
-			const abs = resolve(rootDir, normalized);
-			prefixes.push(abs + sep);
-		}
-		return prefixes;
-	} catch {
-		return [];
-	}
-}
-
-function shouldIgnorePath(fullPath: string, prefixes: string[]): boolean {
-	if (pathHasSkippedDir(fullPath)) return true;
-	for (const pref of prefixes) {
-		if (fullPath.startsWith(pref)) return true;
-	}
-	return false;
-}
 
 /**
  * Setup hot reload file watching with .gitignore filtering and well-known directory skips.
