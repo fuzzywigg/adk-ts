@@ -87,4 +87,114 @@ describe("PathUtils", () => {
 			handler({ path: "@missing/thing", importer: "agent.ts" }),
 		).toBeUndefined();
 	});
+
+	it("probes .js / .tsx / extensionless targets in order after .ts miss", () => {
+		const root = mkdtempSync(join(tmpdir(), "adk-cli-pathmap-ext-"));
+		mkdirSync(join(root, "src"), { recursive: true });
+		writeFileSync(join(root, "src", "compiled.js"), "export const j = 1;");
+		writeFileSync(join(root, "src", "component.tsx"), "export const c = 1;");
+		writeFileSync(join(root, "src", "bare"), "export const b = 1;");
+		writeFileSync(
+			join(root, "tsconfig.json"),
+			JSON.stringify({
+				compilerOptions: {
+					baseUrl: ".",
+					paths: {
+						"@js": ["src/compiled"],
+						"@tsx": ["src/component"],
+						"@bare": ["src/bare"],
+					},
+				},
+			}),
+		);
+
+		const plugin = utils.createPathMappingPlugin(root);
+		const onResolve = vi.fn();
+		plugin.setup({ onResolve });
+		const handler = onResolve.mock.calls[0][1];
+
+		expect(handler({ path: "@js", importer: "a.ts" })?.path).toBe(
+			join(root, "src", "compiled.js"),
+		);
+		expect(handler({ path: "@tsx", importer: "a.ts" })?.path).toBe(
+			join(root, "src", "component.tsx"),
+		);
+		expect(handler({ path: "@bare", importer: "a.ts" })?.path).toBe(
+			join(root, "src", "bare"),
+		);
+	});
+
+	it("falls through to a later path mapping when the first target is missing", () => {
+		const root = mkdtempSync(join(tmpdir(), "adk-cli-pathmap-multi-"));
+		mkdirSync(join(root, "fallback"), { recursive: true });
+		writeFileSync(join(root, "fallback", "hit.ts"), "export const h = 1;");
+		writeFileSync(
+			join(root, "tsconfig.json"),
+			JSON.stringify({
+				compilerOptions: {
+					baseUrl: ".",
+					paths: {
+						"@mod": ["missing/first.ts", "fallback/hit.ts"],
+					},
+				},
+			}),
+		);
+
+		const plugin = utils.createPathMappingPlugin(root);
+		const onResolve = vi.fn();
+		plugin.setup({ onResolve });
+		const handler = onResolve.mock.calls[0][1];
+
+		expect(handler({ path: "@mod", importer: "a.ts" })?.path).toBe(
+			join(root, "fallback", "hit.ts"),
+		);
+	});
+
+	it("resolves aliases against projectRoot when baseUrl is omitted", () => {
+		const root = mkdtempSync(join(tmpdir(), "adk-cli-pathmap-nobase-"));
+		mkdirSync(join(root, "lib"), { recursive: true });
+		writeFileSync(join(root, "lib", "tool.ts"), "export const t = 1;");
+		writeFileSync(
+			join(root, "tsconfig.json"),
+			JSON.stringify({
+				compilerOptions: {
+					paths: { "@tool": ["lib/tool.ts"] },
+				},
+			}),
+		);
+
+		const plugin = utils.createPathMappingPlugin(root);
+		const onResolve = vi.fn();
+		plugin.setup({ onResolve });
+		const handler = onResolve.mock.calls[0][1];
+
+		expect(handler({ path: "@tool", importer: "a.ts" })?.path).toBe(
+			join(root, "lib", "tool.ts"),
+		);
+	});
+
+	it("logs debug resolves when quiet is false", () => {
+		const debug = vi.fn();
+		const noisy = new PathUtils({ debug } as unknown as Logger, false);
+		const root = mkdtempSync(join(tmpdir(), "adk-cli-pathmap-debug-"));
+		writeFileSync(
+			join(root, "tsconfig.json"),
+			JSON.stringify({
+				compilerOptions: {
+					baseUrl: ".",
+					paths: { "@x": ["nope.ts"] },
+				},
+			}),
+		);
+
+		const plugin = noisy.createPathMappingPlugin(root);
+		const onResolve = vi.fn();
+		plugin.setup({ onResolve });
+		const handler = onResolve.mock.calls[0][1];
+
+		handler({ path: "@x", importer: "entry.ts" });
+		expect(debug).toHaveBeenCalledWith(
+			expect.stringContaining('Resolving import: "@x" from "entry.ts"'),
+		);
+	});
 });
