@@ -110,4 +110,83 @@ describe("isRebuildNeeded", () => {
 			external: true,
 		});
 	});
+
+	/**
+	 * Acceptance: when out exists but source cannot be statted, force rebuild
+	 * and warn with the Error message (quiet suppresses the warn).
+	 */
+	it("forces rebuild and warns when source is missing but out exists", () => {
+		const root = mkdtempSync(join(tmpdir(), "adk-cli-build-miss-src-"));
+		const outFile = join(root, "out.cjs");
+		const sourceFile = join(root, "missing-src.ts");
+		const tsconfigPath = join(root, "tsconfig.json");
+
+		writeFileSync(outFile, "module.exports = {}");
+		writeFileSync(tsconfigPath, "{}");
+
+		const logger = { debug: vi.fn(), warn: vi.fn() };
+		expect(isRebuildNeeded(outFile, sourceFile, tsconfigPath, logger)).toBe(
+			true,
+		);
+		expect(logger.warn).toHaveBeenCalledTimes(1);
+		expect(String(logger.warn.mock.calls[0][0])).toMatch(
+			/Failed to check cache freshness/,
+		);
+
+		const quietLogger = { debug: vi.fn(), warn: vi.fn() };
+		expect(
+			isRebuildNeeded(outFile, sourceFile, tsconfigPath, quietLogger, true),
+		).toBe(true);
+		expect(quietLogger.warn).not.toHaveBeenCalled();
+	});
+
+	/**
+	 * Acceptance: quiet=true cache hit must skip logger.debug.
+	 */
+	it("skips debug logging on quiet cache hit", () => {
+		const root = mkdtempSync(join(tmpdir(), "adk-cli-build-quiet-hit-"));
+		const outFile = join(root, "out.cjs");
+		const sourceFile = join(root, "src.ts");
+		const tsconfigPath = join(root, "tsconfig.json");
+
+		writeFileSync(sourceFile, "export {}");
+		writeFileSync(tsconfigPath, "{}");
+		writeFileSync(outFile, "module.exports = {}");
+
+		const now = Date.now() / 1000;
+		utimesSync(sourceFile, now - 20, now - 20);
+		utimesSync(tsconfigPath, now - 20, now - 20);
+		utimesSync(outFile, now - 5, now - 5);
+
+		const logger = { debug: vi.fn(), warn: vi.fn() };
+		expect(
+			isRebuildNeeded(outFile, sourceFile, tsconfigPath, logger, true),
+		).toBe(false);
+		expect(logger.debug).not.toHaveBeenCalled();
+		expect(logger.warn).not.toHaveBeenCalled();
+	});
+
+	/**
+	 * Acceptance: missing tsconfig is treated as mtime 0, so freshness is
+	 * judged against the source file only.
+	 */
+	it("treats missing tsconfig as mtime 0 when judging freshness", () => {
+		const root = mkdtempSync(join(tmpdir(), "adk-cli-build-no-tsconfig-"));
+		const outFile = join(root, "out.cjs");
+		const sourceFile = join(root, "src.ts");
+		const tsconfigPath = join(root, "missing-tsconfig.json");
+
+		writeFileSync(sourceFile, "export {}");
+		writeFileSync(outFile, "module.exports = {}");
+
+		const now = Date.now() / 1000;
+		utimesSync(sourceFile, now - 20, now - 20);
+		utimesSync(outFile, now - 5, now - 5);
+
+		expect(isRebuildNeeded(outFile, sourceFile, tsconfigPath)).toBe(false);
+
+		utimesSync(outFile, now - 30, now - 30);
+		utimesSync(sourceFile, now - 5, now - 5);
+		expect(isRebuildNeeded(outFile, sourceFile, tsconfigPath)).toBe(true);
+	});
 });
